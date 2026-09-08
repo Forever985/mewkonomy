@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <script>
+      // 定义新旧域名（请修改为你的实际域名）
+      const OLD_DOMAIN = "luyh7.github.io" // 旧域名
+      const NEW_DOMAIN = "milkonomy.pages.dev" // 新域名
+
+      // 判断当前域名是否为旧域名
+      if (window.location.hostname === OLD_DOMAIN) {
+        // 拼接完整新URL（保留路径、参数、哈希）
+        const newUrl = new URL(window.location.href)
+        newUrl.hostname = NEW_DOMAIN // 替换域名
+        newUrl.pathname = "/" // 替换路径
+        window.location.replace(newUrl.href) // 执行跳转
+      }
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/favicon.jpg" />
+    <link rel="stylesheet" href="/app-loading.css" />
+    <title>%VITE_APP_TITLE%</title>
+    <script src="/detect-ie.js" defer></script>
+  </head>
+  <body>
+    <div id="app">
+      <div id="app-loading"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
