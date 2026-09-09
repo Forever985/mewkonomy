@@ -29,7 +29,7 @@ if ($LASTEXITCODE -ne 0) { throw "gh-pages 推送失败"; exit 1 }
 
 Write-Host ""
 Write-Host "✔ 部署完成！" -ForegroundColor Green
-Write-Host "   页面地址: https://forever985.mewkonomy.github.io/" -ForegroundColor Green
+Write-Host "   页面地址: https://forever985.github.io/mewkonomy/" -ForegroundColor Green
 Write-Host "   （首次请确认 GitHub 仓库 Settings -> Pages 已选 gh-pages 分支）" -ForegroundColor DarkYellow
 Write-Host ""
 Read-Host "按回车键关闭窗口"
