@@ -19,6 +19,8 @@ export interface EnhanceCalculatorConfig extends CalculatorConfig {
   originLevel?: number
   escapeLevel?: number
   protectLevel: number
+  /** 强化成品（本体/逃逸体）的计价价格源：ask=左挂单（出售给他人），bid=右收购单；默认 bid（保持现有行为） */
+  productPriceType?: "ask" | "bid"
 }
 /**
  * 强化+分解
@@ -32,12 +34,15 @@ export class EnhanceCalculator extends Calculator {
   originLevel: number
   escapeLevel: number
   protectionItem: IngredientWithPrice
+  /** 强化成品计价价格源，默认 "bid"（右收购单价，与旧行为一致） */
+  productPriceType: "ask" | "bid"
   constructor(config: EnhanceCalculatorConfig) {
     super({ project: `${getTrans("强化")}+${config.enhanceLevel}`, action: "enhancing", ...config })
     this.enhanceLevel = config.enhanceLevel!
     this.protectLevel = config.protectLevel
     this.originLevel = config.originLevel ?? 0
     this.escapeLevel = config.escapeLevel ?? -1
+    this.productPriceType = config.productPriceType ?? "bid"
     let protectionList = [{
       hrid: super.item.hrid,
       count: 1,
@@ -134,7 +139,7 @@ export class EnhanceCalculator extends Calculator {
         {
           hrid: this.item.hrid,
           count: 1 / actions * successRate,
-          marketPrice: getPriceOf(this.item.hrid, this.enhanceLevel).bid,
+          marketPrice: getPriceOf(this.item.hrid, this.enhanceLevel)[this.productPriceType],
           level: this.enhanceLevel
         }
       ]
@@ -144,7 +149,7 @@ export class EnhanceCalculator extends Calculator {
         this._productList.push({
           hrid: this.item.hrid,
           count: 1 / actions * escapeRate,
-          marketPrice: getPriceOf(this.item.hrid, this.realEscapeLevel).bid,
+          marketPrice: getPriceOf(this.item.hrid, this.realEscapeLevel)[this.productPriceType],
           level: this.realEscapeLevel
         })
       }

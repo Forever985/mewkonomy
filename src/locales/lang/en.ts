@@ -60,6 +60,8 @@ export default {
   "动作": "Action",
   "要求等级": "Required Level",
   "排除装备": "Equipment Excluded",
+  "排除战斗装备": "Exclude Combat Gear",
+  "排除生活装备": "Exclude Non-Combat Gear",
   "利润率": "Profit Rate",
   "利润 / 天": "Profit / Day",
   "利润 / h": "Profit / Hour",
@@ -261,6 +263,10 @@ export default {
   "卖价": "Selling Price",
   "左价": "Ask",
   "右价": "Bid",
+  "左挂单": "Ask",
+  "右收购": "Bid",
+  "价格源": "Price Source",
+  "不分解模式": "No Decompose Mode",
 
   // 英灵殿
   "山川铭记着那些不屈的魂灵，他们的传说在牛铃声中回响，诉说着血泪与抗争。": "Mountains and rivers remember those unyielding souls, whose legends echo in the sound of cowbells, telling tales of blood, tears, and resistance.",

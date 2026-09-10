@@ -33,7 +33,9 @@ export async function getLeaderboardDataApi(params: Leaderboard.RequestData) {
     ElMessage.success(t("计算完成，耗时{0}秒", [(Date.now() - startTime) / 1000]))
   }
   profitList.forEach(item => item.favorite = useFavoriteStoreOutside().hasFavorite(item))
-  profitList = profitList.filter(item => item.actionLevel >= (params.actionLevel || 0))
+  // 要求等级区间（兼容旧单值 actionLevel 作为下限）
+  const minLevel = params.minLevel ?? params.actionLevel ?? 0
+  profitList = profitList.filter(item => item.actionLevel >= minLevel && (params.maxLevel == null || item.actionLevel <= params.maxLevel))
 
   // 比较模式：分组展示，多个物品方案相邻便于横向比较
   if (params.compare) {

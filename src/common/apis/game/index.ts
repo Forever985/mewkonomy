@@ -156,6 +156,11 @@ export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStat
       ask: priceItem?.ask || -1,
       bid: priceItem?.bid || -1
     }
+    // 该物品在市场完全没有交易记录时（如披风等稀有掉落装备），用卖商店价(sellPrice)兜底
+    if (!marketItem && price.ask === -1 && price.bid === -1 && item.sellPrice != null) {
+      price.ask = item.sellPrice
+      price.bid = item.sellPrice
+    }
     return convertPriceOfStatus(price, buyStatus, sellStatus)
   }
 
@@ -175,6 +180,11 @@ export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStat
 
   if (shopItem && shopItem.costs[0].itemHrid === COIN_HRID) {
     price.ask = price.ask === -1 ? shopItem.costs[0].count : Math.min(price.ask, shopItem.costs[0].count)
+  }
+  // 市场无买卖价（如披风/稀有掉落装备无交易记录）时，用卖商店价(sellPrice)兜底，保证利润网可查可算
+  if (price.ask === -1 && price.bid === -1 && item.sellPrice != null) {
+    price.ask = item.sellPrice
+    price.bid = item.sellPrice
   }
   _priceCache[hrid] = convertPriceOfStatus(price, buyStatus, sellStatus)
 

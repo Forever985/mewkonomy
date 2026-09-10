@@ -30,7 +30,20 @@ export async function getEnhanposestDataApi(params: any) {
   profitList = profitList.filter(item => params.maxLevel ? (item.calculator as DecomposeCalculator).enhanceLevel <= params.maxLevel : true)
   profitList = profitList.filter(item => params.minLevel ? (item.calculator as DecomposeCalculator).enhanceLevel >= params.minLevel : true)
 
-  return handlePage(handleSort(handleSearch(profitList, params), params), params)
+  // 多元组合条件：目标强化等级并行（OR），命中任一等级即保留
+  const conditions = Array.isArray(params.conditions)
+    ? params.conditions.filter((c: any) => c && c.steps != null && c.steps !== "")
+    : []
+  if (conditions.length) {
+    profitList = profitList.filter(item => {
+      const enhanceLevel = (item.calculator as DecomposeCalculator).enhanceLevel
+      return conditions.some((cond: any) => enhanceLevel === cond.steps)
+    })
+  }
+  // 剔除 conditions 后再走通用 handleSearch，避免其「步数」正则对本页数据误伤
+  const searchParams = { ...params }
+  delete searchParams.conditions
+  return handlePage(handleSort(handleSearch(profitList, searchParams), searchParams), params)
 }
 
 function calcEnhanceProfit() {
@@ -62,8 +75,8 @@ function calcEnhanceProfit() {
           }
           for (let protectLevel = (enhanceLevel > 2 ? 2 : enhanceLevel); protectLevel <= enhanceLevel; protectLevel++) {
             const enhancer = new EnhanceCalculator({ enhanceLevel, escapeLevel, originLevel, protectLevel, hrid: item.hrid })
-            // 预筛选，把不可能盈利的去掉
-            if (!enhancer.available || !enhancer.profitable) {
+            // 仅保留可用方案；放开负利润过滤（功能3：负利润也写入结果）
+            if (!enhancer.available) {
               continue
             }
 

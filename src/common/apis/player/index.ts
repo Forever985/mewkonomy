@@ -244,10 +244,8 @@ function initBuffMap() {
         if (buff.typeHrid === "/buff_types/artisan") {
           buffs[`${action}Artisan`] = (buffs[`${action}Artisan`] || 0) + (buff.flatBoost * (1 + (buffs.drinkConcentration || 0)))
         }
-        // 工匠茶的等级debuff
-        if (buff.typeHrid === "/buff_types/action_level") {
-          buffs[`${action}Level`] = (buffs[`${action}Level`] || 0) - buff.flatBoost
-        }
+        // 工匠茶（/buff_types/action_level）：不作用于玩家等级，改为抬高该动作的装备「要求等级」+5
+        // 由 getActionLevelBonusOf + Calculator.actionLevel 统一处理（见 manufacture.ts）
         if (buff.typeHrid === "/buff_types/gourmet") {
           buffs[`${action}Gourmet`] = (buffs[`${action}Gourmet`] || 0) + (buff.flatBoost * (1 + (buffs.drinkConcentration || 0)))
         }
@@ -285,6 +283,26 @@ export function getDrinkConcentration() {
 
 export function getPlayerLevelOf(action: Action) {
   return getActionConfigOf(action).playerLevel + getBuffOf(action, "Level")
+}
+
+/**
+ * 工匠茶（/buff_types/action_level）等级加成：
+ * 饮用后该动作的装备「要求等级」+flatBoost（默认 +5）。
+ * 例如原本 80 级可制作/锻造/缝纫的装备，勾选工匠茶后需要 85 级才可制作。
+ * 注意：这是对「装备要求等级门槛」的修正，不改变玩家自身等级。
+ */
+export function getActionLevelBonusOf(action: Action) {
+  let bonus = 0
+  const teaList = getActionConfigOf(action).tea || []
+  for (const teaHrid of teaList) {
+    const item = getItemDetailOf(teaHrid)
+    item.consumableDetail?.buffs?.forEach((buff) => {
+      if (buff.typeHrid === "/buff_types/action_level") {
+        bonus += buff.flatBoost * (1 + getDrinkConcentration())
+      }
+    })
+  }
+  return bonus
 }
 
 export function getAlchemySuccessRatio(item: ItemDetail) {

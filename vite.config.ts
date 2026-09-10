@@ -72,6 +72,11 @@ export default defineConfig(({ mode }) => {
            * @description 2. 如果你不想自定义 chunk 分割策略，可以直接移除这段配置
            */
           manualChunks: (id) => {
+            // Vite 公共 helper（_plugin-vue_export-helper）是虚拟模块，id 不以 node_modules 开头，
+            // 必须在最外层匹配并入 vue chunk，避免其作为独立 chunk 被 GitHub Pages CDN 负缓存 404
+            if (id.includes("export-helper")) {
+              return "vue"
+            }
             // 基础分块策略
             if (id.includes("node_modules")) {
               if (id.includes("vue") || id.includes("vue-router") || id.includes("pinia")) {

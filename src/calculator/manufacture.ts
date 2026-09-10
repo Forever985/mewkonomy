@@ -1,7 +1,7 @@
 import type { CalculatorConfig, Ingredient, Product } from "."
 import type { ActionDetail } from "~/game"
 import { getActionDetailOf, getPriceOf } from "@/common/apis/game"
-import { getBuffOf, getTeaIngredientList } from "@/common/apis/player"
+import { getActionLevelBonusOf, getBuffOf, getTeaIngredientList } from "@/common/apis/player"
 import { isRefined } from "@/common/utils/game"
 import Calculator from "."
 
@@ -11,7 +11,8 @@ export class ManufactureCalculator extends Calculator {
   }
 
   get actionLevel(): number {
-    return this.actionItem.levelRequirement.level
+    // 工匠茶：装备「要求等级」+5（如原本 80 级可制作 → 需 85 级）
+    return this.actionItem.levelRequirement.level + getActionLevelBonusOf(this.action)
   }
 
   get available(): boolean {
