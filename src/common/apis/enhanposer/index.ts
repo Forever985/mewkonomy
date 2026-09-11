@@ -19,7 +19,7 @@ export async function getEnhanposerDataApi(params: any) {
     await new Promise(resolve => setTimeout(resolve, 300))
     const startTime = Date.now()
     try {
-      profitList = profitList.concat(calcEnhanceProfit({ noDecompose: params.noDecompose, priceType: params.priceType }))
+      profitList = profitList.concat(calcEnhanceProfit({ noDecompose: params.noDecompose, materialPriceType: params.materialPriceType, productPriceType: params.productPriceType }))
     } catch (e: any) {
       console.error(e)
     }
@@ -48,8 +48,8 @@ export async function getEnhanposerDataApi(params: any) {
   return handlePage(handleSort(handleSearch(profitList, searchParams), searchParams), params)
 }
 
-function calcEnhanceProfit(options: { noDecompose?: boolean; priceType?: "ask" | "bid" } = {}) {
-  const { noDecompose = false, priceType = "bid" } = options
+function calcEnhanceProfit(options: { noDecompose?: boolean; materialPriceType?: "ask" | "bid"; productPriceType?: "ask" | "bid" } = {}) {
+  const { noDecompose = false, materialPriceType = "ask", productPriceType = "bid" } = options
   const gameData = getGameDataApi()
   // 所有物品列表
   const list = Object.values(gameData.itemDetailMap)
@@ -66,7 +66,7 @@ function calcEnhanceProfit(options: { noDecompose?: boolean; priceType?: "ask" |
       let bestProfit = -Infinity
       let bestCal: WorkflowCalculator | undefined
       for (let protectLevel = (enhanceLevel > 2 ? 2 : enhanceLevel); protectLevel <= enhanceLevel; protectLevel++) {
-        const enhancer = new EnhanceCalculator({ enhanceLevel, protectLevel, hrid: item.hrid, productPriceType: priceType })
+        const enhancer = new EnhanceCalculator({ enhanceLevel, protectLevel, hrid: item.hrid, materialPriceType, productPriceType })
         for (let catalystRank = 0; catalystRank <= 2; catalystRank++) {
           if (!useGameStoreOutside().checkSecret() && item.itemLevel > 1) {
             continue

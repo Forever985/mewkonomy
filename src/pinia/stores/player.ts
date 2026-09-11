@@ -87,6 +87,11 @@ export function defaultActionConfig(name: string, color: string) {
         hrid: undefined,
         enhanceLevel: undefined
       },
+      back: {
+        type: `back`,
+        hrid: undefined,
+        enhanceLevel: undefined
+      },
       charm: {
         type: `charm`,
         hrid: undefined,
@@ -116,6 +121,7 @@ export function defaultActionConfig(name: string, color: string) {
     actionConfigMap,
     specialEquimentMap,
     communityBuffMap,
+    seals: [],
     name,
     color
   }
@@ -129,6 +135,7 @@ export interface ActionConfigItem {
   tool: PlayerEquipmentItem
   body: PlayerEquipmentItem
   legs: PlayerEquipmentItem
+  back: PlayerEquipmentItem
   charm: PlayerEquipmentItem
   houseLevel: number
   tea: string[]
@@ -147,6 +154,7 @@ export interface CommunityBuffItem {
 export interface ActionConfig {
   name?: string
   color?: string
+  seals?: string[]
   actionConfigMap: Map<Action, ActionConfigItem>
   specialEquimentMap: Map<Equipment, PlayerEquipmentItem>
   communityBuffMap: Map<CommunityBuff, CommunityBuffItem>
@@ -158,6 +166,7 @@ function loadLegacyConfig() {
     actionConfigMap: new Map<Action, ActionConfigItem>(),
     specialEquimentMap: new Map<Equipment, PlayerEquipmentItem>(),
     communityBuffMap: new Map<CommunityBuff, CommunityBuffItem>(),
+    seals: [] as string[],
     name: "0",
     color: "#11BF11"
   }
@@ -166,6 +175,7 @@ function loadLegacyConfig() {
     config.actionConfigMap = new Map<Action, ActionConfigItem>(Object.entries(data.actionConfigMap || {}) as [Action, ActionConfigItem][])
     config.specialEquimentMap = new Map<Equipment, PlayerEquipmentItem>(Object.entries(data.specialEquimentMap || {}) as [Equipment, PlayerEquipmentItem][])
     config.communityBuffMap = new Map<CommunityBuff, CommunityBuffItem>(Object.entries(data.communityBuffMap || {}) as [CommunityBuff, CommunityBuffItem][])
+    config.seals = normalizeSeals(data.seals || data.seal || extractLegacySealsFromActionConfigMap(config.actionConfigMap))
   } catch {
   }
   return config
@@ -185,9 +195,13 @@ function loadPresets(): ActionConfig[] {
       const actionConfig: ActionConfig = {
         name: item.name,
         color: item.color,
+        seals: normalizeSeals(item.seals || item.seal),
         actionConfigMap: new Map<Action, ActionConfigItem>(Object.entries(item.actionConfigMap || {}) as [Action, ActionConfigItem][]),
         specialEquimentMap: new Map<Equipment, PlayerEquipmentItem>(Object.entries(item.specialEquimentMap || {}) as [Equipment, PlayerEquipmentItem][]),
         communityBuffMap: new Map<CommunityBuff, CommunityBuffItem>(Object.entries(item.communityBuffMap || {}) as [CommunityBuff, CommunityBuffItem][])
+      }
+      if (!actionConfig.seals?.length) {
+        actionConfig.seals = extractLegacySealsFromActionConfigMap(actionConfig.actionConfigMap)
       }
       presets.push(actionConfig)
     }
@@ -204,6 +218,27 @@ function loadPresets(): ActionConfig[] {
     presets.push(defaultActionConfig("0", "#11BF11"))
   }
   return presets
+}
+
+function extractLegacySealsFromActionConfigMap(actionConfigMap: Map<Action, ActionConfigItem>) {
+  const seals = new Set<string>()
+  for (const actionConfig of actionConfigMap.values()) {
+    const seal = (actionConfig as ActionConfigItem & { seal?: string }).seal
+    if (seal) {
+      seals.add(seal)
+    }
+  }
+  return [...seals]
+}
+
+function normalizeSeals(value: unknown) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.filter(v => typeof v === "string"))]
+  }
+  if (typeof value === "string" && value) {
+    return [value]
+  }
+  return []
 }
 
 function savePresets(presets: ActionConfig[]) {

@@ -1,5 +1,5 @@
 import type { EnhancelateResult } from "@/calculator/enhance"
-import type { ActionDetail, CommunityBuffDetail, DropTableItem, GameData, ItemDetail } from "~/game"
+import type { ActionDetail, CommunityBuffDetail, DropTableItem, GameData, ItemDetail, PersonalBuffDetail } from "~/game"
 import type { MarketData, MarketItemPrice } from "~/market"
 import deepFreeze from "deep-freeze-strict"
 import { COIN_HRID, PriceStatus, useGameStoreOutside } from "@/pinia/stores/game"
@@ -12,6 +12,7 @@ const game = {
 let _actionDetailMapCache: Record<string, ActionDetail> = {}
 const _itemDetailMapCache: Record<string, ItemDetail> = {}
 const _communityBuffTypeDetailMapCache: Record<string, CommunityBuffDetail> = {}
+const _personalBuffTypeDetailMapCache: Record<string, PersonalBuffDetail> = {}
 
 let _processingProductMap: Record<string, string> = {}
 let _priceCache = {} as Record<string, MarketItemPrice>
@@ -32,6 +33,10 @@ watch(() => useGameStoreOutside().marketData, () => {
 }, { immediate: true })
 
 watch([() => useGameStoreOutside().buyStatus, () => useGameStoreOutside().sellStatus], () => {
+  _priceCache = {}
+}, { immediate: true })
+
+watch(() => useGameStoreOutside().priceFallbackMode, () => {
   _priceCache = {}
 }, { immediate: true })
 
@@ -156,8 +161,8 @@ export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStat
       ask: priceItem?.ask || -1,
       bid: priceItem?.bid || -1
     }
-    // 该物品在市场完全没有交易记录时（如披风等稀有掉落装备），用卖商店价(sellPrice)兜底
-    if (!marketItem && price.ask === -1 && price.bid === -1 && item.sellPrice != null) {
+    // 该物品在市场完全没有交易记录时（如披风等稀有掉落装备），用卖商店价(sellPrice)兜底（仅方案B）
+    if (isFallbackEnabled() && !marketItem && price.ask === -1 && price.bid === -1 && item.sellPrice != null) {
       price.ask = item.sellPrice
       price.bid = item.sellPrice
     }
@@ -181,14 +186,46 @@ export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStat
   if (shopItem && shopItem.costs[0].itemHrid === COIN_HRID) {
     price.ask = price.ask === -1 ? shopItem.costs[0].count : Math.min(price.ask, shopItem.costs[0].count)
   }
-  // 市场无买卖价（如披风/稀有掉落装备无交易记录）时，用卖商店价(sellPrice)兜底，保证利润网可查可算
-  if (price.ask === -1 && price.bid === -1 && item.sellPrice != null) {
+  // 市场无买卖价（如披风/稀有掉落装备无交易记录）时，用卖商店价(sellPrice)兜底，保证利润网可查可算（仅方案B）
+  if (isFallbackEnabled() && price.ask === -1 && price.bid === -1 && item.sellPrice != null) {
     price.ask = item.sellPrice
     price.bid = item.sellPrice
   }
   _priceCache[hrid] = convertPriceOfStatus(price, buyStatus, sellStatus)
 
   return _priceCache[hrid]
+}
+
+function isFallbackEnabled() {
+  return useGameStoreOutside().priceFallbackMode === "B"
+}
+
+/** 该物品是否正在被"方案B"兜底（市场无记录、用卖商店价填充）。方案A下恒为 false。 */
+export function isPriceFallbackOf(hrid: string, level: number = 0): boolean {
+  if (!isFallbackEnabled()) {
+    return false
+  }
+  const item = getItemDetailOf(hrid)
+  if (item.sellPrice == null) {
+    return false
+  }
+  if (level) {
+    const marketItem = game.marketData?.marketData[hrid]
+    const priceItem = marketItem ? marketItem[level] : undefined
+    const ask = priceItem?.ask ?? -1
+    const bid = priceItem?.bid ?? -1
+    return !marketItem && ask === -1 && bid === -1
+  }
+  if (SPECIAL_PRICE[hrid]) {
+    return false
+  }
+  if (isLoot(hrid) && hrid !== "/items/bag_of_10_cowbells") {
+    return false
+  }
+  const marketPrice = getMarketDataApi().marketData[item.hrid]?.[0]
+  const ask = marketPrice?.ask ?? -1
+  const bid = marketPrice?.bid ?? -1
+  return ask === -1 && bid === -1
 }
 
 function isLoot(hrid: string) {
@@ -229,6 +266,19 @@ export function getCommunityBuffDetailOf(hrid: string) {
   if (!result) {
     result = getGameDataApi().communityBuffTypeDetailMap[hrid]
     result && (_communityBuffTypeDetailMapCache[hrid] = result)
+  }
+  return result
+}
+
+export function getPersonalBuffDetailOf(hrid: string) {
+  let result = _personalBuffTypeDetailMapCache[hrid]
+  if (!result) {
+    const map = getGameDataApi().personalBuffTypeDetailMap
+    if (!map) {
+      return undefined
+    }
+    result = map[hrid]
+    result && (_personalBuffTypeDetailMapCache[hrid] = result)
   }
   return result
 }

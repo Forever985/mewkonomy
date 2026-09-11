@@ -21,6 +21,8 @@ export interface EnhanceCalculatorConfig extends CalculatorConfig {
   protectLevel: number
   /** 强化成品（本体/逃逸体）的计价价格源：ask=左挂单（出售给他人），bid=右收购单；默认 bid（保持现有行为） */
   productPriceType?: "ask" | "bid"
+  /** 材料侧（本体/垫子/强化材料）的计价价格源：ask=左挂单（买入价），bid=右收购单；默认 ask（保持现有行为） */
+  materialPriceType?: "ask" | "bid"
 }
 /**
  * 强化+分解
@@ -36,6 +38,8 @@ export class EnhanceCalculator extends Calculator {
   protectionItem: IngredientWithPrice
   /** 强化成品计价价格源，默认 "bid"（右收购单价，与旧行为一致） */
   productPriceType: "ask" | "bid"
+  /** 材料侧（本体/垫子/强化材料）计价价格源，默认 "ask"（左挂单价，与旧行为一致） */
+  materialPriceType: "ask" | "bid"
   constructor(config: EnhanceCalculatorConfig) {
     super({ project: `${getTrans("强化")}+${config.enhanceLevel}`, action: "enhancing", ...config })
     this.enhanceLevel = config.enhanceLevel!
@@ -43,6 +47,7 @@ export class EnhanceCalculator extends Calculator {
     this.originLevel = config.originLevel ?? 0
     this.escapeLevel = config.escapeLevel ?? -1
     this.productPriceType = config.productPriceType ?? "bid"
+    this.materialPriceType = config.materialPriceType ?? "ask"
     let protectionList = [{
       hrid: super.item.hrid,
       count: 1,

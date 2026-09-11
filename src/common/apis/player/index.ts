@@ -5,7 +5,7 @@ import { DEFAULT_SEPCIAL_EQUIPMENT_LIST, DEFAULT_TEA } from "@/common/config"
 import { getEquipmentTypeOf, getKeyOf } from "@/common/utils/game"
 import { ACTION_LIST, COMMUNITY_BUFF_LIST, EQUIPMENT_LIST, HOUSE_MAP, useGameStoreOutside } from "@/pinia/stores/game"
 import { usePlayerStoreOutside } from "@/pinia/stores/player"
-import { getCommunityBuffDetailOf, getGameDataApi, getItemDetailOf, getPriceOf } from "../game"
+import { getCommunityBuffDetailOf, getGameDataApi, getItemDetailOf, getPersonalBuffDetailOf, getPriceOf } from "../game"
 
 /** 改 */
 export function setActionConfigApi(config: ActionConfig, index: number) {
@@ -20,7 +20,37 @@ const defaultPlayerConfig = structuredClone(toRaw(usePlayerStoreOutside().config
 let equipmentList = [] as ItemDetail[]
 let allEquipmentList = [] as ItemDetail[]
 let teaList = [] as ItemDetail[]
+let sealList = [] as ItemDetail[]
 let buffs = {} as Record<NoncombatStatsProp, number>
+
+const SEAL_BUFF_KEY_MAP: Record<string, NoncombatStatsKey | undefined> = {
+  "/items/seal_of_action_speed": "Speed",
+  "/items/seal_of_efficiency": "Efficiency",
+  "/items/seal_of_gathering": "Gathering",
+  "/items/seal_of_processing": "Processing",
+  "/items/seal_of_gourmet": "Gourmet",
+  "/items/seal_of_wisdom": "Experience",
+  "/items/seal_of_rare_find": "RareFind"
+}
+
+const ACTIONS_ALL = [...ACTION_LIST] as Action[]
+const SEAL_BUFF_ACTION_MAP: Partial<Record<NoncombatStatsKey, Action[]>> = {
+  // 美食增益：仅烹饪、冲泡
+  Gourmet: ["cooking", "brewing"],
+  // 采集增益：仅挤奶、采摘、伐木
+  Gathering: ["milking", "foraging", "woodcutting"],
+  // 加工增益：仅挤奶、采摘、伐木（与加工茶一致）
+  Processing: ["milking", "foraging", "woodcutting"],
+  // 效率增益：除强化外的所有行动
+  Efficiency: ACTIONS_ALL.filter(action => action !== "enhancing"),
+  // 行动速度、经验：所有行动
+  Speed: ACTIONS_ALL,
+  Experience: ACTIONS_ALL,
+  // 稀有发现：所有行动
+  RareFind: ACTIONS_ALL,
+  // 强化成功：仅强化
+  Success: ["enhancing"]
+}
 
 watch (() => useGameStoreOutside().gameData, () => {
   if (!useGameStoreOutside().gameData) return
@@ -30,6 +60,8 @@ watch (() => useGameStoreOutside().gameData, () => {
     .filter(item => item.equipmentDetail)
   teaList = Object.freeze(structuredClone(Object.values(toRaw(useGameStoreOutside().gameData!.itemDetailMap))))
     .filter(item => item.categoryHrid === "/item_categories/drink")
+  sealList = Object.freeze(structuredClone(Object.values(toRaw(useGameStoreOutside().gameData!.itemDetailMap))))
+    .filter(item => item.hrid.startsWith("/items/seal_of_"))
   initDefaultActionConfigMap()
   initDefaultSpecialEquipmentMap()
   initBuffMap()
@@ -67,6 +99,11 @@ function initDefaultActionConfigMap() {
       },
       body: {
         type: `body`,
+        hrid: undefined,
+        enhanceLevel: undefined
+      },
+      back: {
+        type: `back`,
         hrid: undefined,
         enhanceLevel: undefined
       },
@@ -153,6 +190,11 @@ export function getCommunityBuffOf(type: CommunityBuff) {
   return playerConfig.communityBuffMap.get(type) ?? defaultPlayerConfig.communityBuffMap.get(type)!
 }
 
+export function getSealsOf() {
+  const seals = playerConfig.seals ?? defaultPlayerConfig.seals
+  return Array.isArray(seals) ? seals : []
+}
+
 // #endregion
 
 // #region 茶
@@ -166,6 +208,13 @@ export function getTeaIngredientList(cal: Calculator) {
     count: 3600 / 300 / cal.consumePH * (1 + getDrinkConcentration()),
     marketPrice: getPriceOf(hrid).ask
   }))
+}
+
+export function getSealList() {
+  const whiteList = new Set(Object.keys(SEAL_BUFF_KEY_MAP))
+  return sealList
+    .filter(item => whiteList.has(item.hrid))
+    .sort((a, b) => a.sortIndex - b.sortIndex)
 }
 // #endregion
 
@@ -270,7 +319,40 @@ function initBuffMap() {
       })
     }
   }
+
+  // 封印（全局单独 buff）
+  for (const seal of getSealsOf()) {
+    const key = SEAL_BUFF_KEY_MAP[seal]
+    const ratio = getSealBuffRatio(seal)
+    if (key && ratio > 0) {
+      const targetActions = SEAL_BUFF_ACTION_MAP[key] || ACTIONS_ALL
+      for (const action of targetActions) {
+        const prop = `${action}${key}` as NoncombatStatsProp
+        buffs[prop] = (buffs[prop] || 0) + ratio
+      }
+    }
+  }
   console.log("buffs", buffs)
+}
+
+function getSealBuffRatio(hrid: string): number {
+  const detail = getItemDetailOf(hrid)
+  const personalBuffTypeHrid = detail?.scrollDetail?.personalBuffTypeHrid
+  if (personalBuffTypeHrid) {
+    const buff = getPersonalBuffDetailOf(personalBuffTypeHrid)?.buff
+    if (buff) {
+      return (buff.flatBoost || 0) + (buff.ratioBoost || 0)
+    }
+  }
+  if (!detail?.description) {
+    return 0
+  }
+  const matched = detail.description.match(/([+-]?\d+(?:\.\d+)?)%/)
+  if (!matched?.[1]) {
+    return 0
+  }
+  const ratio = Number.parseFloat(matched[1]) / 100
+  return Number.isFinite(ratio) ? ratio : 0
 }
 
 export function getBuffOf(action: Action, key: NoncombatStatsKey) {

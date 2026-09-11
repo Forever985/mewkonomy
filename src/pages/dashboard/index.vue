@@ -9,7 +9,7 @@ import { cloneDeep, debounce } from "lodash-es"
 import { WorkflowCalculator } from "@/calculator/workflow"
 
 import { addFavoriteApi, deleteFavoriteApi, getFavoriteDataApi } from "@/common/apis/favorite"
-import { getActionConfigOf } from "@/common/apis/player"
+import { getActionConfigOf, getActionLevelBonusOf } from "@/common/apis/player"
 import { useMemory } from "@/common/composables/useMemory"
 import { usePriceStatus } from "@/common/composables/usePriceStatus"
 import { useFavoriteStore } from "@/pinia/stores/favorite"
@@ -343,7 +343,13 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
               <el-table-column prop="actionLevel" :label="t('要求等级')" align="center">
                 <template #default="{ row }">
                   <div :class="row.actionLevel > getActionConfigOf(row.action).playerLevel ? 'red' : ''">
-                    {{ row.actionLevel }}
+                    <template v-if="getActionLevelBonusOf(row.action) > 0">
+                      <el-tooltip placement="top" effect="light">
+                        <template #content>{{ t('工匠茶：装备要求等级+5（动作速度将降低）') }}</template>
+                        <span>{{ row.actionLevel - getActionLevelBonusOf(row.action) }}+{{ getActionLevelBonusOf(row.action) }}({{ t('工匠茶') }})</span>
+                      </el-tooltip>
+                    </template>
+                    <template v-else>{{ row.actionLevel }}</template>
                   </div>
                 </template>
               </el-table-column>

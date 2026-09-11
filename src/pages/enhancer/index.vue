@@ -9,14 +9,20 @@ import { EnhanceCalculator } from "@/calculator/enhance"
 import { ManufactureCalculator } from "@/calculator/manufacture"
 import { getItemDetailOf, getMarketDataApi, getPriceOf } from "@/common/apis/game"
 import { getEquipmentList } from "@/common/apis/player"
+import { useMemory } from "@/common/composables/useMemory"
 import { useEnhancerStore } from "@/pinia/stores/enhancer"
-import { COIN_HRID, useGameStore } from "@/pinia/stores/game"
+import { COIN_HRID, PRICE_STATUS_LIST, PriceStatus, useGameStore } from "@/pinia/stores/game"
 import { usePlayerStore } from "@/pinia/stores/player"
 import ActionConfig from "../dashboard/components/ActionConfig.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 
 const enhancerStore = useEnhancerStore()
+const gameStore = useGameStore()
 const { t } = useI18n()
+
+// 两块成本区块独立的「左价」买价状态（不修改全局 buyStatus）
+const gearCostBuyStatus = useMemory("enhancer-gear-cost-buy-status", PriceStatus.ASK)
+const enhancementCostBuyStatus = useMemory("enhancer-enhancement-cost-buy-status", PriceStatus.ASK)
 
 const dialogVisible = ref(false)
 const search = ref("")
@@ -56,6 +62,7 @@ interface Ingredient {
   hrid: string
   count: number
   originPrice: number
+  level?: number
   price?: number
 }
 interface Item {
@@ -69,8 +76,19 @@ interface Item {
 const gearManufacture = ref(false)
 watch([
   () => manufactureIngredients.value,
-  () => gearManufacture.value
+  () => gearManufacture.value,
+  () => gearCostBuyStatus.value,
+  () => enhancementCostBuyStatus.value
 ], resetPrice, { deep: true })
+
+function getGearCostOriginPrice(hrid: string, level?: number) {
+  // Use `.ask` as "buying" price output; the selected status decides which market field is used.
+  return getPriceOf(hrid, level, gearCostBuyStatus.value, gameStore.sellStatus).ask
+}
+
+function getEnhancementCostOriginPrice(hrid: string, level?: number) {
+  return getPriceOf(hrid, level, enhancementCostBuyStatus.value, gameStore.sellStatus).ask
+}
 
 function onSelect(item: ItemDetail) {
   if (!item) {
@@ -102,35 +120,35 @@ function onSelect(item: ItemDetail) {
     ? calc!.ingredientList.filter(item => getItemDetailOf(item.hrid).categoryHrid !== "/item_categories/drink").map(item => ({
         hrid: item.hrid,
         count: item.count,
-        originPrice: getPriceOf(item.hrid).ask
+        originPrice: getGearCostOriginPrice(item.hrid, item.level)
       }))
     : []
 
   enhancementCosts.value = item.enhancementCosts!.map(item => ({
     hrid: item.itemHrid,
     count: item.count,
-    originPrice: getPriceOf(item.itemHrid).ask
+    originPrice: getEnhancementCostOriginPrice(item.itemHrid)
   }))
 
   protectionList.value = item.protectionItemHrids
     ? item.protectionItemHrids.map(hrid => ({
         hrid,
         count: 1,
-        originPrice: getPriceOf(hrid).ask
+        originPrice: getEnhancementCostOriginPrice(hrid)
       }))
     : []
   if (!protectionList.value.length) {
     protectionList.value.push({
       hrid: item.hrid,
       count: 1,
-      originPrice: getPriceOf(item.hrid).ask
+      originPrice: getEnhancementCostOriginPrice(item.hrid)
     })
   }
 
   protectionList.value.push({
     hrid: "/items/mirror_of_protection",
     count: 1,
-    originPrice: getPriceOf("/items/mirror_of_protection").ask
+    originPrice: getEnhancementCostOriginPrice("/items/mirror_of_protection")
   })
 
   // price最低的
@@ -251,8 +269,18 @@ function resetPrice() {
   // 触发一次computed
   currentItem.value = JSON.parse(JSON.stringify(currentItem.value))
 
+  manufactureIngredients.value.forEach((item) => {
+    item.originPrice = getGearCostOriginPrice(item.hrid, item.level)
+  })
+  enhancementCosts.value.forEach((item) => {
+    item.originPrice = getEnhancementCostOriginPrice(item.hrid, item.level)
+  })
+  protectionList.value.forEach((item) => {
+    item.originPrice = getEnhancementCostOriginPrice(item.hrid, item.level)
+  })
+
   if (!gearManufacture.value) {
-    currentItem.value.originPrice = getPriceOf(currentItem.value.hrid!).ask
+    currentItem.value.originPrice = getGearCostOriginPrice(currentItem.value.hrid!)
     return
   }
   const val = manufactureIngredients.value
@@ -261,14 +289,25 @@ function resetPrice() {
         const price = typeof item.price === "number" ? item.price : item.originPrice
         return acc + (price * item.count)
       }, 0)
-    : getPriceOf(currentItem.value.hrid!).ask
+    : getGearCostOriginPrice(currentItem.value.hrid!)
 
-  manufactureIngredients.value.forEach((item) => {
-    item.originPrice = getPriceOf(item.hrid).ask
-  })
-  enhancementCosts.value.forEach((item) => {
-    item.originPrice = getPriceOf(item.hrid).ask
-  })
+  // After the deep clone above, `currentItem.protection` is no longer the same object
+  // as the one inside `protectionList`, so its originPrice would NOT refresh.
+  // Re-link it to the list item (preserve selected hrid + custom price).
+  if (protectionList.value.length) {
+    const selectedHrid = currentItem.value.protection?.hrid
+    const customPrice = currentItem.value.protection?.price
+    const selected = selectedHrid
+      ? protectionList.value.find(p => p.hrid === selectedHrid)
+      : undefined
+
+    const fallback = protectionList.value.reduce((acc, p) => acc.originPrice < p.originPrice ? acc : p)
+    const target = selected || fallback
+    if (typeof customPrice === "number") {
+      target.price = customPrice
+    }
+    currentItem.value.protection = target
+  }
 }
 
 function rowStyle({ row }: { row: any }) {
@@ -340,8 +379,16 @@ watch(menuVisible, (value) => {
       <el-col :xs="24" :sm="24" :md="10" :lg="8" :xl="8" class="max-w-400px mx-auto">
         <el-card>
           <template #header>
-            <div class="flex justify-between items-center">
+            <div class="flex justify-between items-center gap-2">
               <span>{{ t('装备成本') }}</span>
+              <div v-if="gameStore.checkSecret()" class="flex items-center gap-2">
+                <div class="w-10 whitespace-nowrap">
+                  {{ t('买价') }}
+                </div>
+                <el-select v-model="gearCostBuyStatus" :placeholder="t('左价')" style="width:110px">
+                  <el-option v-for="item in PRICE_STATUS_LIST" :key="item.value" :value="item.value" :label="item.label" />
+                </el-select>
+              </div>
               <el-checkbox v-model="gearManufacture">
                 {{ t('制作装备') }}
               </el-checkbox>
@@ -519,7 +566,20 @@ watch(menuVisible, (value) => {
         </el-card>
       </el-col>
       <el-col :xs="24" :sm="24" :md="10" :lg="8" :xl="8" class="max-w-400px mx-auto">
-        <el-card :header="t('强化消耗')">
+        <el-card>
+          <template #header>
+            <div class="flex flex-col gap-2">
+              <span class="whitespace-nowrap flex-shrink-0">{{ t('强化消耗') }}</span>
+              <div v-if="gameStore.checkSecret()" class="flex items-center gap-2">
+                <div class="w-10 whitespace-nowrap">
+                  {{ t('买价') }}
+                </div>
+                <el-select v-model="enhancementCostBuyStatus" :placeholder="t('左价')" style="width:110px">
+                  <el-option v-for="item in PRICE_STATUS_LIST" :key="item.value" :value="item.value" :label="item.label" />
+                </el-select>
+              </div>
+            </div>
+          </template>
           <ElTable :data="enhancementCosts" style="--el-table-border-color:none;" :cell-style="{ padding: '0' }">
             <el-table-column :label="t('物品')">
               <template #default="{ row }">

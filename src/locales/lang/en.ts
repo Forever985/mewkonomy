@@ -180,6 +180,8 @@ export default {
   "部位": "Slot",
 
   "茶": "Tea",
+  "工匠茶": "Artisan Tea",
+  "工匠茶：装备要求等级+5（动作速度将降低）": "Artisan Tea: Gear requirement level +5 (action speed will decrease)",
 
   "社区Buff": "Community Buffs",
 
@@ -255,6 +257,10 @@ export default {
   "不逃逸": "No Escape",
   "材料损耗+逃逸损耗": "Material Loss + Escape Loss",
   "买价": "Buying Price",
+  "材料买价": "Material Buying Price",
+  "无市价兜底模式": "No Market Price Fallback Mode",
+  "方案A：物品无市价（-1）时直接显示 -1，保持原样。": "Mode A: Items with no market price (-1) stay as -1.",
+  "方案B：物品无市价（-1）时使用该物品的 sellPrice 作为参考价展示。": "Mode B: Items with no market price (-1) use their sellPrice as a reference price.",
 
   "捡漏工具": "Bargain Hunting",
   "排除首饰": "Exclude Jewelry",
@@ -266,6 +272,9 @@ export default {
   "左挂单": "Ask",
   "右收购": "Bid",
   "价格源": "Price Source",
+  "只看目标等级": "Only Target Level",
+  "不限（默认全部）": "No limit (all by default)",
+  "多选后仅显示这些强化等级的方案": "After multi-selection, only plans with these enhancement levels are shown",
   "不分解模式": "No Decompose Mode",
 
   // 英灵殿

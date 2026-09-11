@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { ActionConfig, ActionConfigItem, CommunityBuffItem, PlayerEquipmentItem } from "@/pinia/stores/player"
-import type { Action, CommunityBuff, Equipment } from "~/game"
+import type { Action, CommunityBuff, Equipment, ItemDetail } from "~/game"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import { Plus } from "@element-plus/icons-vue"
 import { ElMessageBox } from "element-plus"
-import { getCommunityBuffDetailOf } from "@/common/apis/game"
-import { getEquipmentListOf, getSpecialEquipmentListOf, getTeaListOf, getToolListOf, setActionConfigApi } from "@/common/apis/player"
+import { getCommunityBuffDetailOf, getPersonalBuffDetailOf } from "@/common/apis/game"
+import { getEquipmentListOf, getSealList, getSpecialEquipmentListOf, getTeaListOf, getToolListOf, setActionConfigApi } from "@/common/apis/player"
 import { useTheme } from "@/common/composables/useTheme"
 import { DEFAULT_COMMUNITY_BUFF_LIST, DEFAULT_SEPCIAL_EQUIPMENT_LIST } from "@/common/config"
+import { getTrans } from "@/locales"
 import { ACTION_LIST } from "@/pinia/stores/game"
 import { defaultActionConfig, usePlayerStore } from "@/pinia/stores/player"
 
@@ -16,11 +17,38 @@ defineProps<{
   equipments?: Equipment[]
   communityBuffs?: CommunityBuff[]
 }>()
+
+// 背部（披风/斗篷）可选项白名单：按技能限制可装备范围
+const BACK_EQUIPMENT_HRID_WHITELIST: Record<Action, string[]> = {
+  milking: ["/items/gatherer_cape", "/items/gatherer_cape_refined"],
+  foraging: ["/items/gatherer_cape", "/items/gatherer_cape_refined"],
+  woodcutting: ["/items/gatherer_cape", "/items/gatherer_cape_refined"],
+
+  cheesesmithing: ["/items/artificer_cape", "/items/artificer_cape_refined"],
+  crafting: ["/items/artificer_cape", "/items/artificer_cape_refined"],
+  tailoring: ["/items/artificer_cape", "/items/artificer_cape_refined"],
+
+  brewing: ["/items/culinary_cape", "/items/culinary_cape_refined"],
+  cooking: ["/items/culinary_cape", "/items/culinary_cape_refined"],
+
+  enhancing: ["/items/chance_cape", "/items/chance_cape_refined"],
+  alchemy: ["/items/chance_cape", "/items/chance_cape_refined"]
+}
+
+function getBackEquipmentListOf(action: Action) {
+  const allowed = new Set(BACK_EQUIPMENT_HRID_WHITELIST[action] ?? [])
+  return getEquipmentListOf(action, "back")
+    .filter(item => allowed.has(item.hrid))
+    .sort((a, b) => a.itemLevel - b.itemLevel)
+}
+
 const playerStore = usePlayerStore()
 const visible = ref(false)
 const actionList = ref<ActionConfigItem[]>([])
 const specialList = ref<PlayerEquipmentItem[]>([])
 const communityBuffList = ref<CommunityBuffItem[]>([])
+const sealList = ref<ReturnType<typeof getSealList>>([])
+const seals = ref<string[]>([])
 const name = ref("")
 const color = ref("")
 const currentIndex = ref(0)
@@ -53,6 +81,13 @@ function onDialog(config: ActionConfig, index: number) {
     }
   }))
 
+  sealList.value = getSealList()
+  seals.value = Array.isArray(config.seals)
+    ? [...config.seals]
+    : typeof (config as ActionConfig & { seal?: string }).seal === "string"
+      ? [(config as ActionConfig & { seal?: string }).seal!]
+      : []
+
   name.value = config.name!
   color.value = config.color!
   visible.value = true
@@ -78,6 +113,7 @@ function constructActionConfig() {
     actionConfigMap: new Map<Action, ActionConfigItem>(),
     specialEquimentMap: new Map<Equipment, PlayerEquipmentItem>(),
     communityBuffMap: new Map<CommunityBuff, CommunityBuffItem>(),
+    seals: [...seals.value],
     name: name.value,
     color: color.value
   }
@@ -172,9 +208,36 @@ function onImport() {
       if (!obj.name || !obj.color || !obj.actionConfigMap || !obj.specialEquimentMap) {
         throw new Error(t("无效的预设配置"))
       }
+      const normalizeSeal = (input: unknown): string | undefined => {
+        if (typeof input !== "string") {
+          return undefined
+        }
+        const value = input.trim()
+        if (!value) {
+          return undefined
+        }
+        if (value.startsWith("/items/seal_of_")) {
+          return value
+        }
+        const hit = getSealList().find(item =>
+          item.hrid === value
+          || item.hrid.split("/").pop() === value
+          || item.name === value
+          || getTrans(item.name) === value
+        )
+        return hit?.hrid
+      }
+      const normalizeSeals = (input: unknown): string[] => {
+        const source = Array.isArray(input) ? input : typeof input === "string" ? [input] : []
+        const result = source
+          .map(normalizeSeal)
+          .filter((item): item is string => Boolean(item))
+        return [...new Set(result)]
+      }
       const config: ActionConfig = {
         name: obj.name,
         color: obj.color,
+        seals: normalizeSeals(obj.seals || obj.seal),
         actionConfigMap: new Map<Action, ActionConfigItem>(Object.entries(obj.actionConfigMap) as [Action, ActionConfigItem][]),
         specialEquimentMap: new Map<Equipment, PlayerEquipmentItem>(Object.entries(obj.specialEquimentMap) as [Equipment, PlayerEquipmentItem][]),
         communityBuffMap: new Map<CommunityBuff, CommunityBuffItem>(Object.entries(obj.communityBuffMap) as [CommunityBuff, CommunityBuffItem][])
@@ -195,6 +258,7 @@ function onExport() {
   const json = JSON.stringify({
     name: config.name,
     color: config.color,
+    seals: config.seals,
     actionConfigMap: Object.fromEntries(config.actionConfigMap.entries()),
     specialEquimentMap: Object.fromEntries(config.specialEquimentMap.entries()),
     communityBuffMap: Object.fromEntries(config.communityBuffMap.entries())
@@ -204,6 +268,59 @@ function onExport() {
   }).catch(() => {
     ElMessage.error(t("复制失败，请检查浏览器权限设置"))
   })
+}
+
+function isSealEnabled(hrid: string) {
+  return seals.value.includes(hrid)
+}
+
+function onSealToggle(hrid: string, enabled: boolean) {
+  const index = seals.value.indexOf(hrid)
+  if (enabled && index === -1) {
+    seals.value.push(hrid)
+  }
+  if (!enabled && index !== -1) {
+    seals.value.splice(index, 1)
+  }
+}
+
+const BUFF_TYPE_TEXT_MAP: Record<string, string> = {
+  "/buff_types/action_speed": "行动速度",
+  "/buff_types/efficiency": "效率",
+  "/buff_types/gathering": "采集",
+  "/buff_types/processing": "加工",
+  "/buff_types/gourmet": "美食",
+  "/buff_types/wisdom": "经验",
+  "/buff_types/rare_find": "稀有发现",
+  "/buff_types/enhancing_success": "强化成功率"
+}
+
+function formatPercent(value: number) {
+  const sign = value > 0 ? "+" : ""
+  const text = (value * 100).toFixed(2).replace(/\.?0+$/, "")
+  return `${sign}${text}%`
+}
+
+function getBuffLabel(typeHrid?: string) {
+  if (!typeHrid) {
+    return ""
+  }
+  return BUFF_TYPE_TEXT_MAP[typeHrid] || typeHrid.split("/").pop() || typeHrid
+}
+
+function getSealEffect(item: ItemDetail) {
+  const personalBuff = item.scrollDetail?.personalBuffTypeHrid
+    ? getPersonalBuffDetailOf(item.scrollDetail.personalBuffTypeHrid)?.buff
+    : item.consumableDetail?.buffs?.[0]
+  if (!personalBuff) {
+    return ""
+  }
+  const ratio = (personalBuff.flatBoost || 0) + (personalBuff.ratioBoost || 0)
+  if (!Number.isFinite(ratio)) {
+    return ""
+  }
+  const label = getBuffLabel(personalBuff.typeHrid)
+  return label ? `${label} ${formatPercent(ratio)}` : formatPercent(ratio)
 }
 </script>
 
@@ -355,6 +472,23 @@ function onExport() {
                 <el-input-number v-model="row.legs.enhanceLevel" :min="0" :max="20" style="width: 60px" :controls="false" />
               </template>
             </el-table-column>
+            <el-table-column :label="t('背部')" align="center" min-width="105">
+              <template #default="{ row }">
+                <el-select style="width:80px" v-model="row.back.hrid" :placeholder="t('无')" clearable>
+                  <el-option v-for="item in getBackEquipmentListOf(row.action)" :key="item.hrid" :label="item.name" :value="item.hrid">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                      <ItemIcon :hrid="item.hrid" />
+                      <div> {{ item.name }} </div>
+                    </div>
+                  </el-option>
+                  <template #label>
+                    <ItemIcon style="margin-top: 4px;" :hrid="row.back.hrid" />
+                  </template>
+                </el-select>
+                &nbsp;+&nbsp;
+                <el-input-number v-model="row.back.enhanceLevel" :min="0" :max="20" style="width: 60px" :controls="false" />
+              </template>
+            </el-table-column>
             <el-table-column :label="t('护符')" align="center" min-width="105">
               <template #default="{ row }">
                 <el-select style="width:80px" v-model="row.charm.hrid" :placeholder="t('无')" clearable>
@@ -424,9 +558,30 @@ function onExport() {
             <el-card class="mt-5">
               <template #header>
                 <div style="line-height: 32px;">
-                  {{ t('社区Buff') }}
+                  {{ t('其他Buff') }}
                 </div>
               </template>
+              <div class="buff-title">
+                {{ t('封印') }}
+              </div>
+              <div class="buff-tofu-grid">
+                <div class="buff-tofu" v-for="item in sealList" :key="`seal-${item.hrid}`">
+                  <div class="buff-tofu-head">
+                    <ItemIcon :hrid="item.hrid" />
+                    <span>{{ getTrans(item.name) }}</span>
+                  </div>
+                  <div class="buff-effect">
+                    {{ getSealEffect(item) }}
+                  </div>
+                  <el-checkbox :model-value="isSealEnabled(item.hrid)" @change="(value) => onSealToggle(item.hrid, Boolean(value))">
+                    {{ t('启用') }}
+                  </el-checkbox>
+                </div>
+              </div>
+
+              <div class="buff-title mt-3">
+                {{ t('社区Buff') }}
+              </div>
               <el-table :data="communityBuffList.filter(item => communityBuffs ? communityBuffs.includes(item.type) : true)">
                 <el-table-column prop="type" :label="t('Buff')" width="120">
                   <template #default="{ row }">
@@ -541,5 +696,37 @@ function onExport() {
     0 1px #131419,
     1px 0 #131419,
     0 -1px #131419;
+}
+.buff-title {
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.buff-tofu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.buff-tofu {
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.buff-tofu-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  font-size: 13px;
+}
+
+.buff-effect {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

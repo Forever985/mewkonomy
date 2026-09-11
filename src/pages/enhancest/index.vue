@@ -10,14 +10,42 @@ import { EnhanceCalculator } from "@/calculator/enhance"
 import { ManufactureCalculator } from "@/calculator/manufacture"
 import { getItemDetailOf, getMarketDataApi, getPriceOf } from "@/common/apis/game"
 import { getEquipmentList } from "@/common/apis/player"
+import { useMemory } from "@/common/composables/useMemory"
 import { useEnhancerStore } from "@/pinia/stores/enhancer"
-import { COIN_HRID } from "@/pinia/stores/game"
+import { COIN_HRID, PRICE_STATUS_LIST, PriceStatus, useGameStore } from "@/pinia/stores/game"
 import { usePlayerStore } from "@/pinia/stores/player"
 import ActionConfig from "../dashboard/components/ActionConfig.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 
 const enhancerStore = useEnhancerStore()
+const gameStore = useGameStore()
 const { t } = useI18n()
+
+// 独立的价格状态：材料买价 / 成品售价（不修改全局 buyStatus / sellStatus）
+const materialBuyStatus = useMemory("enhancest-material-buy-status", PriceStatus.ASK)
+const productSellStatus = useMemory("enhancest-product-sell-status", PriceStatus.BID)
+
+function getMaterialOriginPrice(hrid: string, level?: number) {
+  // 材料/初始物品按「买价」口径
+  return getPriceOf(hrid, level, materialBuyStatus.value, gameStore.sellStatus).ask
+}
+
+function getProductBidPrice(hrid: string, level?: number) {
+  // 成品按「卖价」口径
+  return getPriceOf(hrid, level, gameStore.buyStatus, productSellStatus.value).bid
+}
+
+watch([materialBuyStatus, productSellStatus], () => {
+  if (!currentItem.value.hrid) {
+    return
+  }
+  enhancementCosts.value.forEach((item) => {
+    item.originPrice = getMaterialOriginPrice(item.hrid)
+  })
+  protectionList.value.forEach((item) => {
+    item.originPrice = getMaterialOriginPrice(item.hrid)
+  })
+})
 
 const dialogVisible = ref(false)
 const search = ref("")
@@ -107,28 +135,28 @@ function onSelect(item: ItemDetail) {
   enhancementCosts.value = item.enhancementCosts!.map(item => ({
     hrid: item.itemHrid,
     count: item.count,
-    originPrice: getPriceOf(item.itemHrid).ask
+    originPrice: getMaterialOriginPrice(item.itemHrid)
   }))
 
   protectionList.value = item.protectionItemHrids
     ? item.protectionItemHrids.map(hrid => ({
         hrid,
         count: 1,
-        originPrice: getPriceOf(hrid).ask
+        originPrice: getMaterialOriginPrice(hrid)
       }))
     : []
   if (!protectionList.value.length) {
     protectionList.value.push({
       hrid: item.hrid,
       count: 1,
-      originPrice: getPriceOf(item.hrid).ask
+      originPrice: getMaterialOriginPrice(item.hrid)
     })
   }
 
   protectionList.value.push({
     hrid: "/items/mirror_of_protection",
     count: 1,
-    originPrice: getPriceOf("/items/mirror_of_protection").ask
+    originPrice: getMaterialOriginPrice("/items/mirror_of_protection")
   })
 
   // price最低的
@@ -164,15 +192,15 @@ function genDecompose() {
 }
 
 const currentItemOriginPrice = computed(() => {
-  return getPriceOf(currentItem.value.hrid!, enhancerStore.advancedConfig.originLevel ?? defaultConfig.originLevel).ask
+  return getMaterialOriginPrice(currentItem.value.hrid!, enhancerStore.advancedConfig.originLevel ?? defaultConfig.originLevel)
 })
 
 const currentItemWhitePrice = computed(() => {
-  return getPriceOf(currentItem.value.hrid!).ask
+  return getMaterialOriginPrice(currentItem.value.hrid!)
 })
 
 const currentItemEscapePrice = computed(() => {
-  return getPriceOf(currentItem.value.hrid!, Math.max(enhancerStore.advancedConfig.escapeLevel ?? defaultConfig.escapeLevel, 0)).ask
+  return getMaterialOriginPrice(currentItem.value.hrid!, Math.max(enhancerStore.advancedConfig.escapeLevel ?? defaultConfig.escapeLevel, 0))
 })
 
 const currentDecomposePrice = computed(() => {
@@ -254,7 +282,7 @@ const results = computed(() => {
 
     let productPrice = typeof currentItem.value.productPrice === "number"
       ? currentItem.value.productPrice
-      : getPriceOf(currentItem.value.hrid, enhanceLevel).bid
+      : getProductBidPrice(currentItem.value.hrid, enhanceLevel)
 
     // 分解
     if (enhancerStore.advancedConfig.tab === "2") {
@@ -402,8 +430,24 @@ watch(menuVisible, (value) => {
       <el-col :xs="24" :sm="24" :md="10" :lg="8" :xl="8" class="max-w-400px mx-auto">
         <el-card>
           <template #header>
-            <div class="flex justify-between items-center">
-              <span>{{ t('装备成本') }}</span>
+            <div class="flex flex-col gap-2">
+              <div class="flex justify-between items-center">
+                <span>{{ t('装备成本') }}</span>
+              </div>
+              <div v-if="gameStore.checkSecret()" class="flex items-center gap-2">
+                <div class="whitespace-nowrap">
+                  {{ t('材料买价') }}
+                </div>
+                <el-select v-model="materialBuyStatus" :placeholder="t('左价')" style="width:100px">
+                  <el-option v-for="item in PRICE_STATUS_LIST" :key="item.value" :value="item.value" :label="item.label" />
+                </el-select>
+                <div class="whitespace-nowrap">
+                  {{ t('成品售价') }}
+                </div>
+                <el-select v-model="productSellStatus" :placeholder="t('右价')" style="width:100px">
+                  <el-option v-for="item in PRICE_STATUS_LIST" :key="item.value" :value="item.value" :label="item.label" />
+                </el-select>
+              </div>
             </div>
           </template>
 
@@ -636,7 +680,7 @@ watch(menuVisible, (value) => {
                   v-model="currentItem.productPrice"
                   :step="1"
                   :min="0"
-                  :placeholder="Format.number(getPriceOf(currentItem.hrid!, enhancerStore.advancedConfig.enhanceLevel ?? defaultConfig.enhanceLevel).bid)"
+                  :placeholder="Format.number(getProductBidPrice(currentItem.hrid!, enhancerStore.advancedConfig.enhanceLevel ?? defaultConfig.enhanceLevel))"
                   :controls="false"
                 />
               </div>

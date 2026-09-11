@@ -163,14 +163,15 @@ const { t } = useI18n()
                 />
               </el-form-item>
 
-              <el-form-item :label="t('条件')" style="width:100%; margin-right:0;">
+              <el-form-item :label="t('只看目标等级')" style="width:100%; margin-right:0;">
                 <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
                   <div v-for="(cond, i) in ldSearchData.conditions" :key="i" style="display:flex; align-items:center; gap:8px;">
-                    <el-select v-model="cond.steps" :placeholder="t('目标等级不限')" clearable style="width:130px" @change="handleSearchLD">
+                    <el-select v-model="cond.steps" :placeholder="t('不限（默认全部）')" clearable style="width:130px" @change="handleSearchLD">
                       <el-option v-for="n in 20" :key="n" :label="`${t('目标等级')} ${n}`" :value="n" />
                     </el-select>
                     <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
                   </div>
+                  <div style="color:#909399; font-size:12px;">{{ t('多选后仅显示这些强化等级的方案') }}</div>
                   <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
                 </div>
               </el-form-item>

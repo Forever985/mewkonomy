@@ -15,6 +15,7 @@ export interface GameData {
   enhancementLevelSuccessRateTable: number[]
   enhancementLevelTotalBonusMultiplierTable: number[]
   communityBuffTypeDetailMap: Record<string, CommunityBuffDetail>
+  personalBuffTypeDetailMap?: Record<string, PersonalBuffDetail>
   chatIconDetailMap?: Record<string, ChatIconDetail>
 }
 export interface ChatIconDetail {
@@ -37,6 +38,7 @@ export interface ShopItemDetail {
 export interface ItemDetail {
   hrid: string
   name: string
+  description?: string
   categoryHrid: string
   sellPrice: number
   isTradable: boolean
@@ -46,6 +48,7 @@ export interface ItemDetail {
   alchemyDetail: AlchemyDetail
   equipmentDetail?: EquipmentDetail
   consumableDetail: ConsumableDetail
+  scrollDetail?: ScrollDetail
   sortIndex: number
 }
 export interface ActionDetail {
@@ -94,6 +97,14 @@ export interface CommunityBuffDetail {
   buff: Buff
 }
 
+export interface PersonalBuffDetail {
+  hrid: string
+  name: string
+  usableInActionTypeMap: Record<ActionType, boolean>
+  buff: Buff
+  sortIndex: number
+}
+
 export interface ConsumableDetail {
   cooldownDuration: number
   usableInActionTypeMap: Record<ActionType, boolean>
@@ -102,6 +113,9 @@ export interface ConsumableDetail {
   recoveryDuration: number
   buffs: Buff[]
   defaultCombatTriggers: PROP_TODO
+}
+export interface ScrollDetail {
+  personalBuffTypeHrid: string
 }
 export interface Buff {
   uniqueHrid: string

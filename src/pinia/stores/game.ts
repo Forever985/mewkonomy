@@ -105,7 +105,8 @@ export const useGameStore = defineStore("game", {
     decomposeCache: {} as { [time: number]: DecomposeCalculator[] },
     secret: loadSecret(),
     buyStatus: loadBuyStatus(),
-    sellStatus: loadSellStatus()
+    sellStatus: loadSellStatus(),
+    priceFallbackMode: loadPriceFallbackMode()
   }),
   actions: {
     async tryFetchData() {
@@ -166,6 +167,11 @@ export const useGameStore = defineStore("game", {
     savePriceStatus() {
       // saveBuyStatus(this.buyStatus)
       // saveSellStatus(this.sellStatus)
+      this.clearAllCaches()
+    },
+    setPriceFallbackMode(mode: "A" | "B") {
+      this.priceFallbackMode = mode
+      savePriceFallbackMode(mode)
       this.clearAllCaches()
     },
     resetPriceStatus() {
@@ -351,6 +357,16 @@ function loadBuyStatus() {
 }
 function loadSellStatus() {
   return PriceStatus.BID
+}
+
+type PriceFallbackMode = "A" | "B"
+
+function loadPriceFallbackMode(): PriceFallbackMode {
+  const v = localStorage.getItem(`${KEY_PREFIX}price-fallback-mode`)
+  return v === "A" ? "A" : "B"
+}
+function savePriceFallbackMode(mode: PriceFallbackMode) {
+  localStorage.setItem(`${KEY_PREFIX}price-fallback-mode`, mode)
 }
 
 export function useGameStoreOutside() {
