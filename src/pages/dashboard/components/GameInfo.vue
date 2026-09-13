@@ -24,12 +24,18 @@ const gameStore = useGameStore()
         <span>
           {{ t('方案A：物品无市价（-1）时直接显示 -1，保持原样。') }}
           <br />
-          {{ t('方案B：物品无市价（-1）时使用该物品的 sellPrice 作为参考价展示。') }}
+          {{ t('方案B：卖出端使用 sellPrice 兜底（能卖这么多）；买入端无市价仍显示 -1（买不到不虚报）。') }}
+          <br />
+          {{ t('方案C：卖出端用 sellPrice 兜底；买入端用大全套（自产）成本替代，自产不可行的纯掉落仍显示 -1。') }}
+          <br />
+          <br />
+          {{ t('价格标注：市场无价时，价格会被商店兜底或自产成本替代，此类「非真实成交价」会在物品旁标注【商店】/【自产】；完全无价标注【无价】；标注随市价实时变化，不会写死。') }}
         </span>
       </template>
       <el-select :model-value="gameStore.priceFallbackMode" style="width: 170px" @change="(value) => gameStore.setPriceFallbackMode(value)">
         <el-option label="A - 显示 -1（不兜底）" value="A" />
         <el-option label="B - 使用 sellPrice 兜底" value="B" />
+        <el-option label="C - 使用大全套价格兜底" value="C" />
       </el-select>
     </el-tooltip>
   </div>

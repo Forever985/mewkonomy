@@ -2,9 +2,41 @@
 import type Calculator from "@/calculator"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import * as Format from "@@/utils/format"
-import { getItemDetailOf, getPriceOf } from "@/common/apis/game"
+import { getItemDetailOf, getPriceOf, getPriceSourceOf, type PriceSource } from "@/common/apis/game"
 import { getManualPriceOf, setPriceApi } from "@/common/apis/price"
 import { COIN_HRID } from "@/pinia/stores/game"
+
+/** 编辑弹窗内市价来源标注（原料=ask 端，产品=bid 端） */
+function sourceOf(row: { hrid: string; level?: number }, type: "ask" | "bid"): PriceSource | undefined {
+  if (row.hrid === COIN_HRID) {
+    return undefined
+  }
+  return getPriceSourceOf(row.hrid, row.level || 0, type)
+}
+function sourceLabel(s?: PriceSource) {
+  switch (s) {
+    case "selfcraft": return "自产"
+    case "shop": return "商店"
+    case "none": return "无价"
+    default: return ""
+  }
+}
+function sourceTip(s?: PriceSource) {
+  switch (s) {
+    case "selfcraft": return "市场无价，按大全套自产成本估值（非真实成交价）"
+    case "shop": return "市场无价，按商店价格兜底（非真实成交价）"
+    case "none": return "无价（-1），暂无法定价"
+    default: return ""
+  }
+}
+function sourceTagType(s?: PriceSource) {
+  switch (s) {
+    case "selfcraft": return "warning"
+    case "shop": return "info"
+    case "none": return "danger"
+    default: return "info"
+  }
+}
 
 const props = defineProps<{
   modelValue: boolean
@@ -84,6 +116,11 @@ const { t } = useI18n()
                 </div>
                 <div v-else>
                   {{ Format.price(getPriceOf(row.hrid, row.level).ask) }} / {{ Format.price(getPriceOf(row.hrid, row.level).bid) }}
+                  <el-tooltip v-if="sourceOf(row, 'ask')" :content="sourceTip(sourceOf(row, 'ask'))" placement="top">
+                    <el-tag size="small" style="margin-left:4px" :type="sourceTagType(sourceOf(row, 'ask'))">
+                      {{ sourceLabel(sourceOf(row, 'ask')) }}
+                    </el-tag>
+                  </el-tooltip>
                 </div>
               </template>
             </el-table-column>
@@ -118,6 +155,11 @@ const { t } = useI18n()
                 </div>
                 <div v-else>
                   {{ Format.price(getPriceOf(row.hrid, row.level).ask) }} / {{ Format.price(getPriceOf(row.hrid, row.level).bid) }}
+                  <el-tooltip v-if="sourceOf(row, 'bid')" :content="sourceTip(sourceOf(row, 'bid'))" placement="top">
+                    <el-tag size="small" style="margin-left:4px" :type="sourceTagType(sourceOf(row, 'bid'))">
+                      {{ sourceLabel(sourceOf(row, 'bid')) }}
+                    </el-tag>
+                  </el-tooltip>
                 </div>
               </template>
             </el-table-column>

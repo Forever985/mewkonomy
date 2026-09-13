@@ -9,6 +9,8 @@ import { getEnhanposerDataApi } from "@/common/apis/enhanposer"
 
 import { getMarketDataApi } from "@/common/apis/game"
 import { useMemory } from "@/common/composables/useMemory"
+import { usePriceStatus } from "@/common/composables/usePriceStatus"
+import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 import { useGameStoreOutside } from "@/pinia/stores/game"
 import { usePlayerStore } from "@/pinia/stores/player"
 import { usePriceStore } from "@/pinia/stores/price"
@@ -24,13 +26,10 @@ const ldSearchFormRef = ref<FormInstance | null>(null)
 
 const ldSearchData = useMemory("enhanposer-leaderboard-search-data", {
   name: [],
-  minLevel: undefined,
-  maxLevel: undefined,
   minProfitRate: undefined,
   maxProfitRate: undefined,
   minRisk: undefined,
   maxRisk: undefined,
-  conditions: [{ steps: undefined }],
   banEquipment: false,
   banCombat: false,
   banLife: false,
@@ -43,28 +42,21 @@ const ldSearchData = useMemory("enhanposer-leaderboard-search-data", {
 if (typeof ldSearchData.value.name === "string") {
   ldSearchData.value.name = ldSearchData.value.name ? [ldSearchData.value.name] : []
 }
-// 旧数据迁移：conditions 数组 + profitRate → minProfitRate
-if (!Array.isArray(ldSearchData.value.conditions)) {
-  ldSearchData.value.conditions = [{ steps: undefined }]
-}
+// 旧数据迁移：profitRate → minProfitRate
 if (ldSearchData.value.profitRate != null && ldSearchData.value.minProfitRate == null) {
   ldSearchData.value.minProfitRate = ldSearchData.value.profitRate
 }
+// 清理旧版「目标等级」筛选残留字段（已整体移除该筛选，不再参与查询）
 delete ldSearchData.value.project
 delete ldSearchData.value.profitRate
+delete ldSearchData.value.minLevel
+delete ldSearchData.value.maxLevel
+delete ldSearchData.value.conditions
 // 旧数据迁移：单向 priceType → 拆分的 materialPriceType / productPriceType（成品售价沿用旧 priceType）
 if (ldSearchData.value.priceType != null && ldSearchData.value.productPriceType == null) {
   ldSearchData.value.productPriceType = ldSearchData.value.priceType
 }
 delete ldSearchData.value.priceType
-
-/** 目标等级并行选择：多行 (目标强化等级) 组合，命中任一即保留 */
-function addCondition() {
-  ldSearchData.value.conditions.push({ steps: undefined })
-}
-function removeCondition(index: number) {
-  ldSearchData.value.conditions.splice(index, 1)
-}
 
 const loadingLD = ref(false)
 const getLeaderboardData = debounce(() => {
@@ -100,7 +92,9 @@ watch([
   () => paginationDataLD.currentPage,
   () => paginationDataLD.pageSize,
   () => getMarketDataApi(),
-  () => usePlayerStore().config
+  () => usePlayerStore().config,
+  () => useGameStoreOutside().buyStatus,
+  () => useGameStoreOutside().sellStatus
 ], getLeaderboardData, { immediate: true })
 
 // #endregion
@@ -112,12 +106,8 @@ watch(() => usePriceStore(), () => {
 }, { deep: true })
 // #endregion
 
-// 不分解模式 / 价格源变化：清除旧缓存后重算（缓存基于不同计算模式区分）
+// 不分解模式变化：清除旧缓存后重算（缓存基于不同计算模式区分）
 watch(() => ldSearchData.value.noDecompose, () => {
-  useGameStoreOutside().clearEnhanposerCache()
-  handleSearchLD()
-})
-watch(() => ldSearchData.value.priceType, () => {
   useGameStoreOutside().clearEnhanposerCache()
   handleSearchLD()
 })
@@ -148,6 +138,7 @@ function setPrice(row: Calculator) {
   priceVisible.value = true
 }
 
+const onPriceStatusChange = usePriceStatus("enhanposer-price-status")
 const { t } = useI18n()
 </script>
 
@@ -158,6 +149,8 @@ const { t } = useI18n()
       <div>
         <ActionConfig :actions="['enhancing']" :equipments="['hands', 'neck', 'earrings', 'ring', 'pouch']" />
       </div>
+
+      <PriceStatusSelect @change="onPriceStatusChange" />
 
       <div>
         {{ t('#强化纪念') }}
@@ -184,27 +177,6 @@ const { t } = useI18n()
                   clearable
                   @change="handleSearchLD"
                 />
-              </el-form-item>
-
-              <el-form-item :label="t('只看目标等级')" style="width:100%; margin-right:0;">
-                <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
-                  <div v-for="(cond, i) in ldSearchData.conditions" :key="i" style="display:flex; align-items:center; gap:8px;">
-                    <el-select v-model="cond.steps" :placeholder="t('不限（默认全部）')" clearable style="width:130px" @change="handleSearchLD">
-                      <el-option v-for="n in 20" :key="n" :label="`${t('目标等级')} ${n}`" :value="n" />
-                    </el-select>
-                    <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
-                  </div>
-                  <div style="color:#909399; font-size:12px;">{{ t('多选后仅显示这些强化等级的方案') }}</div>
-                  <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('目标等级')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number style="width:80px" :min="1" :max="20" v-model="ldSearchData.minLevel" placeholder="1" clearable @change="handleSearchLD" controls-position="right" />
-                  <span>~</span>
-                  <el-input-number style="width:80px" :min="1" :max="20" v-model="ldSearchData.maxLevel" placeholder="20" clearable @change="handleSearchLD" controls-position="right" />
-                </div>
               </el-form-item>
 
               <el-form-item :label="t('利润率')">
@@ -237,12 +209,6 @@ const { t } = useI18n()
                 <el-checkbox v-model="ldSearchData.noDecompose" @change="handleSearchLD">
                   {{ t('不分解模式') }}
                 </el-checkbox>
-              </el-form-item>
-              <el-form-item :label="t('价格源')">
-                <el-select v-model="ldSearchData.priceType" style="width:110px" @change="handleSearchLD">
-                  <el-option value="ask" :label="t('左挂单')" />
-                  <el-option value="bid" :label="t('右收购')" />
-                </el-select>
               </el-form-item>
             </el-form>
           </template>

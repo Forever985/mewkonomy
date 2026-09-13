@@ -40,6 +40,10 @@ const LIST_KEY = "manual-list"
 export interface StorageCalculatorItem extends CalculatorConfig {
   id: `${string}-${string}-${Action}`
   className?: string
+  /** 综利用尾等跨项目拼接时，指定要对齐 0 价的原料 hrid（默认对齐 ingredientList[0]） */
+  alignHrid?: string
+  /** 炼金头等拼接时，指定本阶段"流向下一阶段的产物"hrid（默认取 cal.hrid，即动作主产物） */
+  alignProductHrid?: string
 }
 function loadList(): StorageCalculatorItem[] {
   try {

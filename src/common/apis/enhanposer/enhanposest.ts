@@ -30,14 +30,21 @@ export async function getEnhanposestDataApi(params: any) {
   profitList = profitList.filter(item => params.maxLevel ? (item.calculator as DecomposeCalculator).enhanceLevel <= params.maxLevel : true)
   profitList = profitList.filter(item => params.minLevel ? (item.calculator as DecomposeCalculator).enhanceLevel >= params.minLevel : true)
 
-  // 多元组合条件：目标强化等级并行（OR），命中任一等级即保留
+  // 多元组合条件：目标强化等级并行（OR），命中任一组合即保留
+  // 强化分解方案无「N步」语义，故 conditions.steps 映射为目标强化等级（相等匹配）
+  // minLevel/maxLevel 为等级区间，与 steps 在同一组合内 AND、行间 OR
   const conditions = Array.isArray(params.conditions)
-    ? params.conditions.filter((c: any) => c && c.steps != null && c.steps !== "")
+    ? params.conditions.filter((c: any) => c && ((c.steps != null && c.steps !== "") || c.minLevel != null || c.maxLevel != null))
     : []
   if (conditions.length) {
     profitList = profitList.filter(item => {
       const enhanceLevel = (item.calculator as DecomposeCalculator).enhanceLevel
-      return conditions.some((cond: any) => enhanceLevel === cond.steps)
+      return conditions.some((cond: any) => {
+        if (cond.steps != null && cond.steps !== "" && enhanceLevel !== cond.steps) return false
+        if (cond.minLevel != null && enhanceLevel < cond.minLevel) return false
+        if (cond.maxLevel != null && enhanceLevel > cond.maxLevel) return false
+        return true
+      })
     })
   }
   // 剔除 conditions 后再走通用 handleSearch，避免其「步数」正则对本页数据误伤

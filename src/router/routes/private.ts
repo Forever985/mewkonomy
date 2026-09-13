@@ -111,6 +111,33 @@ export const privateRoutes: RouteRecordRaw[] = [
           title: t("制作炼金"),
           svgIcon: "dashboard"
         }
+      },
+      {
+        path: "chainbuilder",
+        component: () => import("@/pages/chainbuilder/index.vue"),
+        name: "Chainbuilder",
+        meta: {
+          title: t("手动产业链"),
+          svgIcon: "dashboard"
+        }
+      },
+      {
+        path: "charmtransform",
+        component: () => import("@/pages/charmtransform/index.vue"),
+        name: "Charmtransform",
+        meta: {
+          title: t("护符转化盈利"),
+          svgIcon: "dashboard"
+        }
+      },
+      {
+        path: "marketvolume",
+        component: () => import("@/pages/marketvolume/index.vue"),
+        name: "Marketvolume",
+        meta: {
+          title: t("市场监控"),
+          svgIcon: "dashboard"
+        }
       }
     ]
   },

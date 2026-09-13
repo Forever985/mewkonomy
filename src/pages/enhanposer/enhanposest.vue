@@ -9,9 +9,12 @@ import { getEnhanposestDataApi } from "@/common/apis/enhanposer/enhanposest"
 
 import { getMarketDataApi } from "@/common/apis/game"
 import { useMemory } from "@/common/composables/useMemory"
+import { usePriceStatus } from "@/common/composables/usePriceStatus"
 import * as Format from "@/common/utils/format"
+import { useGameStoreOutside } from "@/pinia/stores/game"
 import { usePlayerStore } from "@/pinia/stores/player"
 import { usePriceStore } from "@/pinia/stores/price"
+import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 import ActionConfig from "../dashboard/components/ActionConfig.vue"
 import ActionDetail from "../dashboard/components/ActionDetail.vue"
 import ActionPrice from "../dashboard/components/ActionPrice.vue"
@@ -24,13 +27,11 @@ const ldSearchFormRef = ref<FormInstance | null>(null)
 
 const ldSearchData = useMemory("enhanposest-leaderboard-search-data", {
   name: [],
-  minLevel: undefined,
-  maxLevel: undefined,
   minProfitRate: undefined,
   maxProfitRate: undefined,
   minRisk: undefined,
   maxRisk: undefined,
-  conditions: [{ steps: undefined }],
+  conditions: [{ steps: undefined, minLevel: undefined, maxLevel: undefined }],
   banEquipment: false,
   banCombat: false,
   banLife: false
@@ -46,12 +47,28 @@ if (!Array.isArray(ldSearchData.value.conditions)) {
 if (ldSearchData.value.profitRate != null && ldSearchData.value.minProfitRate == null) {
   ldSearchData.value.minProfitRate = ldSearchData.value.profitRate
 }
+// 旧数据迁移：目标等级 minLevel/maxLevel 移入组合条件 conditions[0]（多行条件各补等级字段）
+if (Array.isArray(ldSearchData.value.conditions)) {
+  const cond0 = ldSearchData.value.conditions[0] || {}
+  if (cond0.minLevel == null && ldSearchData.value.minLevel != null) {
+    cond0.minLevel = ldSearchData.value.minLevel
+  }
+  if (cond0.maxLevel == null && ldSearchData.value.maxLevel != null) {
+    cond0.maxLevel = ldSearchData.value.maxLevel
+  }
+  ldSearchData.value.conditions.forEach((c: any) => {
+    if (c.minLevel == null) c.minLevel = undefined
+    if (c.maxLevel == null) c.maxLevel = undefined
+  })
+}
 delete ldSearchData.value.project
 delete ldSearchData.value.profitRate
+delete ldSearchData.value.minLevel
+delete ldSearchData.value.maxLevel
 
-/** 目标等级并行选择：多行 (目标强化等级) 组合，命中任一即保留 */
+/** 目标等级并行选择：多行 (目标强化等级/等级区间) 组合，命中任一即保留 */
 function addCondition() {
-  ldSearchData.value.conditions.push({ steps: undefined })
+  ldSearchData.value.conditions.push({ steps: undefined, minLevel: undefined, maxLevel: undefined })
 }
 function removeCondition(index: number) {
   ldSearchData.value.conditions.splice(index, 1)
@@ -91,7 +108,9 @@ watch([
   () => paginationDataLD.currentPage,
   () => paginationDataLD.pageSize,
   () => getMarketDataApi(),
-  () => usePlayerStore().config
+  () => usePlayerStore().config,
+  () => useGameStoreOutside().buyStatus,
+  () => useGameStoreOutside().sellStatus
 ], getLeaderboardData, { immediate: true })
 
 // #endregion
@@ -129,6 +148,7 @@ function setPrice(row: Calculator) {
   priceVisible.value = true
 }
 
+const onPriceStatusChange = usePriceStatus("enhanposest-price-status")
 const { t } = useI18n()
 </script>
 
@@ -139,6 +159,8 @@ const { t } = useI18n()
       <div>
         <ActionConfig :actions="['enhancing']" :equipments="['hands', 'neck', 'earrings', 'ring', 'pouch']" />
       </div>
+
+      <PriceStatusSelect @change="onPriceStatusChange" />
     </div>
     <el-row :gutter="20" class="row">
       <el-col :xs="24" :sm="24" :md="24" :lg="24" :xl="14">
@@ -169,18 +191,13 @@ const { t } = useI18n()
                     <el-select v-model="cond.steps" :placeholder="t('不限（默认全部）')" clearable style="width:130px" @change="handleSearchLD">
                       <el-option v-for="n in 20" :key="n" :label="`${t('目标等级')} ${n}`" :value="n" />
                     </el-select>
+                    <el-input-number v-model="cond.minLevel" :min="1" :max="20" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="1" />
+                    <span>~</span>
+                    <el-input-number v-model="cond.maxLevel" :min="1" :max="20" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="20" />
                     <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
                   </div>
                   <div style="color:#909399; font-size:12px;">{{ t('多选后仅显示这些强化等级的方案') }}</div>
                   <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('目标等级')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number style="width:80px" :min="1" :max="20" v-model="ldSearchData.minLevel" placeholder="1" clearable @change="handleSearchLD" controls-position="right" />
-                  <span>~</span>
-                  <el-input-number style="width:80px" :min="1" :max="20" v-model="ldSearchData.maxLevel" placeholder="20" clearable @change="handleSearchLD" controls-position="right" />
                 </div>
               </el-form-item>
 

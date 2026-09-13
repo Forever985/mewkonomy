@@ -126,6 +126,11 @@ const { t } = useI18n()
           <el-col :xs="24" :sm="24" :md="24" :lg="10" :xl="10">
             <div class="footer-wrapper">
               {{ t('总成本') }}：{{ data.result.costPHFormat }} / h
+              <el-tooltip v-if="data.result.selfProduceRatioFormat" :content="t('自产比例=自产原料成本÷(自产+外购)成本；自产含大全套自产成本估值与0成本采集料，随市价动态变化')" placement="top">
+                <el-text type="warning" style="margin-left:8px">
+                  {{ t('自产') }}：{{ data.result.selfProduceRatioFormat }}
+                </el-text>
+              </el-tooltip>
             </div>
           </el-col>
           <el-col :xs="24" :sm="24" :md="24" :lg="4" :xl="4" />

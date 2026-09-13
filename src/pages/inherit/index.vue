@@ -19,7 +19,7 @@ import ActionDetail from "../dashboard/components/ActionDetail.vue"
 import ActionPrice from "../dashboard/components/ActionPrice.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 import ManualPriceCard from "../dashboard/components/ManualPriceCard.vue"
-import PriceStatusSelect from "../dashboard/components/PriceStatusSelect.vue"
+import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 
 // #region 查
 const { paginationData: paginationDataLD, handleCurrentChange: handleCurrentChangeLD, handleSizeChange: handleSizeChangeLD } = usePagination({}, "inherit-leaderboard-pagination")

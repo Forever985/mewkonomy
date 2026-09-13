@@ -1,0 +1,159 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 08e8c4f3f93cfbfc76cce2af531ed943_4b2344d0af6511f18874525400287e28
+    ReservedCode1: 6N6vTtAPkQU4Lls/wdwDWHDFHzt6e5aRzbl6Qir/2N+xPuP5YEL/6PM/ZG4487IkQPnAAWCYzN1m0AoAhYNV0ALjSdO2/syGM3eB7F16btGAicxcpGu3Otwd3zUpZw3R3N6LNphQwFAJv2dDw3rSWRmj61y+LPugQ9I18Ywo3hseZE742RVnnSRtQQk=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 08e8c4f3f93cfbfc76cce2af531ed943_4b2344d0af6511f18874525400287e28
+    ReservedCode2: 6N6vTtAPkQU4Lls/wdwDWHDFHzt6e5aRzbl6Qir/2N+xPuP5YEL/6PM/ZG4487IkQPnAAWCYzN1m0AoAhYNV0ALjSdO2/syGM3eB7F16btGAicxcpGu3Otwd3zUpZw3R3N6LNphQwFAJv2dDw3rSWRmj61y+LPugQ9I18Ywo3hseZE742RVnnSRtQQk=
+---
+
+# MewKonomy 开发说明书（面向开发者）
+
+> 本文面向**开发者**，讲清楚项目的架构、各模块的开发规范、测试、构建与部署流程。
+> 内容侧重「开发流程与规范」；「可复用抽象模块」的提炼见
+> [REUSABLE_ABSTRACTION_MODULES.md](./REUSABLE_ABSTRACTION_MODULES.md)，两文呼应、不重复。
+> 项目背景与历次改动细节见 [MILKONOMY_PROJECT_CONTEXT.md](./MILKONOMY_PROJECT_CONTEXT.md)。
+
+---
+
+## 一、架构总览
+
+### 1.1 定位与技术栈
+
+- **定位**：Milky Way Idle 玩家自用利润计算工具，**纯前端 SPA，无后端、无账号**。
+- **技术栈**：Vue 3.5 + Vite 6 + TypeScript 5.7 + Element Plus 2.9 + Pinia + vue-i18n + vitest + happy-dom。
+- **路由**：hash 模式（兼容子路径部署）；`src/router/config.ts` 的 `history` 由构建模式决定。
+
+### 1.2 数据流
+
+```
+public/data/data.json ─┐
+                       ├─→ Pinia store（game/player/price/enhancer...）
+public/data/market.json┘         │ 缓存：localStorage，按 timestamp + 计算模式分桶
+                                 ▼
+   src/common/apis/*（各域聚合 API：game/price/player/favorite/...）
+                                 ▼
+   src/calculator/*（纯计算逻辑，Calculator 子类 + WorkflowCalculator 聚合）
+                                 ▼
+   src/pages/*（页面四件套：页面 / components / api / types）
+```
+
+- **数据源**：`data.json`（静态游戏数据，**严禁改动**，含硬上限）+ `market.json`（市场快照 `{market:{名称:{ask,bid,vendor}}, time}`）。
+- **价格语义**：`PriceStatus.ASK`=左挂单（ask），`BID`=右收购（bid）。全局规则——**材料/成本用 ask，成品/收益用 bid**（个别页面可切换成品计价口径）。
+
+### 1.3 Vite 别名
+
+| 别名 | 指向 |
+| --- | --- |
+| `@` | `src` |
+| `@@` | `src/common` |
+| `~` | `src/types`（游戏数据 TS 类型，如 `~/game`） |
+
+### 1.4 构建多模式
+
+由 `VITE_BUILD_MODE` 控制（`public` / `private` / `staging`），**仅**影响 title、`VITE_PUBLIC_PATH`、是否移除 console。
+
+| 命令 | 模式 | 用途 |
+| --- | --- | --- |
+| `pnpm dev` | private | 本地开发，完整页面 |
+| `pnpm dev:public` | public | 本地预览公开版 |
+| `pnpm build` / `build:public` | public | 产出部署包（`VITE_PUBLIC_PATH=/mewkonomy/`） |
+| `pnpm build:private` | private | 产出私有包 |
+
+> 注意：**非安全隔离**——路由与页面始终全部打包，私有页靠侧边栏权限 + freeze 守卫控制可见性；`checkSecret()` 已恒返回 `true`，私有页无密钥校验。
+
+---
+
+## 二、模块开发规范
+
+### 2.1 页面「四件套」
+
+新增一个独立功能页，按既有模式小批量落地，保持风格统一：
+
+1. **API 聚合**：`src/common/apis/<feature>/index.ts`（如 `manualchemy`、`chainbuilder`、`charmtransform`、`marketvolume`、`enhanposer`）。只做「取数 + 组织 + 调用计算器」，返回纯数据。
+2. **页面**：`src/pages/<feature>/index.vue`（复杂场景可再拆子组件，如 `enhanposer` 的 `enhanposest.vue`）。
+3. **组件**：可复用的检索/展示片段放 `src/pages/<feature>/components/` 或 `src/common/components/`。
+4. **类型**：`src/types/<feature>.ts`（游戏数据相关）或就近在 `src/common/apis/<feature>/` 内定义局部类型。
+
+参考既有模板：`chainbuilder` / `manualchemy` 页结构最典型。
+
+### 2.2 计算器子类
+
+- 计算逻辑放 `src/calculator/*.ts`（**扁平文件，非子目录**），继承 `Calculator` 基类；多阶段用 `WorkflowCalculator` 聚合。
+- 序列化用 `CLASS_MAP`（便于跨模块恢复实例类型）。
+- 新增计算参数（如价格口径、模式开关）时，遵循既有约定：新增字段给默认值以保持旧行为。
+- **价格硬规则**：基类 `ingredientListWithPrice` 固定 `ask`，`productListWithPrice` 固定 `bid`。如 `EnhanceCalculator.productPriceType` 这类「局部覆盖成品计价」的扩展，**不会**影响基类 `productListWithPrice`（多阶段详情弹窗仍走 bid）——改造前需明确边界。
+
+### 2.3 API 聚合
+
+- 各域在 `src/common/apis/<domain>/index.ts` 聚合，页面只 import 该入口。
+- `src/common/apis/utils.ts` 提供通用检索 `handleSearch`（支持 `banEquipment` / `banJewelry` / `banCombat` / `banLife`、`conditions` 组合条件、等级/利润率/风险双头、`steps` 精确步数等）。
+- 检索类 API 使用 `usePagination` 组合式做分页，页码/大小状态可持久化到 localStorage。
+
+### 2.4 Pinia store 与 timestamp 缓存（重点）
+
+- 数据 store（`game` 等）负责拉取 `data.json` / `market.json`，并做 **localStorage 缓存**。
+- **缓存按 `marketData.timestamp`（市场快照时间戳）+ 计算模式分桶**，不是简单列表缓存。新增/变更计算模式参数（如 `noDecompose`、`priceType`、`banCombat`）后，**必须调用对应 `clearXxxCache()` 再重算**，否则读到旧结果。
+- `clearAllCaches()` 在 `fetchData`/`tryFetchData` 中集中调用；`useXxxStoreOutside` 可在组件外全局直连 store（如 `marketvolume` 页响应式依赖 `gameStore.marketData` 自动重算）。
+- 缓存结构变更需做**旧缓存兼容**：`marketvolume-cache.test.ts` 即验证「旧结构（无 `volume`）被判过期清除，新结构（含 `volume`）保留」。
+
+### 2.5 多语言 key
+
+- 文案 key 在 `src/locales/lang/zh-cn.ts`（中文 key 即显示文本）与 `src/locales/lang/en.ts`。
+- **新增/修改文案必须同时维护两个语言文件**（en 新增 key 不能缺）。页面里用 `t(key)` 取文案。
+
+### 2.6 路由注册
+
+- 私有页在 `src/router/routes/private.ts` 注册；公开页在 `public.ts` 注册。
+- `private.ts` 中 `PRIVATE_ROUTES_START` / `PRIVATE_ROUTES_END` 注释供 Vite 插件识别，**新页面加在这两个注释之间**。
+- 路由 meta 需给 `title`（用于侧边栏与面包屑）、`svgIcon`/`elIcon`。
+
+### 2.7 玩家配置与 buff
+
+- 玩家配置集中在 `src/pages/dashboard/components/`（GameInfo / ActionConfig / ActionDetail / ActionPrice / ManualPriceCard / SinglePrice 等），各计算页通过引入这些组件复用全局配置。
+- buff 逻辑在 `src/common/apis/player/index.ts` 的 `initBuffMap` / `getActionLevelBonusOf`：如工匠茶（`/buff_types/action_level`）给对应行动等级 **+5**（计算时 `actionLevel = levelRequirement.level + bonus`）。
+
+---
+
+## 三、测试
+
+- 框架：**vitest + happy-dom**（`pnpm test`）。测试文件在 `tests/` 下。
+- **Mock 策略**：用 `vi` 控制模块（`vi.resetModules()` + 动态 `import` 重新加载 store，见 `marketvolume-cache.test.ts`）；纯计算逻辑（calculator）可直接断言数值；涉及 localStorage 的用例先 `localStorage.clear()`。
+- 既有测试清单（`tests/`）：
+  - `bigset-c-verify`（大批量组合检索校验）
+  - `chainbuilder-verify`（手动产业链计算）
+  - `charmtransform-verify`（护符转化盈利）
+  - `cross-project-tail-verify`（及 `extended`，跨项目尾段校验）
+  - `handle-best-per-item`（每物品最优方案）
+  - `marketvolume-cache` / `marketvolume-verify`（市场监控缓存兼容与结果）
+  - `demo`、`components/Notify`、`utils/validate`
+- **改动涉及缓存/价格/过滤逻辑时，建议补充对应 verify 测试**，与既有命名风格保持一致。
+
+---
+
+## 四、构建与部署
+
+- **类型检查**：所有改动需通过 `npx vue-tsc --noEmit`（构建脚本 `build:private` = `vue-tsc && vite build`）。
+- **本地预览**：`pnpm dev`（private 完整版）或 `pnpm dev:public`（public 版）。
+- **部署脚本**（项目自带，用于 GitHub Pages）：
+  - `deploy.ps1`（全量）：`pnpm build:public` → 提交 main（`--no-verify` 跳过 husky）→ `npx gh-pages -d dist` 推 `gh-pages`。内置网络通道探测与回退（Steam++ 443 / 直连 / 本地代理），并用临时 git 配置覆盖全局失效代理、`sslVerify` 按通道设置、凭据 `wincred`。
+  - `sync-fast.ps1`（免编译增量）：仅当**只改 `public/` 静态文件**时使用，按哈希增量复制到 `dist` 后推 gh-pages；若检测到 `src/`、`vite.config.ts` 等有变更会警告改用全量部署。
+
+---
+
+## 五、代码风格与约束
+
+1. **纯本地自用、不部署、不商用**：默认 `pnpm dev` 使用、改动直接改源码、不提交远程。部署脚本仅供需要发布公开版时使用，**非日常流程**。
+2. **严禁改动 `public/data`**：`data.json`（含硬上限）与 `market.json` 是游戏数据源，任何情况不得修改。
+3. **风格统一**：新页面复用既有 Calculator / Workflow / Transmute 体系、`chainbuilder`/`manualchemy` 页面结构与 `private.ts` 路由模板，**不重造计算逻辑**。
+4. **小批量改动**：新增功能优先「独立页 + 聚合 API + 路由注册 + 多语言追加」的局部改动，避免大文件整体重写。
+5. **旧数据迁移兼容**：新增筛选字段时需兼容旧 localStorage（如 `name` 字符串→数组、`actionLevel→minLevel`、`profitRate→minProfitRate` 的迁移逻辑），缺失字段按 undefined/falsy 处理。
+6. **缓存红线**：引入新计算模式参数必须清对应缓存（见 §2.4）。
+7. **改动后更新文档**：涉及架构/功能改动时，同步维护本文件、`MILKONOMY_PROJECT_CONTEXT.md` 与 `REUSABLE_ABSTRACTION_MODULES.md`。
+
+---
+
+*（本文基于当前源码整理，随功能更新请同步维护。）*
+*（内容由AI生成，仅供参考）*

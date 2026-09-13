@@ -19,7 +19,7 @@ import ActionDetail from "../dashboard/components/ActionDetail.vue"
 import ActionPrice from "../dashboard/components/ActionPrice.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 import ManualPriceCard from "../dashboard/components/ManualPriceCard.vue"
-import PriceStatusSelect from "../dashboard/components/PriceStatusSelect.vue"
+import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 
 // #region 查
 const { paginationData: paginationDataLD, handleCurrentChange: handleCurrentChangeLD, handleSizeChange: handleSizeChangeLD } = usePagination({}, "dashboard-leaderboard-pagination")
@@ -32,7 +32,8 @@ const ldSearchData = useMemory("dashboard-manualchemy-search-data", {
   maxProfitRate: undefined,
   conditions: [{ steps: undefined, project: undefined }],
   banEquipment: true,
-  compare: false
+  compare: false,
+  showAllVariants: false
 })
 // 兼容旧版字符串 name，迁移为数组（多物品选择）
 if (typeof ldSearchData.value.name === "string") {
@@ -202,6 +203,11 @@ const onPriceStatusChange = usePriceStatus("manualchemy-price-status")
                   {{ t('比较模式') }}
                 </el-checkbox>
               </el-form-item>
+              <el-form-item>
+                <el-checkbox v-model="ldSearchData.showAllVariants" @change="handleSearchLD">
+                  {{ t('显示全部多样产业链') }}
+                </el-checkbox>
+              </el-form-item>
             </el-form>
           </template>
           <template #default>
@@ -252,6 +258,19 @@ const onPriceStatusChange = usePriceStatus("manualchemy-price-status")
               <el-table-column prop="result.profitRate" :label="t('利润率')" min-width="120" align="center" sortable="custom" :sort-orders="['descending', null]">
                 <template #default="{ row }">
                   {{ row.result.profitRateFormat }}
+                </template>
+              </el-table-column>
+
+              <el-table-column :label="t('自产比例')" align="center" min-width="100">
+                <template #default="{ row }">
+                  <el-tooltip
+                    v-if="row.result.selfProduceRatioFormat"
+                    placement="top"
+                    :content="t('自产比例=自产原料成本÷(自产+外购)成本；自产含大全套自产成本估值与0成本采集料，随市价动态变化。无自产/外购原料时显示 -')"
+                  >
+                    <el-text type="warning">{{ row.result.selfProduceRatioFormat }}</el-text>
+                  </el-tooltip>
+                  <span v-else>-</span>
                 </template>
               </el-table-column>
 

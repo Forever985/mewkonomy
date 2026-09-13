@@ -16,6 +16,13 @@ const _personalBuffTypeDetailMapCache: Record<string, PersonalBuffDetail> = {}
 
 let _processingProductMap: Record<string, string> = {}
 let _priceCache = {} as Record<string, MarketItemPrice>
+// 大全套价格（模式C）：市场无价物品用自产成本兜底
+const BIG_SET_PROJECTS = ["cheesesmithing", "crafting", "tailoring", "cooking", "brewing"] as const
+const GATHER_ACTION_PREFIXES = ["/actions/milking/", "/actions/foraging/", "/actions/woodcutting/"]
+let _bigSetGatherableSet: Set<string> | null = null
+let _bigSetPriceCache = {} as Record<string, number>
+// 炼金自产反查表（模式C）：itemHrid → 可由哪些物品经转化/分解产出（含数量/掉率/基础成功率）
+let _bigSetAlchemySourceMap: Map<string, { xHrid: string; count: number; rate: number; successRate: number }[]> = new Map()
 let currentBuyStatus = useGameStoreOutside().buyStatus
 let currentSellStatus = useGameStoreOutside().sellStatus
 watch(() => useGameStoreOutside().gameData, () => {
@@ -24,12 +31,14 @@ watch(() => useGameStoreOutside().gameData, () => {
   _actionDetailMapCache = {}
   _priceCache = {}
   initProcessingProductMap()
+  initBigSetCache()
 }, { immediate: true })
 watch(() => useGameStoreOutside().marketData, () => {
   console.log("raw marketData changed")
   const data = Object.freeze(structuredClone(toRaw(useGameStoreOutside().marketData)))
   game.marketData = data
   _priceCache = {}
+  _bigSetPriceCache = {}
 }, { immediate: true })
 
 watch([() => useGameStoreOutside().buyStatus, () => useGameStoreOutside().sellStatus], () => {
@@ -161,24 +170,35 @@ export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStat
       ask: priceItem?.ask || -1,
       bid: priceItem?.bid || -1
     }
-    // 该物品在市场完全没有交易记录时（如披风等稀有掉落装备），用卖商店价(sellPrice)兜底（仅方案B）
-    if (isFallbackEnabled() && !marketItem && price.ask === -1 && price.bid === -1 && item.sellPrice != null) {
-      price.ask = item.sellPrice
-      price.bid = item.sellPrice
+    // 该物品在市场完全没有交易记录时（如披风等稀有掉落装备）兜底：
+    // - 卖出端(bid)：卖商店价(sellPrice)真实可达，始终保底（B/C 模式）
+    // - 买入端(ask)：模式C 用大全套（自产，含炼金折算）成本替代；模式B 保持 -1（买不到不虚报）
+    if (isFallbackEnabled() && !marketItem && price.ask === -1 && price.bid === -1) {
+      if ((item.sellPrice ?? 0) > 0) {
+        price.bid = item.sellPrice
+      }
+      if (useGameStoreOutside().priceFallbackMode === "C") {
+        const bigSetPrice = getBigSetPriceOf(item.hrid)
+        if (bigSetPrice >= 0) {
+          price.ask = bigSetPrice
+        }
+      }
     }
     return convertPriceOfStatus(price, buyStatus, sellStatus)
   }
 
-  if (_priceCache[hrid]) {
-    return _priceCache[hrid]
+  // 缓存 key 含价格模式与买卖状态：切换模式/状态后即使 watch 异步清缓存，也不会命中旧值
+  const cacheKey = `${hrid}|${useGameStoreOutside().priceFallbackMode}|${buyStatus}|${sellStatus}`
+  if (_priceCache[cacheKey]) {
+    return _priceCache[cacheKey]
   }
   if (SPECIAL_PRICE[hrid]) {
-    _priceCache[hrid] = SPECIAL_PRICE[hrid]()
-    return _priceCache[hrid]
+    _priceCache[cacheKey] = SPECIAL_PRICE[hrid]()
+    return _priceCache[cacheKey]
   }
   if (isLoot(hrid) && hrid !== "/items/bag_of_10_cowbells") {
-    _priceCache[hrid] = getLootPrice(hrid)
-    return _priceCache[hrid]
+    _priceCache[cacheKey] = getLootPrice(hrid)
+    return _priceCache[cacheKey]
   }
   const shopItem = getGameDataApi().shopItemDetailMap[`/shop_items/${item.hrid.split("/").pop()}`]
   const price = (getMarketDataApi().marketData[item.hrid]?.[0]) || { ask: -1, bid: -1 }
@@ -186,61 +206,292 @@ export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStat
   if (shopItem && shopItem.costs[0].itemHrid === COIN_HRID) {
     price.ask = price.ask === -1 ? shopItem.costs[0].count : Math.min(price.ask, shopItem.costs[0].count)
   }
-  // 市场无买卖价（如披风/稀有掉落装备无交易记录）时，用卖商店价(sellPrice)兜底，保证利润网可查可算（仅方案B）
-  if (isFallbackEnabled() && price.ask === -1 && price.bid === -1 && item.sellPrice != null) {
-    price.ask = item.sellPrice
-    price.bid = item.sellPrice
+  // 市场无买卖价（如披风/稀有掉落装备无交易记录）时兜底：
+  // - 卖出端(bid)：卖商店价(sellPrice)真实可达，始终保底（B/C 模式）
+  // - 买入端(ask)：模式C 用大全套（自产）成本替代；模式B 保持 -1（买不到不虚报）
+  if (isFallbackEnabled() && price.ask === -1 && price.bid === -1) {
+    if ((item.sellPrice ?? 0) > 0) {
+      price.bid = item.sellPrice
+    }
+    if (useGameStoreOutside().priceFallbackMode === "C") {
+      const bigSetPrice = getBigSetPriceOf(item.hrid)
+      if (bigSetPrice >= 0) {
+        price.ask = bigSetPrice
+      }
+    }
   }
-  _priceCache[hrid] = convertPriceOfStatus(price, buyStatus, sellStatus)
+  _priceCache[cacheKey] = convertPriceOfStatus(price, buyStatus, sellStatus)
 
-  return _priceCache[hrid]
+  return _priceCache[cacheKey]
 }
 
 function isFallbackEnabled() {
-  return useGameStoreOutside().priceFallbackMode === "B"
+  return useGameStoreOutside().priceFallbackMode !== "A"
 }
 
-/** 该物品是否正在被"方案B"兜底（市场无记录、用卖商店价填充）。方案A下恒为 false。 */
-export function isPriceFallbackOf(hrid: string, level: number = 0): boolean {
-  if (!isFallbackEnabled()) {
-    return false
+/**
+ * 价格来源（运行时实时判定，随 marketData / 兜底模式动态变化，不写死任何物品）：
+ * - market：市场有真实成交记录（含开包折算、特殊定价）
+ * - shop：市场无记录，价格来自商店（卖出端 bid 用 sellPrice 兜底 或 买入端商店金币购买价）
+ * - selfcraft：仅买入端(ask)：市场无记录，被大全套（自产）成本兜底（模式C）
+ * - none：市场无记录、无商店价、不可自产 → -1（无价）
+ */
+export type PriceSource = "market" | "shop" | "selfcraft" | "none"
+
+/** 该物品当前价格的真实来源（ask=买入端 / bid=卖出端）；用于 UI 标注「非真实市场价」的场景，杜绝把兜底价误当市价。 */
+export function getPriceSourceOf(hrid: string, level: number = 0, type: "ask" | "bid" = "ask"): PriceSource {
+  if (!hrid) {
+    return "none"
   }
   const item = getItemDetailOf(hrid)
-  if (item.sellPrice == null) {
-    return false
-  }
   if (level) {
-    const marketItem = game.marketData?.marketData[hrid]
-    const priceItem = marketItem ? marketItem[level] : undefined
-    const ask = priceItem?.ask ?? -1
-    const bid = priceItem?.bid ?? -1
-    return !marketItem && ask === -1 && bid === -1
+    const priceItem = game.marketData?.marketData[hrid]?.[level]
+    if (priceItem && (type === "bid" ? priceItem.bid !== -1 : priceItem.ask !== -1)) {
+      return "market"
+    }
+    // 市场无该等级记录：卖出端用 sellPrice 兜底（B/C）；买入端模式C 用大全套（含炼金折算）兜底
+    if (isFallbackEnabled()) {
+      if (type === "ask" && useGameStoreOutside().priceFallbackMode === "C" && getBigSetPriceOf(item.hrid) >= 0) {
+        return "selfcraft"
+      }
+      if ((item.sellPrice ?? 0) > 0) {
+        return "shop"
+      }
+    }
+    return "none"
   }
   if (SPECIAL_PRICE[hrid]) {
-    return false
+    return "market"
   }
   if (isLoot(hrid) && hrid !== "/items/bag_of_10_cowbells") {
-    return false
+    return "market"
   }
   const marketPrice = getMarketDataApi().marketData[item.hrid]?.[0]
   const ask = marketPrice?.ask ?? -1
   const bid = marketPrice?.bid ?? -1
-  return ask === -1 && bid === -1
+  if (type === "bid") {
+    if (bid !== -1) {
+      return "market"
+    }
+    // 卖出端兜底：仅 sellPrice（B/C），无自产成本兜底
+    return isFallbackEnabled() && (item.sellPrice ?? 0) > 0 ? "shop" : "none"
+  }
+  if (ask !== -1 || bid !== -1) {
+    // 商店金币价更便宜且 getPriceOf 实际取用商店价时，按商店价标注
+    const shopCost = shopCoinCostOf(hrid)
+    if (ask !== -1 && shopCost >= 0 && shopCost < ask) {
+      return "shop"
+    }
+    return "market"
+  }
+  // 市场无记录：走兜底
+  if (isFallbackEnabled()) {
+    if (useGameStoreOutside().priceFallbackMode === "C" && getBigSetPriceOf(item.hrid) >= 0) {
+      return "selfcraft"
+    }
+    if ((item.sellPrice ?? 0) > 0) {
+      return "shop"
+    }
+  }
+  return "none"
 }
+
+/** 该物品当前是否正被兜底（价格来源非市场价）。方案A下恒为 false。 */
+export function isPriceFallbackOf(hrid: string, level: number = 0): boolean {
+  if (!isFallbackEnabled()) {
+    return false
+  }
+  const source = getPriceSourceOf(hrid, level)
+  return source === "shop" || source === "selfcraft"
+}
+
+// #region 大全套价格（模式C：市场无价物品用自产成本兜底）
+function initBigSetCache() {
+  _bigSetGatherableSet = new Set<string>()
+  _bigSetPriceCache = {}
+  _bigSetAlchemySourceMap = new Map()
+  const actionMap = getGameDataApi().actionDetailMap
+  Object.values(actionMap).forEach((action) => {
+    if (GATHER_ACTION_PREFIXES.some(prefix => action.hrid.startsWith(prefix)) && action.dropTable) {
+      action.dropTable.forEach((drop) => {
+        _bigSetGatherableSet!.add(drop.itemHrid)
+      })
+    }
+  })
+  // 构建炼金自产反查表：转化（transmuteDropTable）与分解（decomposeItems）产出物 → 来源物品
+  // 仅登记产出物 != 消耗物的条目（自身循环无兜底意义）；成功率取基础值（不含 buff/催化加成，偏保守）
+  Object.values(getGameDataApi().itemDetailMap).forEach((item) => {
+    const alch = item.alchemyDetail
+    if (!alch) {
+      return
+    }
+    if (alch.transmuteDropTable) {
+      const successRate = Math.min(1, alch.transmuteSuccessRate ?? 1)
+      alch.transmuteDropTable.forEach((drop: { itemHrid: string; minCount: number; maxCount: number; dropRate?: number }) => {
+        if (drop.itemHrid === item.hrid) {
+          return
+        }
+        const count = ((drop.maxCount ?? 1) - (drop.minCount ?? 0)) * (alch.bulkMultiplier ?? 1)
+        const rate = drop.dropRate ?? 1
+        if (count <= 0 || rate <= 0) {
+          return
+        }
+        const arr = _bigSetAlchemySourceMap.get(drop.itemHrid) || []
+        arr.push({ xHrid: item.hrid, count, rate, successRate })
+        _bigSetAlchemySourceMap.set(drop.itemHrid, arr)
+      })
+    }
+    if (alch.decomposeItems) {
+      alch.decomposeItems.forEach((drop: { itemHrid: string; count: number }) => {
+        if (drop.itemHrid === item.hrid) {
+          return
+        }
+        const count = (drop.count ?? 1) * (alch.bulkMultiplier ?? 1)
+        if (count <= 0) {
+          return
+        }
+        const arr = _bigSetAlchemySourceMap.get(drop.itemHrid) || []
+        arr.push({ xHrid: item.hrid, count, rate: 1, successRate: 0.6 })
+        _bigSetAlchemySourceMap.set(drop.itemHrid, arr)
+      })
+    }
+  })
+}
+
+/** 裸市场买入价（不走任何兜底），用于大全套递归中的原料外购判定 */
+function rawMarketAskOf(hrid: string) {
+  return getMarketDataApi().marketData[hrid]?.[0]?.ask ?? -1
+}
+
+/** 商店金币购买价；非金币购买或不可买返回 -1 */
+function shopCoinCostOf(hrid: string) {
+  const shopItem = getGameDataApi().shopItemDetailMap[`/shop_items/${hrid.split("/").pop()}`]
+  if (shopItem && shopItem.costs[0].itemHrid === COIN_HRID) {
+    return shopItem.costs[0].count
+  }
+  return -1
+}
+
+/**
+ * 大全套（自产）价格：市场买不到时的买入端成本估值。
+ * - 可采集 → 0（自己采，无成本）
+ * - 可制造 → 各制造动作原料成本之和的最小值；原料按「可采集→0 / 市场有价→外购价 / 商店可买→商店价 / 否则递归自产」计算
+ * - 不可采集也不可制造 → 商店可买则取商店价，否则 -1（纯掉落，自产不可行）
+ * 结果带 memo 缓存；visited 防循环依赖。
+ */
+function getBigSetPriceOf(hrid: string, visited: Set<string> = new Set()): number {
+  if (Object.prototype.hasOwnProperty.call(_bigSetPriceCache, hrid)) {
+    return _bigSetPriceCache[hrid]
+  }
+  if (_bigSetGatherableSet!.has(hrid)) {
+    _bigSetPriceCache[hrid] = 0
+    return 0
+  }
+  if (visited.has(hrid)) {
+    return Infinity
+  }
+  const key = hrid.split("/").pop()!
+  let best = Infinity
+  for (const project of BIG_SET_PROJECTS) {
+    const action = getGameDataApi().actionDetailMap[`/actions/${project}/${key}`]
+    if (!action) {
+      continue
+    }
+    visited.add(hrid)
+    let cost = 0
+    let ok = true
+    for (const ing of action.inputItems) {
+      if (ing.itemHrid === COIN_HRID) {
+        cost += ing.count
+        continue
+      }
+      const rawAsk = rawMarketAskOf(ing.itemHrid)
+      if (rawAsk > 0) {
+        cost += rawAsk * ing.count
+        continue
+      }
+      const shopCost = shopCoinCostOf(ing.itemHrid)
+      if (shopCost >= 0) {
+        cost += shopCost * ing.count
+        continue
+      }
+      const sub = getBigSetPriceOf(ing.itemHrid, visited)
+      if (sub < 0 || sub === Infinity) {
+        ok = false
+        break
+      }
+      cost += sub * ing.count
+    }
+    visited.delete(hrid)
+    if (ok) {
+      best = Math.min(best, cost)
+    }
+  }
+  if (best !== Infinity) {
+    _bigSetPriceCache[hrid] = best
+    return _bigSetPriceCache[hrid]
+  }
+  // 不可采集、不可制造（或原料链断裂）时，尝试炼金自产折算（模式C）
+  const alchBest = getBigSetAlchemyPriceOf(hrid, visited)
+  if (alchBest >= 0) {
+    _bigSetPriceCache[hrid] = alchBest
+    return _bigSetPriceCache[hrid]
+  }
+  const shopCost = shopCoinCostOf(hrid)
+  _bigSetPriceCache[hrid] = shopCost >= 0 ? shopCost : -1
+  return _bigSetPriceCache[hrid]
+}
+
+/**
+ * 炼金自产折算：由来源物品 X 经转化/分解产出该物时的原料成本估值。
+ * 成本 = X 的大全套成本 / 期望产出（count × rate × 成功率）；多个来源取最小。
+ * visited 与 getBigSetPriceOf 共享防环；缓存语义一致。
+ */
+function getBigSetAlchemyPriceOf(hrid: string, visited: Set<string>): number {
+  const sources = _bigSetAlchemySourceMap.get(hrid)
+  if (!sources?.length || visited.has(hrid)) {
+    return -1
+  }
+  visited.add(hrid)
+  let best = Infinity
+  for (const src of sources) {
+    const xPrice = getBigSetPriceOf(src.xHrid, visited)
+    if (xPrice < 0 || xPrice === Infinity) {
+      continue
+    }
+    const expected = src.count * src.rate * src.successRate
+    if (expected <= 0) {
+      continue
+    }
+    best = Math.min(best, xPrice / expected)
+  }
+  visited.delete(hrid)
+  return best === Infinity ? -1 : best
+}
+// #endregion
 
 function isLoot(hrid: string) {
   return getItemDetailOf(hrid).categoryHrid === "/item_categories/loot"
 }
 
+const _lootVisiting = new Set<string>()
+
 function getLootPrice(hrid: string): MarketItemPrice {
+  if (_lootVisiting.has(hrid)) {
+    // 开包链成环（如 purples_gift 掉落表包含自身）时不再贡献，避免无限递归爆栈
+    return { ask: 0, bid: 0 }
+  }
   const drop = getGameDataApi().openableLootDropMap[hrid]
-  return drop.reduce((acc, cur) => {
+  _lootVisiting.add(hrid)
+  const result = drop.reduce((acc, cur) => {
     const count = (cur.maxCount + cur.minCount) / 2
     const item = getPriceOf(cur.itemHrid)
     acc.ask += item.ask * count * cur.dropRate
     acc.bid += item.bid * count * cur.dropRate
     return acc
   }, { ask: 0, bid: 0 })
+  _lootVisiting.delete(hrid)
+  return result
 }
 
 export function getItemDetailOf(hrid: string) {

@@ -1,10 +1,13 @@
 import type { Action, ActionDetail, ItemDetail } from "~/game"
 import * as Format from "@@/utils/format"
-import { getItemDetailOf } from "@/common/apis/game"
+import { getItemDetailOf, getPriceSourceOf, type PriceSource } from "@/common/apis/game"
 import { getBuffOf, getPlayerLevelOf } from "@/common/apis/player"
 import { getManualPriceOf } from "@/common/apis/price"
 import { getTrans } from "@/locales"
 import { COIN_HRID } from "@/pinia/stores/game"
+
+/** 价格来源附加「内部流转（工作流内互相抵消）」「自定义（用户手动定价）」两种展示态 */
+export type PriceSourceWithState = PriceSource | "internal" | "manual"
 
 export interface CalculatorConfig {
   hrid: string
@@ -88,7 +91,16 @@ export default abstract class Calculator {
         this.hasManualPrice = true
       }
       const price = priceConfig?.immutable ? priceConfig.price! : hasManualPrice ? manualPrice! : item.marketPrice
-      result.push(Object.assign(item, { price }))
+      // 价格来源：内部流转 > 自定义 > 运行时市场来源（市场/商店/自产/无价），随市价动态
+      let priceSource: PriceSourceWithState = "market"
+      if (priceConfig?.immutable) {
+        priceSource = "internal"
+      } else if (hasManualPrice) {
+        priceSource = "manual"
+      } else {
+        priceSource = getPriceSourceOf(item.hrid, item.level || 0, type)
+      }
+      result.push(Object.assign(item, { price, priceSource }))
     }
     return result
   }
@@ -202,7 +214,7 @@ export default abstract class Calculator {
       // 不逃逸时，等价于逃逸到初始装备
       return item.countPH! * item.price
     }
-    return item.countPH! * escape.price * 0.98
+    return item.countPH! * escape.price * 0.95
   }
 
   /**
@@ -211,10 +223,10 @@ export default abstract class Calculator {
    */
   get income(): number {
     const income = this.productListWithPrice.reduce((acc, product) => {
-      const coinRate = product.hrid === COIN_HRID ? 0.98 : 1
+      const coinRate = product.hrid === COIN_HRID ? 0.95 : 1
       return acc + product.count * (product.rate || 1) * product.price / coinRate
     }, 0)
-    return income * 0.98
+    return income * 0.95
   }
 
   _actionsPH?: number
@@ -253,6 +265,44 @@ export default abstract class Calculator {
     return true
   }
 
+  /**
+   * 自产 / 外购成本拆分（运行时动态，随市场价与兜底模式变化）。
+   * - 自产：原料价格来源为「大全套自产成本」(selfcraft)，含 0 成本采集料
+   * - 外购：原料价格来源为「市场 / 商店」(market / shop)
+   * - 不计入：内部流转(internal)、自定义(manual)、金币(coin)、无价(none/-1)
+   * 自产比例 = 自产成本 / (自产成本 + 外购成本)；纯自产 0 成本时按 1（全自产）计，无有效成本时 null。
+   */
+  get selfProduceStat(): { selfCost: number; buyCost: number; selfCount: number; buyCount: number; ratio: number | null } {
+    let selfCost = 0
+    let buyCost = 0
+    let selfCount = 0
+    let buyCount = 0
+    for (const ing of this.ingredientListWithPrice) {
+      if (ing.hrid === COIN_HRID || ing.price <= 0) {
+        continue
+      }
+      const source = ing.priceSource || getPriceSourceOf(ing.hrid, ing.level || 0)
+      if (source === "selfcraft") {
+        selfCost += ing.count * ing.price
+        selfCount += 1
+      } else if (source === "market" || source === "shop") {
+        buyCost += ing.count * ing.price
+        buyCount += 1
+      }
+    }
+    const total = selfCost + buyCost
+    let ratio: number | null
+    if (total > 0) {
+      ratio = selfCost / total
+    } else if (selfCount > 0) {
+      // 全部为 0 成本自产采集料：纯自产，无外购
+      ratio = 1
+    } else {
+      ratio = null
+    }
+    return { selfCost, buyCost, selfCount, buyCount, ratio }
+  }
+
   get actionItem(): ActionDetail | undefined {
     return undefined
   }
@@ -287,6 +337,9 @@ export default abstract class Calculator {
 
     const risk = cost4EnhancePH / profitPH
 
+    // 自产 / 外购成本拆分（动态）
+    const sp = this.selfProduceStat
+
     this.result = {
       hrid: this.item.hrid,
       name: getTrans(this.item.name),
@@ -299,6 +352,12 @@ export default abstract class Calculator {
       incomePH,
       profitPH,
       profitRate,
+      selfProduceCost: sp.selfCost,
+      buyCost: sp.buyCost,
+      selfProduceRatio: sp.ratio,
+      selfProduceRatioFormat: sp.ratio === null ? "" : Format.percent(sp.ratio),
+      selfProduceCostPH: sp.selfCost * this.consumePH,
+      buyCostPH: sp.buyCost * this.consumePH,
       costPHFormat: Format.money(costPH),
       cost4MatPHFormat: Format.money(cost4MatPH),
       incomePHFormat: Format.money(incomePH),
@@ -375,6 +434,8 @@ export interface Ingredient {
   marketTime?: number
   /** 等级 */
   level?: number
+  /** 价格来源（运行时注入，用于 UI 标注非真实市价） */
+  priceSource?: PriceSourceWithState
 }
 export interface IngredientWithPrice extends Ingredient {
   /** 原料产物抵消后的数量 */

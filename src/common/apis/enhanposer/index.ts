@@ -28,24 +28,7 @@ export async function getEnhanposerDataApi(params: any) {
   }
 
   console.log("params", params)
-  profitList = profitList.filter(item => params.maxLevel ? (item.calculator as DecomposeCalculator).enhanceLevel <= params.maxLevel : true)
-  profitList = profitList.filter(item => params.minLevel ? (item.calculator as DecomposeCalculator).enhanceLevel >= params.minLevel : true)
-
-  // 多元组合条件：目标强化等级并行（OR），命中任一等级即保留
-  // 强化分解方案 project 形如「强化分解+N」，无步数语义，故 conditions.steps 映射为目标强化等级
-  const conditions = Array.isArray(params.conditions)
-    ? params.conditions.filter((c: any) => c && c.steps != null && c.steps !== "")
-    : []
-  if (conditions.length) {
-    profitList = profitList.filter(item => {
-      const enhanceLevel = (item.calculator as DecomposeCalculator).enhanceLevel
-      return conditions.some((cond: any) => enhanceLevel === cond.steps)
-    })
-  }
-  // 剔除 conditions 后再走通用 handleSearch，避免其「步数」正则对本页数据误伤
-  const searchParams = { ...params }
-  delete searchParams.conditions
-  return handlePage(handleSort(handleSearch(profitList, searchParams), searchParams), params)
+  return handlePage(handleSort(handleSearch(profitList, params), params), params)
 }
 
 function calcEnhanceProfit(options: { noDecompose?: boolean; materialPriceType?: "ask" | "bid"; productPriceType?: "ask" | "bid" } = {}) {

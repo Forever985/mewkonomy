@@ -72,7 +72,10 @@ export class WorkflowCalculator extends Calculator {
       }
 
       if (i > 0) {
-        config.ingredientPriceConfigList = [{ immutable: true, price: 0, hrid: config.hrid }]
+        // 综利用尾等跨项目拼接时可指定对齐原料（alignHrid），默认对齐第0个原料
+        config.ingredientPriceConfigList = config.alignHrid
+          ? []
+          : [{ immutable: true, price: 0, hrid: config.hrid }]
       }
       // 适配继承强化
       if (i < configs.length - 1 && !config.productPriceConfigList) {
@@ -82,13 +85,18 @@ export class WorkflowCalculator extends Calculator {
 
       let modified = false
       if (cal.available && i > 0) {
-        // 如果cal的第k个原料和第0个原料相同，则第k个原料的价格也为0
-        const firstIng = cal.ingredientList[0]
-        for (const k in cal.ingredientList) {
-          const ing = cal.ingredientList[k]
-          if (ing.hrid === firstIng.hrid && (ing.level || 0) === (firstIng.level || 0)) {
-            config.ingredientPriceConfigList![k] = { immutable: true, price: 0, hrid: config.hrid }
-            modified = true
+        // 对齐目标原料：优先 alignHrid，否则默认第0个原料
+        const firstIng = config.alignHrid
+          ? cal.ingredientList.find(ing => ing.hrid === config.alignHrid)
+          : cal.ingredientList[0]
+        if (firstIng) {
+          // 如果cal的第k个原料和目标原料相同，则第k个原料的价格也为0
+          for (const k in cal.ingredientList) {
+            const ing = cal.ingredientList[k]
+            if (ing.hrid === firstIng.hrid && (ing.level || 0) === (firstIng.level || 0)) {
+              config.ingredientPriceConfigList![k] = { immutable: true, price: 0, hrid: config.hrid }
+              modified = true
+            }
           }
         }
 
@@ -271,8 +279,9 @@ export class WorkflowCalculator extends Calculator {
         singleMultiplier.push(multi)
         continue
       }
-      // todo 未来 target 可能不固定
-      const target = cal.hrid
+      // 炼金头等拼接时，可通过 config.alignProductHrid 指定"本阶段流向下一阶段的产物"；
+      // 默认仍按 hrid（制造/采集动作的 hrid 即其主产物），todo 未来 target 可能不固定
+      const target = (cal.config as any)?.alignProductHrid || cal.hrid
       const targetProduct = cal.productList.find(p => p.hrid === target)!
       const targetOutput = targetProduct.count * (targetProduct.rate || 1) * resultList[i].gainPH
       // 下一阶段的原料有可能同时出现多次，例如护符
@@ -335,6 +344,9 @@ export class WorkflowCalculator extends Calculator {
 
     const risk = cost4EnhancePH / profitPH
 
+    // 自产 / 外购成本拆分（基于整条链净原料，动态）
+    const sp = this.selfProduceStat
+
     this.result = {
       workMultiplier: this.workMultiplier,
       hrid: item.hrid,
@@ -347,6 +359,13 @@ export class WorkflowCalculator extends Calculator {
       incomePH,
       profitPH,
       profitRate,
+      selfProduceCost: sp.selfCost,
+      buyCost: sp.buyCost,
+      selfProduceRatio: sp.ratio,
+      selfProduceRatioFormat: sp.ratio === null ? "" : Format.percent(sp.ratio),
+      // 工作流时间尺度不统一，不提供 /h 拆分
+      selfProduceCostPH: null,
+      buyCostPH: null,
       costPHFormat: Format.money(costPH),
       incomePHFormat: Format.money(incomePH),
       profitPHFormat: Format.money(profitPH),

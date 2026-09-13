@@ -22,7 +22,7 @@ import ActionDetail from "./components/ActionDetail.vue"
 import ActionPrice from "./components/ActionPrice.vue"
 import GameInfo from "./components/GameInfo.vue"
 import ManualPriceCard from "./components/ManualPriceCard.vue"
-import PriceStatusSelect from "./components/PriceStatusSelect.vue"
+import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 
 // #region 查
 const favoriteStore = useFavoriteStore()
@@ -38,7 +38,9 @@ const ldSearchData = useMemory("dashboard-leaderboard-search-data", {
   maxProfitRate: undefined,
   minRisk: undefined,
   maxRisk: undefined,
-  conditions: [{ steps: undefined, project: undefined }],
+  conditions: [{ steps: undefined, project: undefined, minLevel: undefined, maxLevel: undefined }],
+  // 反向排除：命中任一组合（产品×生产模式）即剔除；name 缺省=排除该生产全部，project 缺省=排除该产品全部
+  excludes: [{ name: undefined, project: undefined }],
   banEquipment: true,
   banJewelry: false,
   compare: false
@@ -55,25 +57,51 @@ if (!Array.isArray(ldSearchData.value.conditions)) {
     project: old.project || undefined
   }]
 }
+// 旧数据迁移：排除条件缺省补默认行
+if (!Array.isArray(ldSearchData.value.excludes)) {
+  ldSearchData.value.excludes = [{ name: undefined, project: undefined }]
+}
 if (ldSearchData.value.actionLevel != null && ldSearchData.value.minLevel == null) {
   ldSearchData.value.minLevel = ldSearchData.value.actionLevel
 }
 if (ldSearchData.value.profitRate != null && ldSearchData.value.minProfitRate == null) {
   ldSearchData.value.minProfitRate = ldSearchData.value.profitRate
 }
+// 旧数据迁移：要求等级 minLevel/maxLevel 移入组合条件 conditions[0]（多行条件各补等级字段）
+if (Array.isArray(ldSearchData.value.conditions)) {
+  const cond0 = ldSearchData.value.conditions[0] || {}
+  if (cond0.minLevel == null && ldSearchData.value.minLevel != null) {
+    cond0.minLevel = ldSearchData.value.minLevel
+  }
+  if (cond0.maxLevel == null && ldSearchData.value.maxLevel != null) {
+    cond0.maxLevel = ldSearchData.value.maxLevel
+  }
+  ldSearchData.value.conditions.forEach((c: any) => {
+    if (c.minLevel == null) c.minLevel = undefined
+    if (c.maxLevel == null) c.maxLevel = undefined
+  })
+}
 // 清理旧字段，避免残留参数干扰组合条件过滤
 delete ldSearchData.value.project
 delete ldSearchData.value.steps
 delete ldSearchData.value.actionLevel
 delete ldSearchData.value.profitRate
+delete ldSearchData.value.minLevel
+delete ldSearchData.value.maxLevel
 
 /** 可检索的动作列表（专业） */
 const projectOptions = ["挤奶", "采摘", "伐木", "锻造", "制造", "裁缝", "烹饪", "冲泡", "点金", "分解", "转化"]
 function addCondition() {
-  ldSearchData.value.conditions.push({ steps: undefined, project: undefined })
+  ldSearchData.value.conditions.push({ steps: undefined, project: undefined, minLevel: undefined, maxLevel: undefined })
 }
 function removeCondition(index: number) {
   ldSearchData.value.conditions.splice(index, 1)
+}
+function addExclude() {
+  ldSearchData.value.excludes.push({ name: undefined, project: undefined })
+}
+function removeExclude(index: number) {
+  ldSearchData.value.excludes.splice(index, 1)
 }
 
 const loadingLD = ref(false)
@@ -262,17 +290,35 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
                     <el-select v-model="cond.project" :placeholder="t('动作不限')" clearable style="width:110px" @change="handleSearchLD">
                       <el-option v-for="p in projectOptions" :key="p" :label="t(p)" :value="t(p)" />
                     </el-select>
+                    <el-input-number v-model="cond.minLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="0" />
+                    <span>~</span>
+                    <el-input-number v-model="cond.maxLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="120" />
                     <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
                   </div>
                   <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
                 </div>
               </el-form-item>
 
-              <el-form-item :label="t('要求等级')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number v-model="ldSearchData.minLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="0" />
-                  <span>~</span>
-                  <el-input-number v-model="ldSearchData.maxLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="120" />
+              <el-form-item :label="t('排除')" style="width:100%; margin-right:0;">
+                <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
+                  <div v-for="(ex, i) in ldSearchData.excludes" :key="i" style="display:flex; align-items:center; gap:8px;">
+                    <el-select
+                      v-model="ex.name"
+                      filterable
+                      allow-create
+                      default-first-option
+                      :reserve-keyword="false"
+                      :placeholder="t('排除的产品名')"
+                      clearable
+                      style="width:220px"
+                      @change="handleSearchLD"
+                    />
+                    <el-select v-model="ex.project" :placeholder="t('排除的生产动作，留空=该产品全部')" clearable style="width:200px" @change="handleSearchLD">
+                      <el-option v-for="p in projectOptions" :key="p" :label="t(p)" :value="t(p)" />
+                    </el-select>
+                    <el-button v-if="ldSearchData.excludes.length > 1" type="danger" :icon="Delete" link @click="removeExclude(i)" />
+                  </div>
+                  <el-button size="small" :icon="Plus" @click="addExclude">{{ t('添加排除') }}</el-button>
                 </div>
               </el-form-item>
 
@@ -367,6 +413,19 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
               <el-table-column prop="result.profitRate" :label="t('利润率')" min-width="120" align="center" sortable="custom" :sort-orders="['descending', null]">
                 <template #default="{ row }">
                   {{ row.result.profitRateFormat }}
+                </template>
+              </el-table-column>
+
+              <el-table-column :label="t('自产比例')" align="center" min-width="100">
+                <template #default="{ row }">
+                  <el-tooltip
+                    v-if="row.result.selfProduceRatioFormat"
+                    placement="top"
+                    :content="t('自产比例=自产原料成本÷(自产+外购)成本；自产含大全套自产成本估值与0成本采集料，随市价动态变化。无自产/外购原料时显示 -')"
+                  >
+                    <el-text type="warning">{{ row.result.selfProduceRatioFormat }}</el-text>
+                  </el-tooltip>
+                  <span v-else>-</span>
                 </template>
               </el-table-column>
 

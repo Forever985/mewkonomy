@@ -52,10 +52,10 @@ export function handleSearch(profitList: Calculator[], params: any) {
   // 单值动作筛选（兼容旧调用方：jungle/enhanposer 等）
   params.project && (profitList = profitList.filter(cal => cal.project.match(params.project!)))
 
-  // 组合条件并行筛选：多行 (步数, 动作) 组合，命中任一组合即保留
-  // 如「5步锻造」+「3步缝纫」+「转化」可同时检索
+  // 组合条件并行筛选：多行 (步数, 动作, 等级区间) 组合，命中任一组合即保留
+  // 如「5步锻造」+「3步缝纫」+「转化」可同时检索；等级限制也可作为组合条件之一
   const conditions = Array.isArray(params.conditions)
-    ? params.conditions.filter((c: any) => c && ((c.steps != null && c.steps !== "") || c.project))
+    ? params.conditions.filter((c: any) => c && ((c.steps != null && c.steps !== "") || c.project || c.minLevel != null || c.maxLevel != null))
     : []
   if (conditions.length) {
     profitList = profitList.filter((cal) => {
@@ -64,6 +64,8 @@ export function handleSearch(profitList: Calculator[], params: any) {
       return conditions.some((cond: any) => {
         if (cond.steps != null && cond.steps !== "" && steps !== cond.steps) return false
         if (cond.project && !cal.project.includes(cond.project)) return false
+        if (cond.minLevel != null && cal.actionLevel < cond.minLevel) return false
+        if (cond.maxLevel != null && cal.actionLevel > cond.maxLevel) return false
         return true
       })
     })
@@ -83,6 +85,24 @@ export function handleSearch(profitList: Calculator[], params: any) {
     return cls !== "life" && cls !== "both"
   }))
 
+  // 反向排除：excludes 为 { name?, project? }[] 组合，命中任一排除组合即剔除
+  // - 仅排除某种生产：{ project: "锻造" }
+  // - 仅排除某个产品：{ name: "奶酪" }
+  // - 排除某产品某生产模式 / 某生产模式中某产品：{ name: "奶酪", project: "锻造" }
+  const excludes = Array.isArray(params.excludes)
+    ? params.excludes.filter((e: any) => e && (e.name || e.project))
+    : []
+  if (excludes.length) {
+    profitList = profitList.filter((cal) => {
+      const name = cal.result.name.toLowerCase()
+      return !excludes.some((ex: any) => {
+        if (ex.name && !name.includes(String(ex.name).toLowerCase())) return false
+        if (ex.project && !cal.project.includes(ex.project)) return false
+        return true
+      })
+    })
+  }
+
   // 精确步数筛选：只保留 N 步方案，排除 N-1 / N+1 步（兼容旧调用方）
   params.steps && (profitList = profitList.filter((cal) => {
     const m = /^(\d+)步/.exec(cal.project)
@@ -99,6 +119,25 @@ export function handleSearch(profitList: Calculator[], params: any) {
   if (params.minRisk != null) profitList = profitList.filter(cal => cal.result.risk >= params.minRisk)
   if (params.maxRisk != null) profitList = profitList.filter(cal => cal.result.risk <= params.maxRisk)
   return profitList
+}
+
+/**
+ * 多样产业链精简：同一最终产物（result.name 相同）的多条产业链方案中，
+ * 只保留时薪（profitPH）最高的一条，便于列表默认突出每个物品的最优方案。
+ * 与比较模式（handleCompare）互补：比较模式展示组内全部方案并标排名，本函数只留最优。
+ */
+export function handleBestPerItem(profitList: Calculator[]) {
+  // 兜底：profitPH 可能为 NaN（如迷宫等特殊物品），按 -Infinity 处理不干扰最优判断
+  const norm = (v: number) => (Number.isFinite(v) ? v : -Infinity)
+  const best = new Map<string, Calculator>()
+  for (const cal of profitList) {
+    const key = cal.result.name
+    const prev = best.get(key)
+    if (!prev || norm(cal.result.profitPH) > norm(prev.result.profitPH)) {
+      best.set(key, cal)
+    }
+  }
+  return Array.from(best.values())
 }
 
 /**

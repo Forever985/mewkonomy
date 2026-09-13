@@ -2,6 +2,7 @@ import type Calculator from "."
 import type { StorageCalculatorItem } from "@/pinia/stores/favorite"
 import { CoinifyCalculator, DecomposeCalculator, TransmuteCalculator } from "./alchemy"
 import { EnhanceCalculator } from "./enhance"
+import { GatherCalculator } from "./gather"
 import { ManufactureCalculator } from "./manufacture"
 
 const CLASS_MAP: { [key: string]: any } = {
@@ -9,7 +10,8 @@ const CLASS_MAP: { [key: string]: any } = {
   TransmuteCalculator,
   ManufactureCalculator,
   CoinifyCalculator,
-  EnhanceCalculator
+  EnhanceCalculator,
+  GatherCalculator
 }
 
 export function calculatorConstructable(className: string): boolean {

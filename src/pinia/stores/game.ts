@@ -169,7 +169,7 @@ export const useGameStore = defineStore("game", {
       // saveSellStatus(this.sellStatus)
       this.clearAllCaches()
     },
-    setPriceFallbackMode(mode: "A" | "B") {
+    setPriceFallbackMode(mode: "A" | "B" | "C") {
       this.priceFallbackMode = mode
       savePriceFallbackMode(mode)
       this.clearAllCaches()
@@ -276,15 +276,18 @@ function updateMarketData(oldData: MarketData | null, newData: MarketDataPlain, 
   const oldMarket = oldData?.marketData || {}
   const newMarket: Market = { }
 
-  // 将 MarketDataPlain 转成 MarketData 的结构
+  // 将 MarketDataPlain 转成 MarketData 的结构（保留官方 price/volume 字段用于贸易量监控）
   for (const hrid in newData.marketData) {
     if (newData.marketData[hrid]) {
       newMarket[hrid] = {}
     }
     for (const level in newData.marketData[hrid]) {
+      const raw = newData.marketData[hrid][level]
       newMarket[hrid][level] = {
-        ask: newData.marketData[hrid][level].a,
-        bid: newData.marketData[hrid][level].b
+        ask: raw.a ?? -1,
+        bid: raw.b ?? -1,
+        price: raw.p ?? -1,
+        volume: raw.v ?? 0
       }
     }
   }
@@ -309,6 +312,9 @@ function updateMarketData(oldData: MarketData | null, newData: MarketDataPlain, 
       if (price.bid === -1) {
         price.bid = (oldMarket[hrid]?.[level] as MarketItemPrice)?.bid || -1
       }
+      if (!price.volume) {
+        price.volume = (oldMarket[hrid]?.[level] as MarketItemPrice)?.volume || 0
+      }
     }
   }
 
@@ -331,7 +337,29 @@ function updateMarketData(oldData: MarketData | null, newData: MarketDataPlain, 
 const KEY_PREFIX = "game-"
 
 function getMarketData() {
-  return JSON.parse(localStorage.getItem(`${KEY_PREFIX}market-data`) || "null") as MarketData | null
+  const raw = localStorage.getItem(`${KEY_PREFIX}market-data`)
+  if (!raw) {
+    return null
+  }
+  const data = JSON.parse(raw) as MarketData | null
+  // 旧版缓存结构只有 ask/bid，缺少 price/volume（贸易量监控依赖字段），
+  // 判定为过期缓存，清除后由 fetchData 重新拉取官方 marketplace.json 补全。
+  if (data && !hasVolumeField(data.marketData)) {
+    localStorage.removeItem(`${KEY_PREFIX}market-data`)
+    return null
+  }
+  return data
+}
+
+function hasVolumeField(market: Market): boolean {
+  for (const hrid in market) {
+    for (const level in market[hrid]) {
+      const p = market[hrid][level] as MarketItemPrice
+      // 新版 updateMarketData 必定写出 number 类型的 volume 字段
+      return typeof p.volume === "number"
+    }
+  }
+  return false
 }
 function setMarketData(value: MarketData) {
   localStorage.setItem(`${KEY_PREFIX}market-data`, JSON.stringify(value))
@@ -359,11 +387,11 @@ function loadSellStatus() {
   return PriceStatus.BID
 }
 
-type PriceFallbackMode = "A" | "B"
+type PriceFallbackMode = "A" | "B" | "C"
 
 function loadPriceFallbackMode(): PriceFallbackMode {
   const v = localStorage.getItem(`${KEY_PREFIX}price-fallback-mode`)
-  return v === "A" ? "A" : "B"
+  return v === "A" ? "A" : v === "C" ? "C" : "B"
 }
 function savePriceFallbackMode(mode: PriceFallbackMode) {
   localStorage.setItem(`${KEY_PREFIX}price-fallback-mode`, mode)

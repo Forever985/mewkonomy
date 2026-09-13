@@ -12,6 +12,8 @@ export interface RequestData {
   project?: string
   /** 查询参数：组合条件（多行「步数+动作」并行检索，命中任一组合即保留） */
   conditions?: Array<{ steps?: number | string; project?: string }>
+  /** 查询参数：反向排除组合（{ name?, project? }[]，命中任一组合即剔除；name 缺省=排除该生产全部，project 缺省=排除该产品全部） */
+  excludes?: Array<{ name?: string; project?: string }>
   /** 查询参数：利润率%下限（含） */
   minProfitRate?: number
   /** 查询参数：利润率%上限（含） */
@@ -28,6 +30,8 @@ export interface RequestData {
   maxRisk?: number
   /** 比较模式：按物品分组标注组内排名 */
   compare?: boolean
+  /** 显示全部多样产业链：默认 false 时每个物品只保留时薪最高的那一条方案 */
+  showAllVariants?: boolean
   enhanposer?: boolean
   sort?: Sort
   /** 要求等级下限（兼容旧单值 actionLevel 作为下限） */
