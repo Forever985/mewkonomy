@@ -25,16 +25,8 @@ const TIER_ESSENCE_COUNT: Record<CharmTier, number> = {
   grandmaster: 10000 * 8 * 6 * 4 * 2
 }
 
-const TIER_LABEL: Record<CharmTier, string> = {
-  basic: "基础",
-  advanced: "高级",
-  expert: "专家",
-  master: "大师",
-  grandmaster: "宗师"
-}
-
 export function getCharmTierLabel(tier: CharmTier): string {
-  return getTrans(TIER_LABEL[tier])
+  return getTrans(`CharmTier.${tier}`)
 }
 
 export interface CharmProductResult {

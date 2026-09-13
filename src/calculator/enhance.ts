@@ -286,7 +286,7 @@ export class EnhanceCalculator extends Calculator {
       if (i < targetLevel - 2) {
         stMatrix.set([i, i + 2], this.levelLeapRate(successRateTable[i]))
       }
-      stMatrix.set([i, i >= this.protectLevel ? i - 1 : 0], this.failRate(successRateTable[i]))
+      stMatrix.set([i, Math.max(0, i >= this.protectLevel ? i - 1 : 0)], this.failRate(successRateTable[i]))
     }
 
     // 删除 stMatrix 的前 escapeLevel+1 行和列
@@ -320,8 +320,9 @@ export class EnhanceCalculator extends Calculator {
     const allMat = math.multiply(inv, protectVector) as math.Matrix
     const actions = all.get([this.originLevel - offset, 0])
     const protects = allMat.get([this.originLevel - offset, 0])
-    const targetRate = this.levelLeapRate(successRateTable[targetLevel - 2]) * (size > 1 ? inv.get([this.originLevel - offset, size - 2]) : 0)
-      + +this.levelUpRate(successRateTable[targetLevel - 1]) * inv.get([this.originLevel - offset, size - 1])
+    const leapFromLower = targetLevel >= 2 ? this.levelLeapRate(successRateTable[targetLevel - 2]) : 0
+    const targetRate = leapFromLower * (size > 1 ? inv.get([this.originLevel - offset, size - 2]) : 0)
+      + this.levelUpRate(successRateTable[targetLevel - 1]) * inv.get([this.originLevel - offset, size - 1])
     const leapRate = this.levelLeapRate(successRateTable[targetLevel - 1]) * inv.get([this.originLevel - offset, size - 1])
     let escapeRate = 1 - targetRate - leapRate
     // 消除浮点数误差

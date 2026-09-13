@@ -401,5 +401,10 @@ export default {
   "等级": "Level",
   "成交量": "Volume",
   "成交额": "Turnover",
-  "暂无数据，请等待市场数据加载": "No data yet, waiting for market data"
+  "暂无数据，请等待市场数据加载": "No data yet, waiting for market data",
+  "CharmTier.basic": "Basic",
+  "CharmTier.advanced": "Advanced",
+  "CharmTier.expert": "Expert",
+  "CharmTier.master": "Master",
+  "CharmTier.grandmaster": "Grandmaster"
 }

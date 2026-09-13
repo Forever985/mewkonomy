@@ -69,7 +69,7 @@ export default abstract class Calculator {
   }
 
   get efficiency(): number {
-    return 1 + Math.max(0, (this.playerLevel - this.actionLevel) * 0.01) + getBuffOf(this.action, "Efficiency")
+    return 1 + Math.max(0, (this.playerLevel - (this.actionLevel || 0)) * 0.01) + (getBuffOf(this.action, "Efficiency") || 0)
   }
 
   get speed(): number {

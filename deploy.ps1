@@ -15,6 +15,8 @@
 #       （空 http/https.proxy + sslVerify + credential.helper=wincred）覆盖，
 #       不改动用户真实全局/本地 git 配置
 #     - 走 Steam++ 443 自签通道时放行证书（sslVerify=false）
+#     - main 无新提交时 git push 报 "Everything up-to-date" 视为正常成功，
+#       不误判失败中止，继续执行 gh-pages 推送
 #     - 结束自动清理临时配置文件，环境变量随进程退出自然失效，不污染环境
 # ============================================================
 param(
@@ -163,8 +165,14 @@ try {
     }
 
     Write-Host "  推送 main -> origin/$BranchMain ..."
-    & git push origin $BranchMain
-    if ($LASTEXITCODE -ne 0) { throw "main 推送失败，请检查 GitHub 认证与网络（当前通道: $selected）" }
+    $pushOut = & git push origin $BranchMain 2>&1
+    $pushOk  = ($LASTEXITCODE -eq 0)
+    $upToDate = ($pushOut -match 'Everything up-to-date')
+    if (-not $pushOk -and $upToDate) {
+        Write-Host "  main 已是最新（Everything up-to-date），视为成功" -ForegroundColor DarkGray
+        $pushOk = $true
+    }
+    if (-not $pushOk) { throw "main 推送失败：$($pushOut -join ' ')" }
     Write-Host "  main 推送成功 (耗时 $([math]::Round(((Get-Date)-$t).TotalSeconds,1))s)" -ForegroundColor Green
 
     # ============ [3/5] 推送产物到 gh-pages ============

@@ -390,9 +390,10 @@ export function getActionLevelBonusOf(action: Action) {
 export function getAlchemySuccessRatio(item: ItemDetail) {
   const action = "alchemy"
   const playerLevel = getPlayerLevelOf(action)
-  const levelRatio = playerLevel >= item.itemLevel
+  const itemLevel = item.itemLevel || 0
+  const levelRatio = playerLevel >= itemLevel
     ? 0
-    : -0.9 * (1 - playerLevel / item.itemLevel)
+    : -0.9 * (1 - playerLevel / itemLevel)
   return levelRatio
 }
 

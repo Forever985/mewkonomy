@@ -5,13 +5,24 @@
 #        图片、SVG、音频等）。此类文件不经过编译，可直接增量同步到线上。
 #  注意：若改动了 src/ 源码或 vite.config.ts 等，必须改用 deploy.ps1
 #        全量构建（线上跑的是编译产物，hash 文件名，源码不编译不生效）。
-#  流程：比对 public 与 dist -> 增量复制变更文件 -> 推送 gh-pages
+#  流程：比对 public 与 dist -> 增量复制变更文件 -> 网络通道探测
+#        -> 生成临时 git 全局配置 -> 推送 gh-pages
+#  关键规避：
+#     - gh-pages 内部 git 会读取全局失效代理，用 GIT_CONFIG_GLOBAL 指向
+#       临时配置文件（空 proxy + sslVerify + credential.helper=wincred）
+#       覆盖，不改动用户真实全局/本地 git 配置（不再写 local 配置）。
+#     - 通道自动探测：直连 GitHub -> 常见本地代理端口逐个试（含旧 10808）。
 # ============================================================
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
+$tmpCfg                 = ''    # 临时 git 配置文件路径
+$channelLog             = [System.Collections.Generic.List[string]]::new()
+$env:GIT_CONFIG_GLOBAL  = ''
+$env:GIT_CONFIG_NOSYSTEM = '1'  # 忽略系统级 git 配置，进一步隔离干扰
+
 # ---------- 可调参数 ----------
-$ProxyUrl      = 'http://127.0.0.1:10808'
+$ProxyPorts    = @(7897, 7890, 10808, 10809, 1080, 8118)       # 常见本地代理端口，逐个试（含旧 10808）
 $BranchPages   = 'gh-pages'
 $DistDir       = 'dist'
 $ProbeRepo     = 'https://github.com/octocat/Hello-World.git'  # 连通性探测（公开仓库，无需凭据）
@@ -26,10 +37,42 @@ function Write-Step([string]$Title) {
     Write-Host "==========================================================" -ForegroundColor DarkCyan
 }
 
-function Test-GitHubConnect([string]$proxy) {
-    & git -c http.proxy="$proxy" -c http.lowSpeedLimit=1 -c http.lowSpeedTime=15 `
-         ls-remote --heads $ProbeRepo 2>$null
-    return ($LASTEXITCODE -eq 0)
+# 用 git 真实网络栈探测指定通道连通性（公开仓库探测，不走本仓库凭据）
+# $cfgArgs: git -c 参数数组；$desc: 通道描述
+function Test-Channel([string[]]$cfgArgs, [string]$desc) {
+    $start = Get-Date
+    Write-Host "  尝试 [$desc] ..." -NoNewline
+    & git @cfgArgs -c http.lowSpeedLimit=1 -c http.lowSpeedTime=15 ls-remote --heads $ProbeRepo 2>$null | Out-Null
+    $ok   = ($LASTEXITCODE -eq 0)
+    $el   = ((Get-Date) - $start).TotalSeconds
+    $mark = if ($ok) { 'OK' } else { 'FAIL' }
+    $channelLog.Add(("{0,-42} -> {1,-4} ({2,4:N1}s)" -f $desc, $mark, $el))
+    if ($ok) {
+        Write-Host " 可用 (${el:N1}s)" -ForegroundColor Green
+    } else {
+        Write-Host " 不可用 (${el:N1}s)" -ForegroundColor DarkGray
+    }
+    return $ok
+}
+
+# 生成临时 git 全局配置文件（覆盖全局失效代理，供 gh-pages 内部 git 使用，不改动真实配置）
+function New-TempGitConfig([string]$cfgPath, [bool]$sslVerify) {
+    & git config --file $cfgPath http.proxy  ''
+    & git config --file $cfgPath https.proxy ''
+    & git config --file $cfgPath http.sslVerify  $sslVerify
+    & git config --file $cfgPath https.sslVerify $sslVerify
+    & git config --file $cfgPath credential.helper wincred
+    # 继承全局提交身份（GIT_CONFIG_GLOBAL 会替代 ~/.gitconfig，否则提交身份丢失）
+    $gName  = & git config --global --get user.name  2>$null
+    $gEmail = & git config --global --get user.email 2>$null
+    if ($gName)  { & git config --file $cfgPath user.name  $gName  }
+    if ($gEmail) { & git config --file $cfgPath user.email $gEmail }
+    if ($LASTEXITCODE -ne 0) { throw "生成临时 git 配置失败: $cfgPath" }
+}
+
+# 通道探测汇总文本（用于报错/结束报告）
+function Get-ChannelSummary {
+    return ($channelLog -join "`n")
 }
 
 try {
@@ -85,35 +128,44 @@ try {
     Write-Host "  本次需同步 $($changed.Count) 个文件：" -ForegroundColor Cyan
     $changed | ForEach-Object { Write-Host "    + $_" -ForegroundColor DarkGray }
 
-    # ============ [2/4] 网络与凭据环境 ============
-    Write-Step "[2/4] 检测网络与凭据环境"
-    & git config --local credential.helper wincred
-    if ($LASTEXITCODE -ne 0) { throw "设置 git 凭据助手 wincred 失败" }
-    Write-Host "  凭据助手已设为 wincred（本地仓库）" -ForegroundColor Green
+    # ============ [2/4] 网络通道探测与临时 git 配置 ============
+    Write-Step "[2/4] 检测网络通道并准备临时 git 配置"
+    $selected = $null
+    $selSsl   = $true
 
-    $useProxy = $false
-    Write-Host "  探测 GitHub 直连 ..." -NoNewline
-    if (Test-GitHubConnect '') {
-        Write-Host " 可用" -ForegroundColor Green
-        $useProxy = $false
+    # ① 直连 GitHub（严格证书校验）
+    if (Test-Channel @('-c','http.proxy=','-c','https.proxy=','-c','http.sslVerify=true','-c','https.sslVerify=true') '直连 GitHub') {
+        $selected = '直连 GitHub'
+        $selSsl   = $true
     }
+    # ② 常见本地代理端口自动探测
     else {
-        Write-Host " 不可用"
-        Write-Host "  尝试本地代理 $ProxyUrl ..." -NoNewline
-        if (Test-GitHubConnect $ProxyUrl) {
-            Write-Host " 可用" -ForegroundColor Green
-            $useProxy = $true
+        foreach ($port in $ProxyPorts) {
+            $p = "http://127.0.0.1:$port"
+            if (Test-Channel @('-c',"http.proxy=$p",'-c',"https.proxy=$p",'-c','http.sslVerify=true','-c','https.sslVerify=true') "本地代理 $p") {
+                $selected = "本地代理 $p"
+                $selSsl   = $true
+                break
+            }
         }
-        else { throw "GitHub 直连与代理 ($ProxyUrl) 均不可达，请检查网络后重试" }
     }
-    if ($useProxy) {
-        & git config --local http.proxy $ProxyUrl
-        if ($LASTEXITCODE -ne 0) { throw "写入本地代理配置失败" }
+
+    if (-not $selected) {
+        throw "全部通道均不可达，已尝试：`n$(Get-ChannelSummary)"
     }
-    else {
-        & git config --local http.proxy ''
-        if ($LASTEXITCODE -ne 0) { throw "写入直连配置失败" }
-    }
+    Write-Host ""
+    Write-Host "  >>> 选中通道: $selected" -ForegroundColor Green
+
+    # 生成临时 git 全局配置（空 proxy 覆盖全局失效代理，供 gh-pages 内部 git 读取）
+    $tmpCfg = Join-Path $env:TEMP ("mewkonomy-gitconfig-" + [guid]::NewGuid().ToString('N') + ".cfg")
+    New-TempGitConfig $tmpCfg $selSsl
+    $env:GIT_CONFIG_GLOBAL = $tmpCfg
+    Write-Host "  临时 git 配置已生效: $tmpCfg（不写本地仓库配置、不污染真实配置）" -ForegroundColor DarkGray
+
+    # 清理旧版脚本写入的本地仓库残留配置（credential.helper / http.proxy）
+    & git config --local --unset-all credential.helper 2>$null
+    & git config --local --unset-all http.proxy 2>$null
+    Write-Host "  已清理本地仓库残留代理/凭据配置" -ForegroundColor DarkGray
 
     # ============ [3/4] 推送产物到 gh-pages ============
     Write-Step "[3/4] 推送构建产物到 gh-pages"
@@ -134,7 +186,13 @@ catch {
     exit 1
 }
 finally {
+    # 清理临时 git 配置（环境变量随进程退出自然失效，无需还原）
+    if ($tmpCfg -and (Test-Path $tmpCfg)) {
+        Remove-Item -LiteralPath $tmpCfg -Force -ErrorAction SilentlyContinue
+    }
+    # 兜底清理本地仓库残留配置（与"不污染真实配置"原则一致）
     & git config --local --unset-all http.proxy 2>$null
+    & git config --local --unset-all credential.helper 2>$null
 }
 
 Write-Host ""

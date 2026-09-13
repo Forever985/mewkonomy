@@ -602,16 +602,17 @@ const TIMEVALUES = {
 export function getAlchemyRareDropTable(item: ItemDetail, baseTimeCost: number): DropTableItem[] {
   let dropHrid = "/items/small_artisans_crate"
   const i = 1 * baseTimeCost / (8 * TIMEVALUES.HOUR)
+  const itemLevel = item.itemLevel || 0
   let s = 0
-  if (item.itemLevel < 35) {
+  if (itemLevel < 35) {
     dropHrid = "/items/small_artisans_crate"
-    s = (item.itemLevel + 100) / 100
-  } else if (item.itemLevel < 70) {
+    s = (itemLevel + 100) / 100
+  } else if (itemLevel < 70) {
     dropHrid = "/items/medium_artisans_crate"
-    s = (item.itemLevel - 35 + 100) / 150
+    s = (itemLevel - 35 + 100) / 150
   } else {
     dropHrid = "/items/large_artisans_crate"
-    s = (item.itemLevel - 70 + 100) / 200
+    s = (itemLevel - 70 + 100) / 200
   }
   return [{
     itemHrid: dropHrid,
@@ -624,7 +625,7 @@ export function getAlchemyRareDropTable(item: ItemDetail, baseTimeCost: number):
 export function getAlchemyEssenceDropTable(item: ItemDetail, timeCost: number): DropTableItem[] {
   return [{
     itemHrid: "/items/alchemy_essence",
-    dropRate: 1 * timeCost / (6 * TIMEVALUES.MINUTE) * ((item.itemLevel + 100) / 100),
+    dropRate: 1 * timeCost / (6 * TIMEVALUES.MINUTE) * (((item.itemLevel || 0) + 100) / 100),
     minCount: 1,
     maxCount: 1
   }]
@@ -679,7 +680,7 @@ export function getEnhancementExp(item: ItemDetail, enhancementLevel: number) {
 }
 
 export function getCoinifyExp(item: ItemDetail) {
-  return 1 * (10 + item.itemLevel)
+  return 1 * (10 + (item.itemLevel || 0))
 }
 export function getDecomposeExp(item: ItemDetail) {
   return 1.4 * (10 + item.itemLevel)

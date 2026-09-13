@@ -1018,6 +1018,11 @@ export default {
   "买价": "买价",
   "成交量": "成交量",
   "成交额": "成交额",
-  "暂无数据，请等待市场数据加载": "暂无数据，请等待市场数据加载"
+  "暂无数据，请等待市场数据加载": "暂无数据，请等待市场数据加载",
+  "CharmTier.basic": "基础",
+  "CharmTier.advanced": "高级",
+  "CharmTier.expert": "专家",
+  "CharmTier.master": "大师",
+  "CharmTier.grandmaster": "宗师"
 
 }
