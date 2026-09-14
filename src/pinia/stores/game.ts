@@ -111,20 +111,23 @@ export const useGameStore = defineStore("game", {
   actions: {
     async tryFetchData() {
       let retryCount = 5
+      let success = false
       while (retryCount--) {
         try {
           await this.fetchData(retryCount)
+          success = true
           break
         } catch (e) {
           console.error(`获取数据第${5 - retryCount}次失败`, e)
           ElMessage.error(t("获取数据第{0}次失败，正在重试...", [5 - retryCount]))
         }
       }
-      if (this.gameData && this.marketData && retryCount === 0) {
-        ElMessage.error(t("数据获取失败，直接使用缓存数据"))
-        return
-      }
-      if (retryCount < 0) {
+      // 全部请求均失败：若有本地缓存则回退使用，避免主界面因外部数据源不可达而无法挂载
+      if (!success) {
+        if (this.gameData && this.marketData) {
+          ElMessage.error(t("数据获取失败，直接使用缓存数据"))
+          return
+        }
         ElMessage.error(t("数据获取失败，请检查网络连接"))
         throw new Error("强制宕机")
       }
@@ -143,25 +146,35 @@ export const useGameStore = defineStore("game", {
       const DATA_URL = `${url}data/data.json`
       const marketUrl = MARKET_URLS[(4 - offset) % MARKET_URLS.length]
 
-      const response = await Promise.all([fetch(DATA_URL), fetch(marketUrl)])
-      if (!response[0].ok || !response[1].ok) {
-        throw new Error("Response not ok")
-      }
-      const newGameData = await response[0].json()
-      const newMarketData = await response[1].json()
-      // 如果有缓存数据，则不更新gameData，防止国际化数据被覆
-      if (!this.gameData) {
-        this.gameData = newGameData
-      }
-      setGameData(newGameData)
+      // 外部数据源请求设置超时，避免网络挂起时阻塞主界面挂载
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 15000)
+      try {
+        const response = await Promise.all([
+          fetch(DATA_URL, { signal: controller.signal }),
+          fetch(marketUrl, { signal: controller.signal })
+        ])
+        if (!response[0].ok || !response[1].ok) {
+          throw new Error("Response not ok")
+        }
+        const newGameData = await response[0].json()
+        const newMarketData = await response[1].json()
+        // 如果有缓存数据，则不更新gameData，防止国际化数据被覆
+        if (!this.gameData) {
+          this.gameData = newGameData
+        }
+        setGameData(newGameData)
 
-      // 如果缓存数据的时间戳与新数据相同，则不更新
-      if (this.marketData?.timestamp && this.marketData?.timestamp === newMarketData.timestamp) {
-        return
-      }
+        // 如果缓存数据的时间戳与新数据相同，则不更新
+        if (this.marketData?.timestamp && this.marketData?.timestamp === newMarketData.timestamp) {
+          return
+        }
 
-      this.marketData = updateMarketData(this.marketData, newMarketData, newGameData)
-      this.clearAllCaches()
+        this.marketData = updateMarketData(this.marketData, newMarketData, newGameData)
+        this.clearAllCaches()
+      } finally {
+        clearTimeout(timeoutId)
+      }
     },
 
     savePriceStatus() {

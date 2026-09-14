@@ -19,6 +19,10 @@ temp_market.json
 vitest-out*.txt
 dev-server.log
 
+# Python
+__pycache__/
+*.pyc
+
 # Use the pnpm
 package-lock.json
 # yarn.lock

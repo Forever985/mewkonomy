@@ -2,8 +2,9 @@ name: Update Game Data
 env:
   GITHUB_REPOSITORY: ${{ github.repository }}
 on:
-  # schedule:
-  #   - cron: "*/10 * * * *"
+  # 每小时归档市场历史采样点，供涨跌计算使用
+  schedule:
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:

@@ -38,7 +38,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
   - 公开页：`dashboard`（首页/玩家配置，含检索）、`enhancer`（强化计算）、`enhanposer`（强化分解）、`sponsor`（打赏）、`/link`（外部链接）。
   - 私有页（`private.ts` 的 `PRIVATE_ROUTES_START/END` 之间）：`enhancest`（超级强化计算）、`enhanposest`（超级强化分解）、打野工具组（`jungle`/`junglest`/`junglerit`/`inherit`/`decompose`/`pickout`）、`manualchemy`（制作炼金）、`chainbuilder`（手动产业链）、`charmtransform`（护符转化盈利）、`marketvolume`（市场监控）、`demo`。
   - 历史下线：英灵殿/埋骨地（`burial`/`valhalla`）**路由与词条已清理，但 `src/pages/burial`、`src/pages/valhalla` 目录文件仍残留、未路由**——可清理的候选。
-- **测试清单**（`tests/`，vitest + happy-dom）：`bigset-c-verify`、`chainbuilder-verify`、`charmtransform-verify`、`cross-project-tail-verify`（+`extended`）、`handle-best-per-item`、`marketvolume-cache`、`marketvolume-verify`、`demo`、`components/Notify`、`utils/validate`。
+- **测试清单**（`tests/`，vitest + happy-dom）：`bigset-c-verify`、`chainbuilder-verify`、`charmtransform-verify`、`cross-project-tail-verify`（+`extended`）、`handle-best-per-item`、`marketvolume-cache`、`marketvolume-verify`、`marketvolume-history`（4 用例，`vi.resetModules` 重建模块）、`demo`、`components/Notify`、`utils/validate`。
 
 ## 4. 核心架构速记
 
@@ -48,6 +48,8 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 - **缓存**：Pinia store 的 `*Cache` 字段按 `marketData.timestamp` + 计算模式分桶存 localStorage；`fetchData/tryFetchData` 集中调 `clearAllCaches()`；`useXxxStoreOutside` 可组件外直连。
 - **计算器**：扁平 `src/calculator/*.ts`，基类 `Calculator` + `WorkflowCalculator` 聚合，`CLASS_MAP` 序列化。
 - **API**：各域 `src/common/apis/<domain>/index.ts`（game/price/player/favorite/leaderboard/manualchemy/chainbuilder/charmtransform/enhanposer/jungle/marketvolume）；通用检索在 `src/common/apis/utils.ts` `handleSearch`（banEquipment/banJewelry/banCombat/banLife、conditions 组合、等级/利润率/风险双头、steps 精确步数）。
+  - `marketvolume/history.ts`（市场历史采样）：`MarketPriceSample`（`{t, p:{hrid:{level:[ask,price]}}}`）；**双通道历史**——服务端 `public/data/market_history.json`（26h 滚动）＋ 本地 `localStorage` 兜底（key `mewkonomy-market-history`，节流 30min、上限 48 条）；`getMarketChangeMap` 以「时间窗起点前最近采样」为基准算涨跌，key=`hrid|level`。
+- **入口挂载门控与失败回退（game store）**：`main.ts` 等 `tryFetchData().then(router.isReady)` 才 `mount`。`tryFetchData` 用 **`success` 标志**（**勿用 `retryCount===0`，循环后恒 -1 为死代码**）；全部重试失败时若已有 `gameData`+`marketData` 则**回退使用缓存**，仅完全无数据才抛「强制宕机」；`fetchData` 的 `Promise.all` 带 **15s `AbortController` 超时**。
 
 ## 5. 已知待办与未完成项
 
@@ -65,6 +67,8 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 5. **负利润不过滤**：`enhanposer`/`enhanposest` 已移除 `!enhancer.profitable` 预筛——**负利润方案也会输出**，勿再「修复」为过滤。
 6. **兜底价**：`getPriceOf` 对市场完全无记录的物品（如 back 披风）用 `item.sellPrice` 兜底 ask/bid——查不到价≠无价，可能是兜底显示。
 7. **非安全隔离**：路由/页面始终全部打包，私有页只是隐藏 + 守卫；`checkSecret()` 恒 true，**别把敏感逻辑放在前端**。
+8. **市场监控涨跌依赖历史采样**：涨跌列 = 当前价 vs 「时间窗起点前最近采样」，无历史（未采样且无服务端归档）时显示 `--` 属正常，不是 bug。本地兜底节流 30min、上限 48 条，仅线上（GitHub Pages）有服务端 26h 归档。改采样结构需兼容旧 `mewkonomy-market-history` 缓存。
+9. **入口挂载与外部数据源**：主界面空白多为外部 `marketplace.json` 不可达且无本地缓存。`tryFetchData` 已用 `success` 标志 + 缓存回退 + 15s 超时兜底；**不要改回 `retryCount===0` 判断**（死代码）。
 
 ## 7. 常规工作流（AI 接手后）
 

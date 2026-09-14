@@ -159,6 +159,27 @@ export const privateRoutes: RouteRecordRaw[] = [
     ]
   },
   {
+    path: "/",
+    component: Layouts,
+    redirect: "/docs",
+    meta: {
+      title: t("使用文档"),
+      elIcon: "Document"
+    },
+    children: [
+      {
+        path: "docs",
+        component: () => import("@/pages/docs/index.vue"),
+        name: "Docs",
+        meta: {
+          title: t("使用文档"),
+          affix: false,
+          elIcon: "Document"
+        }
+      }
+    ]
+  },
+  {
     path: "/demo",
     component: Layouts,
     redirect: "/demo/unocss",

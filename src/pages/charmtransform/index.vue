@@ -1,17 +1,27 @@
 <script lang="ts" setup>
 import type { CharmTier, CharmTierResult } from "@/common/apis/charmtransform"
-import { calcCharmTransformApi, getCharmTierLabel } from "@/common/apis/charmtransform"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
+import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 import * as Format from "@@/utils/format"
 import { useI18n } from "vue-i18n"
+import { calcCharmTransformApi } from "@/common/apis/charmtransform"
+import { usePriceStatus } from "@/common/composables/usePriceStatus"
+import { useGameStoreOutside } from "@/pinia/stores/game"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 
 const { t } = useI18n()
+const gameStore = useGameStoreOutside()
 
 const catalystRank = ref(0)
 const activeTier = ref<CharmTier>("basic")
 
-const result = computed<CharmTierResult[]>(() => calcCharmTransformApi(catalystRank.value))
+const onPriceStatusChange = usePriceStatus("charmtransform-price-status")
+// 依赖左右价（买价/卖价）状态：切换后重算，缓存由 game api 按状态键自动区分
+const result = computed<CharmTierResult[]>(() => {
+  void gameStore.buyStatus
+  void gameStore.sellStatus
+  return calcCharmTransformApi(catalystRank.value)
+})
 const activeResult = computed(() => result.value.find(r => r.tier === activeTier.value))
 
 function catalystLabel(rank: number) {
@@ -43,7 +53,8 @@ function profitClass(v: number) {
         <el-radio-group v-model="catalystRank">
           <el-radio-button v-for="r in [0, 1, 2]" :key="r" :value="r">{{ catalystLabel(r) }}</el-radio-button>
         </el-radio-group>
-        <span class="text-sm text-gray-400 ml-2">{{ t("理想价格") }}：{{ t("市场无人买卖时由你主宰，挂价上限=精华直接制作成本") }}</span>
+        <PriceStatusSelect @change="onPriceStatusChange" />
+        <span class="text-sm text-gray-400 ml-2">{{ t("理想价格") }}：{{ t("市场无人买卖时由你主宰，挂价上限=产出护符自身精华直接制作成本") }}</span>
       </div>
 
       <el-table :data="result" size="small" highlight-current-row :row-class-name="() => ''" @row-click="onRowClick">

@@ -23,6 +23,10 @@ export interface MarketVolumeItem {
   volume: number
   /** 估算成交额 = 当前价 × 成交量（无价时 0） */
   turnover: number
+  /** 涨跌百分比（相对时间窗基准价）；null 表示该条目无历史基准 */
+  changePct?: number | null
+  /** 涨跌基准价 */
+  changeBase?: number | null
 }
 
 /** 聚合全部市场条目（含价格档展开）。读失败/未加载时返回空数组。 */

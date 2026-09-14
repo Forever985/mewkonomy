@@ -91,12 +91,14 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 - 各域在 `src/common/apis/<domain>/index.ts` 聚合，页面只 import 该入口。
 - `src/common/apis/utils.ts` 提供通用检索 `handleSearch`（支持 `banEquipment` / `banJewelry` / `banCombat` / `banLife`、`conditions` 组合条件、等级/利润率/风险双头、`steps` 精确步数等）。
 - 检索类 API 使用 `usePagination` 组合式做分页，页码/大小状态可持久化到 localStorage。
+- **页面级辅助模块可内聚在域目录下**：如 `marketvolume/history.ts` 维护「市场历史采样」——`MarketPriceSample`（`{t, p:{hrid:{level:[ask,price]}}}`）、`recordLocalSample`（localStorage 兜底，节流 30min、上限 48 条、26h 滚动窗口）、`loadMarketHistory`（拉取 `public/data/market_history.json` 服务端归档）、`getMarketChangeMap`（基准 = 时间窗起点前最近采样，`pct=(当前-基准)/基准`，key=`hrid|level`，无基准 / 当前价无效时该项不出现）。
 
 ### 2.4 Pinia store 与 timestamp 缓存（重点）
 
 - 数据 store（`game` 等）负责拉取 `data.json` / `market.json`，并做 **localStorage 缓存**。
 - **缓存按 `marketData.timestamp`（市场快照时间戳）+ 计算模式分桶**，不是简单列表缓存。新增/变更计算模式参数（如 `noDecompose`、`priceType`、`banCombat`）后，**必须调用对应 `clearXxxCache()` 再重算**，否则读到旧结果。
 - `clearAllCaches()` 在 `fetchData`/`tryFetchData` 中集中调用；`useXxxStoreOutside` 可在组件外全局直连 store（如 `marketvolume` 页响应式依赖 `gameStore.marketData` 自动重算）。
+- **入口挂载门控与失败回退**：`main.ts` 需等 `tryFetchData().then(router.isReady)` 才 `mount`，外部数据源不可达会阻塞主界面。`tryFetchData` 用 **`success` 标志**判定整体是否成功（**勿用 `retryCount===0` 判断——循环后恒为 -1，是死代码**）；全部重试失败时，若本地缓存（`gameData` + `marketData`）已存在则**回退使用缓存**，仅完全无数据才抛「强制宕机」。`fetchData` 内的 `Promise.all` 请求带 **15s `AbortController` 超时**，避免网络挂起时一直阻塞挂载。
 - 缓存结构变更需做**旧缓存兼容**：`marketvolume-cache.test.ts` 即验证「旧结构（无 `volume`）被判过期清除，新结构（含 `volume`）保留」。
 
 ### 2.5 多语言 key
@@ -120,7 +122,7 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 ## 三、测试
 
 - 框架：**vitest + happy-dom**（`pnpm test`）。测试文件在 `tests/` 下。
-- **Mock 策略**：用 `vi` 控制模块（`vi.resetModules()` + 动态 `import` 重新加载 store，见 `marketvolume-cache.test.ts`）；纯计算逻辑（calculator）可直接断言数值；涉及 localStorage 的用例先 `localStorage.clear()`。
+- **Mock 策略**：用 `vi` 控制模块（`vi.resetModules()` + 动态 `import` 重新加载 store / 模块，见 `marketvolume-cache.test.ts`、`marketvolume-history.test.ts`）；纯计算逻辑（calculator）可直接断言数值；涉及 localStorage 的用例先 `localStorage.clear()`。
 - 既有测试清单（`tests/`）：
   - `bigset-c-verify`（大批量组合检索校验）
   - `chainbuilder-verify`（手动产业链计算）
@@ -128,6 +130,7 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
   - `cross-project-tail-verify`（及 `extended`，跨项目尾段校验）
   - `handle-best-per-item`（每物品最优方案）
   - `marketvolume-cache` / `marketvolume-verify`（市场监控缓存兼容与结果）
+  - `marketvolume-history`（涨跌历史：本地采样节流/强制、无历史空 map、时间窗涨跌百分比、基准/当前价缺失过滤；4 用例 `vi.resetModules` 重建模块隔离）
   - `demo`、`components/Notify`、`utils/validate`
 - **改动涉及缓存/价格/过滤逻辑时，建议补充对应 verify 测试**，与既有命名风格保持一致。
 

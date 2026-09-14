@@ -1,4 +1,4 @@
-import type { ProductPriceConfig, IngredientPriceConfig } from "@/calculator"
+import type { IngredientPriceConfig, ProductPriceConfig } from "@/calculator"
 import { TransmuteCalculator } from "@/calculator/alchemy"
 import { getGameDataApi, getMarketDataApi, getPriceOf } from "@/common/apis/game"
 import { getTrans } from "@/locales"
@@ -9,7 +9,7 @@ import { getTrans } from "@/locales"
  * 链路：冲泡精华 → 冲泡护符（逐级合成 basic→advanced→expert→master→grandmaster）→ 转化
  * - 实际价格：产出护符按市场真实成交价（bid）计；无流动性的护符按 0 价值（卖不出）
  * - 理想价格：产出护符若市场无人买/无人卖（无流动性），视为市场由用户主宰，
- *   挂价上限 = 该档护符「精华直接制作成本」（essenceCount × 精华ask），
+ *   挂价上限 = 该产出护符「自身精华直接制作成本」（essenceCount × 该护符精华ask），
  *   有流动性的护符仍按市场价计
  */
 
@@ -37,7 +37,7 @@ export interface CharmProductResult {
   /** 市场真实成交价（-1 = 无流动性） */
   askActual: number
   bidActual: number
-  /** 该档护符精华直接制作成本（挂价上限） */
+  /** 该产出护符自身精华直接制作成本（挂价上限） */
   essenceCost: number
   /** 是否无流动性（市场无人买卖）→ 由用户主宰挂价 */
   isIdeal: boolean
@@ -82,6 +82,13 @@ export function calcCharmTransformApi(catalystRank: number = 0): CharmTierResult
     const essenceCost = essencePrice > 0 ? essenceCount * essencePrice : -1
     const charmAskActual = getMarketDataApi().marketData[charmHrid]?.[0]?.ask ?? -1
 
+    // 产出护符自身精华直接制作成本：/items/basic_milking_charm → /items/milking_essence
+    const ownCraftCostOf = (charmHrid: string): number => {
+      const essenceHrid = charmHrid.replace(/\/items\/[^_]+_(.+)_charm$/, "/items/$1_essence")
+      const ask = getPriceOf(essenceHrid).ask
+      return ask > 0 ? essenceCount * ask : -1
+    }
+
     // 先实例化读取产出表，逐个判定流动性
     const probe = new TransmuteCalculator({ hrid: charmHrid, catalystRank })
     const productMeta = probe.productList.map((p) => {
@@ -89,7 +96,9 @@ export function calcCharmTransformApi(catalystRank: number = 0): CharmTierResult
       const ask = raw?.ask ?? -1
       const bid = raw?.bid ?? -1
       const hasLiquidity = ask >= 0 || bid >= 0
-      return { hrid: p.hrid, rate: p.rate ?? 1, ask, bid, hasLiquidity }
+      // 无流动性产出护符的挂价上限 = 其「自身精华」直接制作成本（而非投入冲泡护符成本）
+      const ownCraftCost = p.hrid.endsWith("_charm") ? ownCraftCostOf(p.hrid) : -1
+      return { hrid: p.hrid, rate: p.rate ?? 1, ask, bid, hasLiquidity, ownCraftCost }
     })
 
     // 投入护符自产成本注入（用户自制作冲泡护符，不按市场买入价）
@@ -103,7 +112,7 @@ export function calcCharmTransformApi(catalystRank: number = 0): CharmTierResult
     )
     const productIdealConfig: ProductPriceConfig[] = productMeta.map(p =>
       p.hrid.endsWith("_charm") && !p.hasLiquidity
-        ? { hrid: p.hrid, immutable: true, price: essenceCost > 0 ? essenceCost : 0 }
+        ? { hrid: p.hrid, immutable: true, price: p.ownCraftCost > 0 ? p.ownCraftCost : 0 }
         : undefined!
     )
 
@@ -128,9 +137,9 @@ export function calcCharmTransformApi(catalystRank: number = 0): CharmTierResult
       rate: p.rate,
       askActual: p.ask,
       bidActual: p.bid,
-      essenceCost: essenceCost > 0 ? essenceCost : -1,
+      essenceCost: p.ownCraftCost > 0 ? p.ownCraftCost : -1,
       isIdeal: !p.hasLiquidity,
-      bidIdeal: p.hasLiquidity ? p.bid : (essenceCost > 0 ? essenceCost : 0)
+      bidIdeal: p.hasLiquidity ? p.bid : (p.ownCraftCost > 0 ? p.ownCraftCost : 0)
     }))
 
     results.push({

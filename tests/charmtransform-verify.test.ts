@@ -12,7 +12,7 @@ describe("charmtransform 冲泡护符转化盈利验证", () => {
       const name = gameData.itemDetailMap[hrid].name
       const price = marketRaw.market?.[name]
       if (price && typeof price.ask === "number" && typeof price.bid === "number") {
-        marketData.marketData[hrid] = { 0: { ask: price.ask, bid: price.bid } }
+        marketData.marketData[hrid] = { 0: { ask: price.ask, bid: price.bid, price: price.ask, volume: 1 } }
       }
     }
     localStorage.setItem("game-game-data", JSON.stringify(gameData))
@@ -51,11 +51,12 @@ describe("charmtransform 冲泡护符转化盈利验证", () => {
     const rows = calcCharmTransformApi(2)
     for (const r of rows) {
       for (const p of r.products) {
-        if (p.isIdeal) {
-          // 无流动性 → 挂到精华成本上限
-          expect(p.bidIdeal).toBe(r.essenceCost)
+        if (p.isIdeal && p.hrid.endsWith("_charm")) {
+          // 无流动性护符 → 挂到「产出护符自身精华直接制作成本」上限
+          expect(p.essenceCost).toBeGreaterThan(0)
+          expect(p.bidIdeal).toBe(p.essenceCost)
           expect(p.bidActual).toBe(-1)
-        } else {
+        } else if (!p.isIdeal) {
           expect(p.bidIdeal).toBe(p.bidActual)
         }
       }
@@ -69,5 +70,29 @@ describe("charmtransform 冲泡护符转化盈利验证", () => {
     for (let i = 0; i < r0.length; i++) {
       expect(r2[i].successRate).toBeGreaterThanOrEqual(r0[i].successRate)
     }
+  })
+
+  it("左右价（买价/卖价）状态应影响计算结果", async () => {
+    const { nextTick } = await import("vue")
+    const { useGameStoreOutside, PriceStatus } = await import("@/pinia/stores/game")
+    const { calcCharmTransformApi } = await import("@/common/apis/charmtransform")
+    const store = useGameStoreOutside()
+    // 默认 ASK/BID
+    const base = calcCharmTransformApi(2)
+    // 切到 左价低一档/右价高一档
+    store.buyStatus = PriceStatus.ASK_LOW
+    store.sellStatus = PriceStatus.BID_HIGH
+    await nextTick()
+    const changed = calcCharmTransformApi(2)
+    let diffCount = 0
+    for (let i = 0; i < base.length; i++) {
+      if (base[i].profitActualPH !== changed[i].profitActualPH) diffCount++
+    }
+    // 复位
+    store.buyStatus = PriceStatus.ASK
+    store.sellStatus = PriceStatus.BID
+    await nextTick()
+    console.log("左右价切换后利润发生变化的档数：", diffCount, "/", base.length)
+    expect(diffCount).toBeGreaterThan(0)
   })
 })

@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { getMarketVolumeList, getMarketCategoryOptions, getMarketVolumeSummary, type MarketVolumeItem } from "@/common/apis/marketvolume"
+import { recordLocalSample, loadMarketHistory, getMarketChangeMap, getLocalSampleCount, getLastSampleTime, hasRemoteHistory } from "@/common/apis/marketvolume/history"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import * as Format from "@@/utils/format"
 import { useGameStoreOutside } from "@/pinia/stores/game"
@@ -24,7 +25,72 @@ const category = ref("")
 // 默认只看有成交：避免 3000+ 条无成交量记录淹没热门物品
 const onlyActive = ref(true)
 
-const NUMERIC_SORT_KEYS = ["volume", "turnover", "price", "ask", "bid", "itemLevel"] as const
+// 涨跌时间窗（小时）
+const WINDOW_OPTIONS = [1, 3, 6, 12, 24]
+const windowHours = ref(6)
+// 涨跌方向筛选
+const changeDir = ref<"all" | "up" | "down" | "flat">("all")
+// 服务端历史加载完成标记（触发涨跌重算）
+const historyReady = ref(false)
+const sampling = ref(false)
+
+onMounted(async () => {
+  recordLocalSample()
+  await loadMarketHistory()
+  historyReady.value = true
+})
+
+function handleSampleNow() {
+  sampling.value = true
+  try {
+    const added = recordLocalSample(true)
+    if (!added) {
+      ElMessage.warning(t("本地采样已是最新，无需重复记录"))
+    } else {
+      ElMessage.success(t("已记录历史采样点"))
+    }
+  } finally {
+    sampling.value = false
+  }
+}
+
+// 涨跌：当前价 vs 时间窗基准价
+const changeMap = computed(() => getMarketChangeMap(all.value, windowHours.value))
+const changeApplied = computed(() =>
+  all.value.map((i) => {
+    const c = changeMap.value.get(`${i.hrid}|${i.level}`)
+    i.changePct = c?.pct ?? null
+    i.changeBase = c?.base ?? null
+    return i
+  })
+)
+
+const localCount = computed(() => getLocalSampleCount())
+const lastSampleTime = computed(() => {
+  const t = getLastSampleTime()
+  return t ? new Date(t * 1000).toLocaleString() : "--"
+})
+
+const changeStat = computed(() => {
+  let up = 0
+  let down = 0
+  let flat = 0
+  for (const i of changeApplied.value) {
+    if (i.changePct == null) {
+      continue
+    }
+    if (i.changePct > 0) {
+      up++
+    } else if (i.changePct < 0) {
+      down++
+    } else {
+      flat++
+    }
+  }
+  return { up, down, flat }
+})
+
+const NUMERIC_SORT_KEYS = ["volume", "turnover", "price", "ask", "bid", "itemLevel", "changePct"] as const
 type NumericSortKey = (typeof NUMERIC_SORT_KEYS)[number]
 const sortKey = ref<NumericSortKey>("volume")
 const sortOrder = ref<"descending" | "ascending">("descending")
@@ -40,7 +106,7 @@ function handleSortChange({ prop, order }: { prop: string; order: string | null 
 }
 
 const filtered = computed(() => {
-  let r = all.value
+  let r = changeApplied.value
   const kw = keyword.value.trim().toLowerCase()
   if (kw) {
     r = r.filter((i) => t(i.name).toLowerCase().includes(kw) || i.hrid.toLowerCase().includes(kw))
@@ -50,6 +116,13 @@ const filtered = computed(() => {
   }
   if (onlyActive.value) {
     r = r.filter((i) => i.volume > 0)
+  }
+  if (changeDir.value === "up") {
+    r = r.filter((i) => i.changePct != null && i.changePct > 0)
+  } else if (changeDir.value === "down") {
+    r = r.filter((i) => i.changePct != null && i.changePct < 0)
+  } else if (changeDir.value === "flat") {
+    r = r.filter((i) => i.changePct != null && i.changePct === 0)
   }
   const dir = sortOrder.value === "ascending" ? 1 : -1
   return [...r].sort((a, b) => (Number(a[sortKey.value]) - Number(b[sortKey.value])) * dir)
@@ -61,7 +134,7 @@ const pageSize = ref(50)
 const total = computed(() => filtered.value.length)
 const list = computed(() => filtered.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
 watch(
-  [keyword, category, onlyActive, sortKey, sortOrder, all],
+  [keyword, category, onlyActive, changeDir, windowHours, historyReady, sortKey, sortOrder, all],
   () => {
     page.value = 1
   }
@@ -151,6 +224,29 @@ function fmtTime(value: number) {
           </el-select>
           <el-switch v-model="onlyActive" :active-text="t('只看有成交')" />
         </div>
+        <div class="flex flex-wrap items-center gap-2 mt-2">
+          <span class="text-sm text-gray-400">{{ t("时间窗") }}</span>
+          <el-radio-group v-model="windowHours" size="small">
+            <el-radio-button v-for="w in WINDOW_OPTIONS" :key="w" :value="w">{{ w }}{{ t("小时") }}</el-radio-button>
+          </el-radio-group>
+          <el-select v-model="changeDir" size="small" style="width: 110px">
+            <el-option :label="t('全部涨跌')" value="all" />
+            <el-option :label="t('上涨')" value="up" />
+            <el-option :label="t('下跌')" value="down" />
+            <el-option :label="t('持平')" value="flat" />
+          </el-select>
+          <span class="text-xs text-gray-400">
+            {{ t("涨") }} <span class="up">{{ changeStat.up }}</span> ·
+            {{ t("跌") }} <span class="down">{{ changeStat.down }}</span> ·
+            {{ t("平") }} <span class="flat">{{ changeStat.flat }}</span>
+          </span>
+          <div class="flex-1" />
+          <el-button size="small" :loading="sampling" @click="handleSampleNow">{{ t("立即采样") }}</el-button>
+          <span class="text-xs text-gray-400">
+            {{ t("历史采样点") }}：{{ localCount }}<template v-if="hasRemoteHistory()"> + {{ t("线上历史") }}</template>
+            · {{ t("最近采样") }}：{{ lastSampleTime }}
+          </span>
+        </div>
       </template>
 
       <el-table :data="list" size="small" :default-sort="{ prop: 'volume', order: 'descending' }" @sort-change="handleSortChange">
@@ -173,6 +269,14 @@ function fmtTime(value: number) {
         <el-table-column prop="itemLevel" :label="t('等级')" align="center" min-width="70" sortable="custom" />
         <el-table-column prop="price" :label="t('价格')" align="right" min-width="100" sortable="custom">
           <template #default="{ row }">{{ row.price > 0 ? Format.number(row.price, 0) : "--" }}</template>
+        </el-table-column>
+        <el-table-column prop="changePct" :label="t('涨跌')" align="right" min-width="110" sortable="custom">
+          <template #default="{ row }">
+            <span v-if="row.changePct == null" class="text-gray-400">--</span>
+            <span v-else :class="row.changePct > 0 ? 'up' : row.changePct < 0 ? 'down' : 'flat'">
+              {{ row.changePct > 0 ? "+" : "" }}{{ row.changePct.toFixed(2) }}%
+            </span>
+          </template>
         </el-table-column>
         <el-table-column prop="ask" :label="t('卖价')" align="right" min-width="100" sortable="custom">
           <template #default="{ row }">{{ row.ask > 0 ? Format.number(row.ask, 0) : "--" }}</template>
@@ -250,5 +354,17 @@ function fmtTime(value: number) {
 .top10-vol {
   color: var(--el-color-success);
   font-weight: 600;
+}
+/* 涨跌配色：红涨绿跌（A 股习惯） */
+.up {
+  color: #f56c6c;
+  font-weight: 600;
+}
+.down {
+  color: #67c23a;
+  font-weight: 600;
+}
+.flat {
+  color: var(--el-text-color-secondary);
 }
 </style>

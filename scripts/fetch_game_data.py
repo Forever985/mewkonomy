@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import requests
 import hashlib
 import subprocess
@@ -11,8 +12,14 @@ DATA_URL = [
     "https://raw.githubusercontent.com/holychikenz/MWIApi/main/milkyapi.json",
 ]
 
+# 官方市场快照（与前端展示同源），用于涨跌历史归档
+MARKETPLACE_URL = "https://www.milkywayidle.com/game_data/marketplace.json"
+
 OUTPUT_DIR = "./public/data"
 OUTPUT_JSON = [f"{OUTPUT_DIR}/data.json", f"{OUTPUT_DIR}/market.json"]
+HISTORY_JSON = f"{OUTPUT_DIR}/market_history.json"
+# 历史采样窗口（与前端 history.ts 保持一致）
+HISTORY_WINDOW_SEC = 26 * 3600
 
 def get_file_hash(data: Dict[str, Any]) -> str:
     """计算数据的 MD5 哈希值"""
@@ -38,6 +45,31 @@ def load_existing_json(file_path: str) -> Dict[str, Any] | None:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
+
+def update_market_history(marketplace_data: Dict[str, Any]) -> bool:
+    """将官方 marketplace 快照追加为历史采样点（滚动保留最近 26h）。返回是否新增。"""
+    md = marketplace_data.get("marketData")
+    timestamp = marketplace_data.get("timestamp") or marketplace_data.get("time")
+    if not md or not timestamp:
+        return False
+    existing = load_existing_json(HISTORY_JSON)
+    history = existing if isinstance(existing, list) else []
+    # 同一时间戳去重（官方数据可能同 tick 重复拉取）
+    if history and history[-1].get("t") == timestamp:
+        return False
+    sample = {"t": timestamp, "p": {}}
+    for hrid, entry in (md.items() if isinstance(md, dict) else []):
+        pp = {}
+        if isinstance(entry, dict):
+            for level, e in entry.items():
+                if isinstance(e, dict):
+                    pp[level] = [e.get("a"), e.get("p")]
+        sample["p"][hrid] = pp
+    history.append(sample)
+    now = time.time()
+    history = [h for h in history if now - h["t"] < HISTORY_WINDOW_SEC]
+    save_as_json(history, HISTORY_JSON)
+    return True
 
 def deploy_to_gh_pages() -> None:
     """部署 public/data 到 gh-pages 分支"""
@@ -112,6 +144,17 @@ def main() -> None:
                 print(f"Old Time: {existing_data.get('time')}")
             else:
                 print(f"No changes in: {output_file}")
+
+    # 归档市场历史采样（每次运行都拉官方 marketplace；即使其它数据无变化也会新增采样点）
+    try:
+        mp = fetch_data(MARKETPLACE_URL)
+        if update_market_history(mp):
+            has_changes = True
+            print("Updated market history")
+        else:
+            print("Market history: no new sample (same timestamp)")
+    except Exception as e:
+        print(f"⚠️ Market history update failed: {e}")
 
     # 若有变更，直接部署到 gh-pages
     if has_changes:
