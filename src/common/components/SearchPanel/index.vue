@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { useI18n } from "vue-i18n"
 import { Delete, Plus } from "@element-plus/icons-vue"
+import SortPriority from "@@/components/SortPriority/index.vue"
 import type { PanelField, PanelProjectOptions, PanelSearchData } from "./types"
 
 /**
@@ -73,6 +74,14 @@ function removeExclude(index: number) {
   props.modelValue.excludes?.splice(index, 1)
   emit("change")
 }
+
+/**
+ * 暴露内部 SortPriority 的实例。
+ * 有的页面（enhanceexp）在表头排序时需要调用它的 applyHeaderSort()，
+ * 面板把它透传出去，页面可按需访问 panelRef.value?.sortPriorityRef。
+ */
+const sortPriorityRef = ref<InstanceType<typeof SortPriority> | null>(null)
+defineExpose({ sortPriorityRef })
 </script>
 
 <template>
@@ -115,7 +124,7 @@ function removeExclude(index: number) {
                 v-model="cond.steps"
                 :placeholder="t(field.stepsPlaceholder || '不限（默认全部）')"
                 clearable
-                style="width:130px"
+                :style="{ width: `${field.stepsWidth || 130}px` }"
                 @change="emit('change')"
               >
                 <el-option
@@ -151,13 +160,13 @@ function removeExclude(index: number) {
                 />
               </template>
 
-              <!-- 动作型 -->
+              <!-- 动作型（levelRange 型没有动作列，projectOptions 缺省时也不渲染） -->
               <el-select
-                v-else
+                v-else-if="field.projectOptions"
                 v-model="cond.project"
                 :placeholder="t(field.projectPlaceholder || '动作不限')"
                 clearable
-                style="width:130px"
+                :style="{ width: `${field.projectWidth || 130}px` }"
                 @change="emit('change')"
               >
                 <el-option
@@ -297,7 +306,8 @@ function removeExclude(index: number) {
         <!-- 排序优先级 -->
         <el-form-item v-else-if="field.type === 'sort'" :label="fieldLabel(field)">
           <SortPriority
-            v-model="modelValue[field.key] as any"
+            ref="sortPriorityRef"
+            v-model="(modelValue[field.key] as any)"
             :fields="field.fields"
             :default-prop="field.defaultProp"
             @change="emit('change')"

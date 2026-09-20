@@ -2,9 +2,12 @@
 import type Calculator from "@/calculator"
 import { getLeaderboardDataApi } from "@@/apis/manualchemy"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
+import SearchPanel from "@@/components/SearchPanel/index.vue"
+import type { PanelField } from "@@/components/SearchPanel/types"
 import { usePagination } from "@@/composables/usePagination"
-import { Delete, Edit, Plus, Search, Warning } from "@element-plus/icons-vue"
-import { ElMessageBox, type FormInstance, type Sort } from "element-plus"
+import { normalizeSearchData } from "@@/composables/useSearchPanel"
+import { Edit, Search, Warning } from "@element-plus/icons-vue"
+import { ElMessageBox, type Sort } from "element-plus"
 import { cloneDeep, debounce } from "lodash-es"
 
 import { getActionConfigOf, getActionLevelBonusOf } from "@/common/apis/player"
@@ -24,7 +27,6 @@ import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 // #region 查
 const { paginationData: paginationDataLD, handleCurrentChange: handleCurrentChangeLD, handleSizeChange: handleSizeChangeLD } = usePagination({}, "dashboard-leaderboard-pagination")
 const leaderboardData = ref<Calculator[]>([])
-const ldSearchFormRef = ref<FormInstance | null>(null)
 
 const ldSearchData = useMemory("dashboard-manualchemy-search-data", {
   name: [],
@@ -35,34 +37,39 @@ const ldSearchData = useMemory("dashboard-manualchemy-search-data", {
   compare: false,
   showAllVariants: false
 })
-// 兼容旧版字符串 name，迁移为数组（多物品选择）
-if (typeof ldSearchData.value.name === "string") {
-  ldSearchData.value.name = ldSearchData.value.name ? [ldSearchData.value.name] : []
-}
-// 旧数据迁移：project/steps → conditions，profitRate → minProfitRate
-if (!Array.isArray(ldSearchData.value.conditions)) {
-  const old = ldSearchData.value
-  ldSearchData.value.conditions = [{
-    steps: old.steps ?? undefined,
-    project: old.project || undefined
-  }]
-}
-if (ldSearchData.value.profitRate != null && ldSearchData.value.minProfitRate == null) {
-  ldSearchData.value.minProfitRate = ldSearchData.value.profitRate
-}
-// 清理旧字段，避免残留参数干扰组合条件过滤
-delete ldSearchData.value.project
-delete ldSearchData.value.steps
-delete ldSearchData.value.profitRate
+// 历史结构迁移统一走 normalizeSearchData（原先这里手写了迁移样板）
+normalizeSearchData(ldSearchData.value)
 
 /** 可检索的动作列表（专业） */
 const projectOptions = ["挤奶", "采摘", "伐木", "锻造", "制造", "裁缝", "烹饪", "冲泡", "点金", "分解", "转化"]
-function addCondition() {
-  ldSearchData.value.conditions.push({ steps: undefined, project: undefined })
-}
-function removeCondition(index: number) {
-  ldSearchData.value.conditions.splice(index, 1)
-}
+
+/** 搜索面板配置：字段顺序/文案/边界与原手写模板完全一致 */
+const panelFields: PanelField[] = [
+  { type: "name", key: "name", label: "物品" },
+  {
+    type: "conditions",
+    label: "条件",
+    projectOptions,
+    stepsCount: 10,
+    stepsWidth: 92,
+    projectWidth: 110,
+    stepsPlaceholder: "步数不限",
+    stepLabel: n => `${n}${t("步")}`
+  },
+  {
+    type: "range",
+    label: "利润率",
+    minKey: "minProfitRate",
+    maxKey: "maxProfitRate",
+    min: 0,
+    unit: "%",
+    placeholderMin: "0",
+    placeholderMax: "100"
+  },
+  { type: "checkbox", key: "banEquipment", label: "排除装备" },
+  { type: "checkbox", key: "compare", label: "比较模式" },
+  { type: "checkbox", key: "showAllVariants", label: "显示全部多样产业链" }
+]
 
 const loadingLD = ref(false)
 const getLeaderboardData = debounce(() => {
@@ -153,62 +160,7 @@ const onPriceStatusChange = usePriceStatus("manualchemy-price-status")
       <el-col :xs="24" :sm="24" :md="24" :lg="24" :xl="14">
         <el-card>
           <template #header>
-            <el-form class="rank-card" ref="ldSearchFormRef" :inline="true" :model="ldSearchData">
-              <div class="title">
-                {{ t('利润排行') }}
-              </div>
-              <el-form-item prop="name" :label="t('物品')">
-                <el-select
-                  v-model="ldSearchData.name"
-                  multiple
-                  filterable
-                  allow-create
-                  default-first-option
-                  :reserve-keyword="false"
-                  :placeholder="t('输入多个物品名，回车添加')"
-                  style="width:220px"
-                  clearable
-                  @change="handleSearchLD"
-                />
-              </el-form-item>
-              <el-form-item :label="t('条件')" style="width:100%; margin-right:0;">
-                <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
-                  <div v-for="(cond, i) in ldSearchData.conditions" :key="i" style="display:flex; align-items:center; gap:8px;">
-                    <el-select v-model="cond.steps" :placeholder="t('步数不限')" clearable style="width:92px" @change="handleSearchLD">
-                      <el-option v-for="n in 10" :key="n" :label="`${n}${t('步')}`" :value="n" />
-                    </el-select>
-                    <el-select v-model="cond.project" :placeholder="t('动作不限')" clearable style="width:110px" @change="handleSearchLD">
-                      <el-option v-for="p in projectOptions" :key="p" :label="t(p)" :value="t(p)" />
-                    </el-select>
-                    <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
-                  </div>
-                  <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('利润率')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number v-model="ldSearchData.minProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />&nbsp;%
-                  <span>~</span>
-                  <el-input-number v-model="ldSearchData.maxProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="100" />&nbsp;%
-                </div>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.banEquipment" @change="handleSearchLD">
-                  {{ t('排除装备') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.compare" @change="handleSearchLD">
-                  {{ t('比较模式') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.showAllVariants" @change="handleSearchLD">
-                  {{ t('显示全部多样产业链') }}
-                </el-checkbox>
-              </el-form-item>
-            </el-form>
+            <SearchPanel v-model="ldSearchData" :fields="panelFields" title="利润排行" @change="handleSearchLD" />
           </template>
           <template #default>
             <el-table :data="leaderboardData" v-loading="loadingLD" @sort-change="handleSortLD">
@@ -359,15 +311,6 @@ const onPriceStatusChange = usePriceStatus("manualchemy-price-status")
 </template>
 
 <style lang="scss" scoped>
-.rank-card {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  .title {
-    width: 160px;
-    margin-bottom: 12px;
-  }
-}
 .pager-wrapper {
   display: flex;
   justify-content: center;

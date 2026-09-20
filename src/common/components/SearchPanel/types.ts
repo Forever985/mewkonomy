@@ -87,9 +87,17 @@ export interface ConditionsField extends FieldBase {
   stepsCount?: number
   /** 首列展示模板，默认 `${t("目标等级")} ${n}` */
   stepLabel?: (n: number) => string
+  /** 首列宽度（px），默认 130；manualchemy 用 92 */
+  stepsWidth?: number
+  /** 动作下拉宽度（px），默认 130；manualchemy 用 110 */
+  projectWidth?: number
   stepsPlaceholder?: string
   projectPlaceholder?: string
-  projectOptions: PanelProjectOptions
+  /**
+   * 动作下拉的可选项。
+   * `levelRange` 型条件（enhanceexp 的「只看目标等级」）没有动作列，故为可选。
+   */
+  projectOptions?: PanelProjectOptions
   /** 是否渲染右侧的 min/max 等级输入（enhanceexp 用） */
   levelRange?: { min: number, max: number, placeholderMin?: string, placeholderMax?: string }
   /** 行下方的小字提示 */
@@ -118,11 +126,16 @@ export interface CheckboxField extends FieldBase {
   onChange?: () => void
 }
 
+/** 下拉选项：静态数组，或（可能是 computed 的）取值函数 */
+export type PanelOptionSource =
+  | Array<{ label: string, value: string | number }>
+  | (() => Array<{ label: string, value: string | number }>)
+
 /** 下拉选择 */
 export interface SelectField extends FieldBase {
   type: "select"
   key: string
-  options: Array<{ label: string, value: string | number }> | (() => Array<{ label: string, value: string | number }>)
+  options: PanelOptionSource
   width?: number
 }
 
