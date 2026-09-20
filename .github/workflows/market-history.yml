@@ -1,0 +1,59 @@
+name: Market History Sampling
+
+# 每 20 分钟抓一次官方市场快照，追加到 data/market_history.json（滚动 7 天）。
+#
+# 为什么独立成一条 workflow：
+#   原先历史采样和「游戏数据抓取」绑在同一个 job 里，只要 data.json 的上游源挂掉，
+#   历史采样就一起停摆。（实测线上因此连续 8 天没有任何新采样点。）
+#   本 workflow 只依赖官方 marketplace.json —— 端点约 0.4s 响应、极稳定 ——
+#   与游戏数据抓取彻底解耦。
+#
+# 注意：GitHub 的定时任务在高峰期会延迟甚至跳过，所以这里用「高频 + 按时间戳去重」
+#   的策略：跑得比需要的频繁，重复的自动忽略，从而在延迟下仍能拿到较密的采样序列。
+
+on:
+  schedule:
+    # 每 20 分钟（GitHub 允许的最小间隔是 5 分钟；20 分钟在负载与密度间折中）
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+
+# 同一时间只跑一个，避免两次运行同时推送 gh-pages 互相冲突
+concurrency:
+  group: market-history-sampling
+  cancel-in-progress: false
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    # 采样本身只需几秒；给足余量但不占用过多额度
+    timeout-minutes: 10
+    permissions:
+      contents: write # 推送 gh-pages 需要写权限
+    env:
+      GITHUB_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch sampler script from main branch
+        run: |
+          git fetch origin main:main
+          git checkout main -- scripts/sample_market_history.py
+        shell: bash
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade --disable-pip-version-check requests
+
+      - name: Sample and deploy
+        run: python scripts/sample_market_history.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,12 +1,20 @@
 name: Update Game Data
 
-# 每小时归档一个市场历史采样点，供前端「涨跌」计算使用
+# 每天抓一次上游游戏数据（data.json / market.json），有变化才推 gh-pages。
+#
+# 频率说明：游戏数据只在游戏版本更新时变化，原本每小时跑一次纯属浪费配额。
+# 市场历史采样已拆到独立的高频 workflow（market-history.yml），不在本文件里。
+#
+# 安全护栏：scripts/fetch_game_data.py 里加了「禁止降级」判断——
+# 抓到 `versionTimestamp` 比线上已部署更旧的数据时直接拒绝写入，
+# 避免上游源停留在旧版本时反向覆盖线上新数据。
+
 on:
   schedule:
-    - cron: "0 * * * *"
+    # 每天 UTC 00:20（避开整点的调度高峰）
+    - cron: "20 0 * * *"
   workflow_dispatch:
 
-# 同一时间只跑一个，避免两次运行同时推送 gh-pages 互相冲突
 concurrency:
   group: update-game-data
   cancel-in-progress: false
@@ -14,7 +22,7 @@ concurrency:
 jobs:
   update-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: write # 推送 gh-pages 分支需要写权限
     env:
@@ -24,17 +32,17 @@ jobs:
       - name: Checkout gh-pages branch
         uses: actions/checkout@v4
         with:
-          ref: gh-pages # 强制检出 gh-pages 分支
-          fetch-depth: 0 # 需要能取到 main 的提交来拿脚本
+          ref: gh-pages
+          fetch-depth: 0
           # 用内置 token（下面 permissions: contents: write 已授权），
           # 不再依赖自定义 secret，避免 secret 缺失/过期导致必然失败
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 2. 从 main 分支获取 fetch_game_data.py 脚本（脚本只在 main 上维护）
-      - name: Fetch script from main branch
+      # 2. 从 main 分支获取脚本（脚本只在 main 上维护）
+      - name: Fetch scripts from main branch
         run: |
           git fetch origin main:main  # 将远程 main 分支拉取到本地 main 分支
-          git checkout main -- scripts/fetch_game_data.py  # 从 main 分支提取脚本
+          git checkout main -- scripts/fetch_game_data.py
         shell: bash
 
       # 3. 设置 Python 环境
@@ -43,7 +51,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      # 4. 安装依赖（ghp-import 已不再使用）
+      # 4. 安装依赖
       - name: Install dependencies
         run: python -m pip install --upgrade --disable-pip-version-check requests
 
