@@ -32,7 +32,7 @@ function fieldLabel(field: { label: string, labelPrefix?: string, labelSuffix?: 
 }
 
 /** 求出可选项数组（支持传函数，便于用页面里已有的 computed） */
-function resolveOptions(source: PanelProjectOptions | Array<{ label: string, value: string | number }> | (() => Array<{ label: string, value: string | number }>)): any[] {
+function resolveOptions(source: PanelProjectOptions | Array<{ label: string, value: string | number }> | (() => Array<{ label: string, value: string | number }> | string[])): any[] {
   const raw = typeof source === "function" ? source() : source
   if (!Array.isArray(raw)) return []
   // 字符串数组统一转成 {label,value}；此时 label 走 t() 翻译

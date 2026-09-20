@@ -2,9 +2,12 @@
 import type Calculator from "@/calculator"
 import { getLeaderboardDataApi } from "@@/apis/leaderboard"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
+import SearchPanel from "@@/components/SearchPanel/index.vue"
+import type { PanelField } from "@@/components/SearchPanel/types"
 import { usePagination } from "@@/composables/usePagination"
-import { Delete, Edit, Plus, Search, Star, StarFilled, Warning } from "@element-plus/icons-vue"
-import { ElMessageBox, type FormInstance, type Sort } from "element-plus"
+import { normalizeSearchData } from "@@/composables/useSearchPanel"
+import { Delete, Edit, Search, Star, StarFilled, Warning } from "@element-plus/icons-vue"
+import { ElMessageBox, type Sort } from "element-plus"
 import { cloneDeep, debounce } from "lodash-es"
 import { WorkflowCalculator } from "@/calculator/workflow"
 
@@ -28,7 +31,6 @@ import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 const favoriteStore = useFavoriteStore()
 const { paginationData: paginationDataLD, handleCurrentChange: handleCurrentChangeLD, handleSizeChange: handleSizeChangeLD } = usePagination({}, "dashboard-leaderboard-pagination")
 const leaderboardData = ref<Calculator[]>([])
-const ldSearchFormRef = ref<FormInstance | null>(null)
 
 const ldSearchData = useMemory("dashboard-leaderboard-search-data", {
   name: [],
@@ -75,25 +77,76 @@ ldSearchData.value.conditions.forEach((c: any) => {
   delete c.minLevel
   delete c.maxLevel
 })
-delete ldSearchData.value.project
-delete ldSearchData.value.steps
-delete ldSearchData.value.actionLevel
-delete ldSearchData.value.profitRate
+// 收尾的通用清理（name 归一、conditions/excludes 补数组、profitRate 归一）统一走共用实现
+normalizeSearchData(ldSearchData.value)
 
 /** 可检索的动作列表（专业） */
 const projectOptions = ["挤奶", "采摘", "伐木", "锻造", "制造", "裁缝", "烹饪", "冲泡", "点金", "分解", "转化"]
-function addCondition() {
-  ldSearchData.value.conditions.push({ steps: undefined, project: undefined })
-}
-function removeCondition(index: number) {
-  ldSearchData.value.conditions.splice(index, 1)
-}
-function addExclude() {
-  ldSearchData.value.excludes.push({ name: undefined, project: undefined })
-}
-function removeExclude(index: number) {
-  ldSearchData.value.excludes.splice(index, 1)
-}
+/** 搜索面板配置：字段顺序/文案/边界与原手写模板完全一致 */
+const mainPanelFields: PanelField[] = [
+  { type: "name", key: "name", label: "物品" },
+  {
+    type: "conditions",
+    label: "条件",
+    projectOptions,
+    stepsCount: 10,
+    stepsWidth: 110,
+    stepLabel: n => `${n}${t("步")}`
+  },
+  {
+    type: "range",
+    label: "要求等级",
+    minKey: "minLevel",
+    maxKey: "maxLevel",
+    min: 0,
+    max: 120,
+    placeholderMin: "0",
+    placeholderMax: "120"
+  },
+  {
+    type: "range",
+    label: "利润率",
+    minKey: "minProfitRate",
+    maxKey: "maxProfitRate",
+    min: 0,
+    unit: "%",
+    placeholderMin: "0",
+    placeholderMax: "100"
+  },
+  {
+    type: "range",
+    label: "风险",
+    minKey: "minRisk",
+    maxKey: "maxRisk",
+    min: 0,
+    placeholderMin: "0",
+    placeholderMax: "∞"
+  },
+  {
+    type: "excludes",
+    label: "排除",
+    projectOptions,
+    namePlaceholder: "排除的产品名",
+    projectPlaceholder: "排除的生产动作，留空=该产品全部"
+  },
+  { type: "checkbox", key: "banEquipment", label: "排除装备" },
+  { type: "checkbox", key: "banJewelry", label: "排除首饰" },
+  { type: "checkbox", key: "banCombat", label: "排除战斗装备" },
+  { type: "checkbox", key: "banLife", label: "排除生活装备" },
+  { type: "checkbox", key: "compare", label: "比较模式" }
+]
+
+/** 收藏夹的搜索面板：物品名 + 动作（原模板的 11 个动作选项即 projectOptions） */
+const favoritePanelFields: PanelField[] = [
+  { type: "name", key: "name", label: "物品" },
+  {
+    type: "select",
+    key: "project",
+    label: "动作",
+    width: 100,
+    options: () => projectOptions
+  }
+]
 
 const loadingLD = ref(false)
 
@@ -137,7 +190,6 @@ watch([
 
 const { paginationData: paginationDataMN, handleCurrentChange: handleCurrentChangeFR, handleSizeChange: handleSizeChangeFR } = usePagination({}, "dashboard-favorite-pagination")
 const favoriteData = ref<Calculator[]>([])
-const frSearchFormRef = ref<FormInstance | null>(null)
 const frSearchData = useMemory("dashboard-favorite-search-data", {
   name: [],
   project: ""
@@ -254,112 +306,7 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
       <el-col :xs="24" :sm="24" :md="24" :lg="24" :xl="16">
         <el-card>
           <template #header>
-            <el-form class="rank-card" ref="ldSearchFormRef" :inline="true" :model="ldSearchData">
-              <div class="title">
-                {{ t('利润排行') }}
-              </div>
-              <el-form-item prop="name" :label="t('物品')">
-                <el-select
-                  v-model="ldSearchData.name"
-                  multiple
-                  filterable
-                  allow-create
-                  default-first-option
-                  :reserve-keyword="false"
-                  :placeholder="t('输入多个物品名，回车添加')"
-                  style="width:220px"
-                  clearable
-                  @change="handleSearchLD"
-                />
-              </el-form-item>
-              <el-form-item :label="t('条件')" style="width:100%; margin-right:0;">
-                <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
-                  <div v-for="(cond, i) in ldSearchData.conditions" :key="i" style="display:flex; align-items:center; gap:8px;">
-                    <el-select v-model="cond.steps" :placeholder="t('步数不限')" clearable style="width:110px" @change="handleSearchLD">
-                      <el-option v-for="n in 10" :key="n" :label="`${n}${t('步')}`" :value="n" />
-                    </el-select>
-                    <el-select v-model="cond.project" :placeholder="t('动作不限')" clearable style="width:130px" @change="handleSearchLD">
-                      <el-option v-for="p in projectOptions" :key="p" :label="t(p)" :value="t(p)" />
-                    </el-select>
-                    <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
-                  </div>
-                  <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('要求等级')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number v-model="ldSearchData.minLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />
-                  <span>~</span>
-                  <el-input-number v-model="ldSearchData.maxLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="120" />
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('利润率')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number v-model="ldSearchData.minProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />&nbsp;%
-                  <span>~</span>
-                  <el-input-number v-model="ldSearchData.maxProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="100" />&nbsp;%
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('风险')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number v-model="ldSearchData.minRisk" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />
-                  <span>~</span>
-                  <el-input-number v-model="ldSearchData.maxRisk" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="∞" />
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('排除')" style="width:100%; margin-right:0;">
-                <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
-                  <div v-for="(ex, i) in ldSearchData.excludes" :key="i" style="display:flex; align-items:center; gap:8px;">
-                    <el-select
-                      v-model="ex.name"
-                      filterable
-                      allow-create
-                      default-first-option
-                      :reserve-keyword="false"
-                      :placeholder="t('排除的产品名')"
-                      clearable
-                      style="width:220px"
-                      @change="handleSearchLD"
-                    />
-                    <el-select v-model="ex.project" :placeholder="t('排除的生产动作，留空=该产品全部')" clearable style="width:280px" @change="handleSearchLD">
-                      <el-option v-for="p in projectOptions" :key="p" :label="t(p)" :value="t(p)" />
-                    </el-select>
-                    <el-button v-if="ldSearchData.excludes.length > 1" type="danger" :icon="Delete" link @click="removeExclude(i)" />
-                  </div>
-                  <el-button size="small" :icon="Plus" @click="addExclude">{{ t('添加排除') }}</el-button>
-                </div>
-              </el-form-item>
-
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.banEquipment" @change="handleSearchLD">
-                  {{ t('排除装备') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.banJewelry" @change="handleSearchLD">
-                  {{ t('排除首饰') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.banCombat" @change="handleSearchLD">
-                  {{ t('排除战斗装备') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.banLife" @change="handleSearchLD">
-                  {{ t('排除生活装备') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.compare" @change="handleSearchLD">
-                  {{ t('比较模式') }}
-                </el-checkbox>
-              </el-form-item>
-            </el-form>
+<SearchPanel v-model="ldSearchData" :fields="mainPanelFields" title="利润排行" @change="handleSearchLD" />
           </template>
           <template #default>
             <el-table :data="leaderboardData" v-loading="loadingLD" @sort-change="handleSortLD">
@@ -519,40 +466,7 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
       <el-col :xs="24" :sm="24" :md="24" :lg="24" :xl="16">
         <el-card>
           <template #header>
-            <el-form class="rank-card" ref="frSearchFormRef" :inline="true" :model="frSearchData">
-              <div class="title">
-                {{ t('收藏夹') }}
-              </div>
-              <el-form-item prop="name" :label="t('物品')">
-                <el-select
-                  v-model="frSearchData.name"
-                  multiple
-                  filterable
-                  allow-create
-                  default-first-option
-                  :reserve-keyword="false"
-                  :placeholder="t('输入多个物品名，回车添加')"
-                  style="width:220px"
-                  clearable
-                  @change="handleSearchMN"
-                />
-              </el-form-item>
-              <el-form-item prop="phone" :label="t('动作')">
-                <el-select v-model="frSearchData.project" :placeholder="t('请选择')" style="width:100px" clearable @change="handleSearchMN">
-                  <el-option :label="t('挤奶')" :value="t('挤奶')" />
-                  <el-option :label="t('采摘')" :value="t('采摘')" />
-                  <el-option :label="t('伐木')" :value="t('伐木')" />
-                  <el-option :label="t('锻造')" :value="t('锻造')" />
-                  <el-option :label="t('制造')" :value="t('制造')" />
-                  <el-option :label="t('裁缝')" :value="t('裁缝')" />
-                  <el-option :label="t('烹饪')" :value="t('烹饪')" />
-                  <el-option :label="t('冲泡')" :value="t('冲泡')" />
-                  <el-option :label="t('点金')" :value="t('点金')" />
-                  <el-option :label="t('分解')" :value="t('分解')" />
-                  <el-option :label="t('转化')" :value="t('转化')" />
-                </el-select>
-              </el-form-item>
-            </el-form>
+<SearchPanel v-model="frSearchData" :fields="favoritePanelFields" title="收藏夹" @change="handleSearchMN" />
           </template>
           <template #default>
             <el-table :data="favoriteData" v-loading="loadingFR">
@@ -644,15 +558,6 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
 </template>
 
 <style lang="scss" scoped>
-.rank-card {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  .title {
-    width: 160px;
-    margin-bottom: 12px;
-  }
-}
 .pager-wrapper {
   display: flex;
   justify-content: center;

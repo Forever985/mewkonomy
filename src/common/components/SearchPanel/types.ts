@@ -126,10 +126,11 @@ export interface CheckboxField extends FieldBase {
   onChange?: () => void
 }
 
-/** 下拉选项：静态数组，或（可能是 computed 的）取值函数 */
+/** 下拉选项：静态数组（字符串数组会被翻译后转成 label/value），或（可能是 computed 的）取值函数 */
 export type PanelOptionSource =
   | Array<{ label: string, value: string | number }>
-  | (() => Array<{ label: string, value: string | number }>)
+  | string[]
+  | (() => Array<{ label: string, value: string | number }> | string[])
 
 /** 下拉选择 */
 export interface SelectField extends FieldBase {
