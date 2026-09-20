@@ -189,6 +189,24 @@ def is_downgrade(new_data: Any, existing_data: Any) -> bool:
     return new_stamp < old_stamp
 
 
+def assert_no_unintended_deletions(repo_dir: str, owned_files: set) -> None:
+    """
+    确认本次改动只涉及 owned_files：若 git status 里出现本脚本不负责的删除，直接失败。
+
+    gh-pages 的 data/ 由多个脚本共享写入，谁都不该顺手删掉别人的文件
+    （历史上曾因整目录替换把 data.json / market.json 删掉）。
+    """
+    result = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True, check=True
+    )
+    offending = [line for line in result.stdout.splitlines() if "D" in line[:2] and os.path.basename(line[3:].strip()) not in owned_files]
+    if offending:
+        raise SystemExit(
+            "[x] 拒绝部署：本次改动删除了非本脚本负责的文件，已中止以免误删线上数据：\n"
+            + "\n".join("    " + o for o in offending)
+        )
+
+
 def deploy_to_gh_pages() -> None:
     """部署 public/data 到 gh-pages 分支"""
     if DRY_RUN:
@@ -221,10 +239,19 @@ def deploy_to_gh_pages() -> None:
             check=True,
         )
 
+        # —— 只覆盖本脚本负责的文件，绝不整目录替换 ——
+        # gh-pages 的 data/ 是「多来源共享目录」：market_history.json 由
+        # sample_market_history.py 高频写入。整目录 rmtree+copytree 会在
+        # OUTPUT_DIR 不完整时误删别人的文件，因此改为按文件合并。
         target_data_dir = os.path.join(temp_dir, "data")
-        if os.path.exists(target_data_dir):
-            shutil.rmtree(target_data_dir)
-        shutil.copytree(OUTPUT_DIR, target_data_dir)
+        os.makedirs(target_data_dir, exist_ok=True)
+        for filename in DATA_FILES:
+            source_file = os.path.join(OUTPUT_DIR, filename)
+            if os.path.exists(source_file):
+                shutil.copy2(source_file, os.path.join(target_data_dir, filename))
+
+        # 双保险：确认没有意外删除本脚本不负责的文件
+        assert_no_unintended_deletions(temp_dir, set(DATA_FILES))
 
         result = subprocess.run(
             ["git", "status", "--porcelain"],

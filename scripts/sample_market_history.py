@@ -128,7 +128,34 @@ def build_sample(marketplace: Dict[str, Any]) -> Dict[str, Any]:
     return sample
 
 
-def deploy_to_gh_pages() -> None:
+def assert_no_unintended_deletions(repo_dir: str, owned_files: set) -> None:
+    """
+    确认本次改动只涉及 owned_files：若 git status 里出现本脚本不负责的删除/修改，直接失败。
+
+    gh-pages 的 data/ 由多个脚本共享写入，谁都不该顺手删掉别人的文件。
+    """
+    result = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True, check=True
+    )
+    offending = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        code, path = line[:2], line[3:].strip()
+        name = os.path.basename(path)
+        # 只允许「新增/修改/未跟踪」本脚本负责的文件；任何删除都算越权
+        if "D" in code and name not in owned_files:
+            offending.append(line)
+        elif path.startswith("data/") and name not in owned_files and "D" not in code and code.strip() not in ("", "??"):
+            offending.append(line)
+    if offending:
+        raise SystemExit(
+            "[x] 拒绝部署：本次改动波及了非本脚本负责的文件，已中止以免误删线上数据：\n"
+            + "\n".join("    " + o for o in offending)
+        )
+
+
+def deploy_to_gh_pages(output_file: str) -> None:
     if DRY_RUN:
         print("[DRY_RUN] 跳过部署（数据已写入 " + OUTPUT_DIR + "）")
         return
@@ -155,10 +182,17 @@ def deploy_to_gh_pages() -> None:
             check=True,
         )
 
+        # —— 只覆盖本脚本负责的那一个文件，绝不整目录替换 ——
+        # 教训：早期版本这里是 `rmtree(data/) + copytree(public/data)`，
+        # 而 public/data 只含 market_history.json，于是每次采样都会把线上
+        # data/data.json 与 data/market.json 一起删掉（93f0107 实测删了 4MB）。
+        # gh-pages 的 data/ 是「多来源共享目录」，任何一方都无权清空它。
         target_dir = os.path.join(temp_dir, "data")
-        if os.path.exists(target_dir):
-            shutil.rmtree(target_dir)
-        shutil.copytree(OUTPUT_DIR, target_dir)
+        os.makedirs(target_dir, exist_ok=True)
+        shutil.copy2(output_file, os.path.join(target_dir, HISTORY_FILE))
+
+        # 双保险：确认没有意外删除本脚本不负责的文件
+        assert_no_unintended_deletions(temp_dir, {HISTORY_FILE})
 
         status = subprocess.run(
             ["git", "status", "--porcelain"], cwd=temp_dir, capture_output=True, text=True, check=True
@@ -229,7 +263,7 @@ def main() -> None:
     span_hours = (history[-1]["t"] - history[0]["t"]) / 3600 if len(history) > 1 else 0
     print(f"   [OK] 历史已更新：{len(history)} 个采样点，覆盖 {span_hours:.1f} 小时")
 
-    deploy_to_gh_pages()
+    deploy_to_gh_pages(output_file)
 
 
 if __name__ == "__main__":
