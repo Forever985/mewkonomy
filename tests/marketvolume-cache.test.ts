@@ -1,9 +1,23 @@
-import { describe, expect, it, vi, beforeEach } from "vitest"
+import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest"
+import { loadTestGameData } from "./utils/load-game-data"
 
 // 与 game.ts 内 KEY_PREFIX 保持一致
 const KEY = "game-market-data"
 
 describe("marketvolume 旧缓存兼容（getMarketData 过期检测）", () => {
+  /**
+   * 预热 game store 的模块图（locales / element-plus 等重依赖）。
+   *
+   * 本文件的用例靠 `vi.resetModules()` + 动态 import 重建 store；首次 import 在冷启动时
+   * 需要数秒（转换 element-plus / auto-import 依赖图），并发跑全量用例时会撞上默认 5s 的
+   * testTimeout（vite.config.ts 中 testTimeout 那行被上一条注释吞掉，实际未生效；
+   * hookTimeout=60s 仍然生效）。把这次冷启动放进 beforeAll（hook 超时 60s）里完成，
+   * 用例本身只做 localStorage 形态断定，语义完全不变。
+   */
+  beforeAll(async () => {
+    await loadTestGameData()
+  }, 300000)
+
   beforeEach(() => {
     localStorage.clear()
     vi.resetModules()

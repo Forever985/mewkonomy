@@ -1,24 +1,10 @@
 import { describe, it, beforeAll } from "vitest"
-import { readFileSync } from "node:fs"
-import { resolve } from "node:path"
-
-const root = "D:\\milkonomy\\milkonomy-main"
+import { loadTestGameData } from "./utils/load-game-data"
 
 describe("模式C 大全套价格兜底验证（聚焦兜底对象）", () => {
-  beforeAll(() => {
-    const gameData = JSON.parse(readFileSync(resolve(root, "data/data.json"), "utf-8"))
-    const marketRaw = JSON.parse(readFileSync(resolve(root, "data/market.json"), "utf-8"))
-    const marketData: any = { timestamp: 1, marketData: {} }
-    for (const hrid in gameData.itemDetailMap) {
-      const name = gameData.itemDetailMap[hrid].name
-      const price = marketRaw.market?.[name]
-      if (price && typeof price.ask === "number" && typeof price.bid === "number") {
-        marketData.marketData[hrid] = { 0: { ask: price.ask, bid: price.bid } }
-      }
-    }
-    localStorage.setItem("game-game-data", JSON.stringify(gameData))
-    localStorage.setItem("game-market-data", JSON.stringify(marketData))
-  })
+  beforeAll(async () => {
+    await loadTestGameData()
+  }, 300000)
 
   it("P0: 兜底对象在模式B下 ask 必须为 -1（sellPrice 只兜 bid）", async () => {
     const { getPriceOf, isPriceFallbackOf } = await import("@/common/apis/game")

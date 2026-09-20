@@ -197,7 +197,9 @@ export default defineConfig(({ mode }) => {
     test: {
       include: ["tests/**/*.test.{ts,js}"],
       environment: "happy-dom",
-      // 棣栨 import 浼氳繛甯﹀姞杞?game store + 鍏ㄩ噺 data.json锛?.9MB锛夊苟閲嶅缓娓告垙绱㈠紩锛?      // 骞跺彂璺戞椂 5s 榛樿瓒呮椂浼氳鎶ュけ璐ャ€傜粺涓€鏀惧锛屼笉鎺╃洊鐪熸鐨勫崱姝汇€?      testTimeout: 60000,
+      // 首次 import 会连带加载 game store + 全量 data.json（约 4MB）并重建游戏索引；
+      // 并发跑时 5s 默认超时会误报失败。统一放宽，不掩盖真正的卡死。
+      testTimeout: 60000,
       hookTimeout: 60000,
       server: {
         deps: {

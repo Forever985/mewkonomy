@@ -1,23 +1,10 @@
 import { describe, expect, it, beforeAll } from "vitest"
-import { readFileSync } from "node:fs"
-import { resolve } from "node:path"
+import { loadTestGameData } from "./utils/load-game-data"
 
 describe("manualchemy 综利用尾扩展验证", () => {
-  beforeAll(() => {
-    const root = process.cwd()
-    const gameData = JSON.parse(readFileSync(resolve(root, "data/data.json"), "utf-8"))
-    const marketRaw = JSON.parse(readFileSync(resolve(root, "data/market.json"), "utf-8"))
-    const marketData: any = { timestamp: 0, marketData: {} }
-    for (const hrid in gameData.itemDetailMap) {
-      const name = gameData.itemDetailMap[hrid].name
-      const price = marketRaw.market?.[name]
-      if (price && typeof price.ask === "number" && typeof price.bid === "number") {
-        marketData.marketData[hrid] = { 0: { ask: price.ask, bid: price.bid } }
-      }
-    }
-    localStorage.setItem("game-game-data", JSON.stringify(gameData))
-    localStorage.setItem("game-market-data", JSON.stringify(marketData))
-  })
+  beforeAll(async () => {
+    await loadTestGameData()
+  }, 300000)
 
   it("综利用尾无重复多样、跨项目组合健康", async () => {
     const { getLeaderboardDataApi } = await import("@/common/apis/manualchemy")
