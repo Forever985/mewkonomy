@@ -3,7 +3,7 @@ import type { Action, ItemDetail } from "~/game"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 
 import * as Format from "@@/utils/format"
-import { Star, StarFilled } from "@element-plus/icons-vue"
+import { QuestionFilled, Star, StarFilled } from "@element-plus/icons-vue"
 import { ElTable } from "element-plus"
 import { EnhanceCalculator } from "@/calculator/enhance"
 import { ManufactureCalculator } from "@/calculator/manufacture"
@@ -39,6 +39,13 @@ const currentItem = ref<Item>({
 const manufactureIngredients = ref<Ingredient[]>([])
 const enhancementCosts = ref<Ingredient[]>([])
 const protectionList = ref<Ingredient[]>([])
+
+/**
+ * 游戏固定的市场成交税率（%）。玩家无法更改，所以只作展示，不放进可编辑配置。
+ * 注意与 defaultConfig.taxRate 区分：后者绑定的是界面上「溢价率%」，
+ * 语义是**成本上浮**，跟这里的成交税完全是两回事。
+ */
+const MARKET_TAX_PERCENT = 2
 
 const defaultConfig = {
   hourlyRate: 5000000,
@@ -214,9 +221,11 @@ const results = computed(() => {
       ? currentItem.value.productPrice
       : getPriceOf(currentItem.value.hrid, enhanceLevel).bid
 
-    const incomeTotal = productPrice * 0.98 * pieceCount
+    // 成交后按固定税率扣除，因此净收入 = 标价 × (1 - 税率)
+    const netPrice = productPrice * (1 - MARKET_TAX_PERCENT / 100)
+    const incomeTotal = netPrice * pieceCount
     const hourlyCost = (incomeTotal - totalCostNoHourly) / scaledActions * calc.actionsPH
-    const profitPP = productPrice * 0.98 - totalCostNoHourlyPerPiece
+    const profitPP = netPrice - totalCostNoHourlyPerPiece
     const profitTotal = incomeTotal - totalCostNoHourly
 
     const seconds = scaledActions / calc.actionsPH * 3600
@@ -537,7 +546,15 @@ watch(menuVisible, (value) => {
             <el-tab-pane :label="t('工时费')">
               <div class="flex justify-between items-center">
                 <div class="font-size-14px">
-                  {{ t('工时费/h') }}
+                  <span class="inline-flex items-center gap-1">
+                    {{ t('工时费/h') }}
+                    <el-tooltip placement="top" effect="light" :show-after="120">
+                      <template #content>
+                        <div class="max-w-320px leading-5">{{ t('工时费说明') }}</div>
+                      </template>
+                      <el-icon class="cursor-help color-gray-400"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
                 </div>
                 <el-input-number
                   class="w-120px"
@@ -552,7 +569,15 @@ watch(menuVisible, (value) => {
 
               <div class="flex justify-between items-center">
                 <div class="font-size-14px">
-                  {{ t('溢价率%') }}
+                  <span class="inline-flex items-center gap-1">
+                    {{ t('溢价率%') }}
+                    <el-tooltip placement="top" effect="light" :show-after="120">
+                      <template #content>
+                        <div class="max-w-340px leading-5">{{ t('溢价率说明') }}</div>
+                      </template>
+                      <el-icon class="cursor-help color-gray-400"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
                 </div>
                 <el-input-number
                   class="w-120px"
@@ -568,7 +593,15 @@ watch(menuVisible, (value) => {
             <el-tab-pane :label="t('成品售价')">
               <div class="flex justify-between items-center">
                 <div class="font-size-14px">
-                  {{ t('价格') }}
+                  <span class="inline-flex items-center gap-1">
+                    {{ t('价格') }}
+                    <el-tooltip placement="top" effect="light" :show-after="120">
+                      <template #content>
+                        <div class="max-w-340px leading-5">{{ t('成品售价说明') }}</div>
+                      </template>
+                      <el-icon class="cursor-help color-gray-400"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
                 </div>
                 <el-input-number
                   class="w-130px"
@@ -582,18 +615,19 @@ watch(menuVisible, (value) => {
 
               <div class="flex justify-between items-center">
                 <div class="font-size-14px">
-                  {{ t('税率%') }}
+                  <span class="inline-flex items-center gap-1">
+                    {{ t('税率%') }}
+                    <el-tooltip placement="top" effect="light" :show-after="120">
+                      <template #content>
+                        <div class="max-w-340px leading-5">{{ t('成交税率说明') }}</div>
+                      </template>
+                      <el-icon class="cursor-help color-gray-400"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
                 </div>
-                <el-input-number
-                  class="w-130px"
-                  placeholder="2"
-                  :step="1"
-                  :min="0"
-                  :max="20"
-                  controls-position="right"
-                  :controls="false"
-                  disabled
-                />
+                <!-- 游戏固定税率，玩家不可改：原先是 disabled 且未绑定任何字段的空控件，
+                     现已改为明确展示实际生效的数值，避免看起来「能填却填不动」。 -->
+                <span class="w-130px text-right color-gray-500">{{ MARKET_TAX_PERCENT }}%</span>
               </div>
             </el-tab-pane>
           </el-tabs>
@@ -684,7 +718,19 @@ watch(menuVisible, (value) => {
           <ElTable :data="[{}]" :show-header="false" style="--el-table-border-color:none" :cell-style="{ padding: '4px 0' }">
             <el-table-column>
               <template #default>
-                {{ t('件数') }}:
+                <span class="inline-flex items-center gap-1">
+                  {{ t('件数') }}:
+                  <el-tooltip placement="top" effect="light" :show-after="120">
+                    <template #content>
+                      <div class="max-w-320px leading-5">
+                        {{ t('件数提示') }}
+                      </div>
+                    </template>
+                    <el-icon class="cursor-help color-gray-400">
+                      <QuestionFilled />
+                    </el-icon>
+                  </el-tooltip>
+                </span>
               </template>
             </el-table-column>
             <el-table-column />
@@ -705,7 +751,19 @@ watch(menuVisible, (value) => {
           <ElTable :data="[{}]" :show-header="false" style="--el-table-border-color:none" :cell-style="{ padding: '4px 0' }">
             <el-table-column>
               <template #default>
-                {{ t('成功期望') }}:
+                <span class="inline-flex items-center gap-1">
+                  {{ t('成功期望') }}:
+                  <el-tooltip placement="top" effect="light" :show-after="120">
+                    <template #content>
+                      <div class="max-w-360px leading-5">
+                        {{ t('成功期望提示') }}
+                      </div>
+                    </template>
+                    <el-icon class="cursor-help color-gray-400">
+                      <QuestionFilled />
+                    </el-icon>
+                  </el-tooltip>
+                </span>
               </template>
             </el-table-column>
             <el-table-column />

@@ -424,10 +424,10 @@ function getSealEffect(item: ItemDetail) {
             <el-table-column :label="t('工具')" align="center" min-width="105">
               <template #default="{ row }">
                 <el-select style="width:80px" v-model="row.tool.hrid" :placeholder="t('无')" clearable>
-                  <el-option v-for="item in getToolListOf(row.action)" :key="item.hrid" :label="item.name" :value="item.hrid">
+                  <el-option v-for="item in getToolListOf(row.action)" :key="item.hrid" :label="t(item.name)" :value="item.hrid">
                     <div style="display:flex;align-items:center;gap:10px;">
                       <ItemIcon :hrid="item.hrid" />
-                      <div> {{ item.name }} </div>
+                      <div> {{ t(item.name) }} </div>
                     </div>
                   </el-option>
                   <template #label>
@@ -441,10 +441,10 @@ function getSealEffect(item: ItemDetail) {
             <el-table-column :label="t('身体')" align="center" min-width="105">
               <template #default="{ row }">
                 <el-select style="width:80px" v-model="row.body.hrid" :placeholder="t('无')" clearable>
-                  <el-option v-for="item in getEquipmentListOf(row.action, 'body')" :key="item.hrid" :label="item.name" :value="item.hrid">
+                  <el-option v-for="item in getEquipmentListOf(row.action, 'body')" :key="item.hrid" :label="t(item.name)" :value="item.hrid">
                     <div style="display:flex;align-items:center;gap:10px;">
                       <ItemIcon :hrid="item.hrid" />
-                      <div> {{ item.name }} </div>
+                      <div> {{ t(item.name) }} </div>
                     </div>
                   </el-option>
                   <template #label>
@@ -458,10 +458,10 @@ function getSealEffect(item: ItemDetail) {
             <el-table-column :label="t('腿部')" align="center" min-width="105">
               <template #default="{ row }">
                 <el-select style="width:80px" v-model="row.legs.hrid" :placeholder="t('无')" clearable>
-                  <el-option v-for="item in getEquipmentListOf(row.action, 'legs')" :key="item.hrid" :label="item.name" :value="item.hrid">
+                  <el-option v-for="item in getEquipmentListOf(row.action, 'legs')" :key="item.hrid" :label="t(item.name)" :value="item.hrid">
                     <div style="display:flex;align-items:center;gap:10px;">
                       <ItemIcon :hrid="item.hrid" />
-                      <div> {{ item.name }} </div>
+                      <div> {{ t(item.name) }} </div>
                     </div>
                   </el-option>
                   <template #label>
@@ -475,10 +475,10 @@ function getSealEffect(item: ItemDetail) {
             <el-table-column :label="t('背部')" align="center" min-width="105">
               <template #default="{ row }">
                 <el-select style="width:80px" v-model="row.back.hrid" :placeholder="t('无')" clearable>
-                  <el-option v-for="item in getBackEquipmentListOf(row.action)" :key="item.hrid" :label="item.name" :value="item.hrid">
+                  <el-option v-for="item in getBackEquipmentListOf(row.action)" :key="item.hrid" :label="t(item.name)" :value="item.hrid">
                     <div style="display:flex;align-items:center;gap:10px;">
                       <ItemIcon :hrid="item.hrid" />
-                      <div> {{ item.name }} </div>
+                      <div> {{ t(item.name) }} </div>
                     </div>
                   </el-option>
                   <template #label>
@@ -492,10 +492,10 @@ function getSealEffect(item: ItemDetail) {
             <el-table-column :label="t('护符')" align="center" min-width="105">
               <template #default="{ row }">
                 <el-select style="width:80px" v-model="row.charm.hrid" :placeholder="t('无')" clearable>
-                  <el-option v-for="item in getEquipmentListOf(row.action, 'charm').sort((a, b) => a.itemLevel - b.itemLevel)" :key="item.hrid" :label="item.name" :value="item.hrid">
+                  <el-option v-for="item in getEquipmentListOf(row.action, 'charm').sort((a, b) => a.itemLevel - b.itemLevel)" :key="item.hrid" :label="t(item.name)" :value="item.hrid">
                     <div style="display:flex;align-items:center;gap:10px;">
                       <ItemIcon :hrid="item.hrid" />
-                      <div> {{ item.name }} </div>
+                      <div> {{ t(item.name) }} </div>
                     </div>
                   </el-option>
                   <template #label>
@@ -537,10 +537,10 @@ function getSealEffect(item: ItemDetail) {
                 <el-table-column :label="t('装备')">
                   <template #default="{ row }">
                     <el-select style="width:80px" v-model="row.hrid" :placeholder="t('无')" clearable>
-                      <el-option v-for="item in getSpecialEquipmentListOf(row.type)" :key="item.hrid" :label="item.name" :value="item.hrid">
+                      <el-option v-for="item in getSpecialEquipmentListOf(row.type)" :key="item.hrid" :label="t(item.name)" :value="item.hrid">
                         <div style="display:flex;align-items:center;gap:10px;">
                           <ItemIcon :hrid="item.hrid" />
-                          <div> {{ item.name }} </div>
+                          <div> {{ t(item.name) }} </div>
                         </div>
                       </el-option>
                       <template #label>

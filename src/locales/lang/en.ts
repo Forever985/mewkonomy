@@ -499,4 +499,12 @@ export default {
   "A - 显示 -1（不兜底）": "A - show -1 (no fallback)",
   "B - 使用 sellPrice 兜底": "B - fall back to sellPrice",
   "C - 使用大全套价格兜底": "C - fall back to full-set price",
+  // 补全：强化计算的「件数 / 成功期望」输入项缺少悬停说明（2026-09-20）
+  "件数提示": "How many identical pieces to enhance in this batch. Each piece is enhanced independently from level 0 to the target level, so materials, protection items, initial gear cost and final output all scale linearly with this count. The \"Materials / piece\" and \"Profit / piece\" columns still use the per-piece figure so you can compare plans side by side.",
+  "成功期望提示": "How many attempts the Markov chain expects on average. But that is only a mean — real runs are often worse, so this field lets you keep a margin: 1 means compute exactly at the average; 1.2 means you assume you need 1.2x the expected attempts (materials and protection items go up 20%); below 1 means you expect to be luckier than average. The factor scales both attempt and protection counts, then multiplies by the piece count.",
+  // 补全：强化计算「工时费 / 溢价率 / 成品售价 / 成交税率」缺少悬停说明
+  "工时费说明": "Puts a price on your own time. Your hourly rate is multiplied by the hours this enhancement run takes and added to the total cost. Use 0 to ignore time cost and look only at materials and gear.",
+  "溢价率说明": "A safety margin on the cost side (%). You will not always buy materials at the best listed price, so this inflates the whole batch cost proportionally: 5 means total cost is computed at 105%, making the profit estimate more conservative. Note it applies to total cost and is unrelated to the market tax below.",
+  "成品售价说明": "Sale price per piece after enhancing to the target level. Leave empty to use the current market buy order (bid). Income is computed as price x 98% x pieces, where the 2% is the game's fixed market fee.",
+  "成交税率说明": "The game's fixed market transaction tax, which players cannot change: 2% is deducted on every sale whatever the listing price. It is shown for reference only; income is always counted at 98% of the price.",
 }

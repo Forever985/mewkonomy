@@ -110,6 +110,22 @@ export function handlePush(profitList: Calculator[], cal: Calculator) {
   profitList.push(cal)
 }
 
+/**
+ * 从 project 名称里解析「生产步数」。
+ *
+ * project 由 `t("{0}步{1}", [n, 动作])` 生成（leaderboard / manualchemy 都是如此），
+ * 即长这样：`5步锻造`。但「步」在 en.ts 里被翻译成了 `" steps "`（注意两侧空格），
+ * 英文界面下 project 会变成 `5 steps Smithing`。原先这里写死 `/^(\d+)步/`，
+ * 英文模式下正则失配 → 所有方案的步数都被当成 1 → 步数筛选与组合条件全面失效。
+ *
+ * 所以这里同时接受中英两种写法，并且允许数字与单位之间有空白。
+ * 解析不出步数时按 1 处理（与「单步动作」的原语义一致）。
+ */
+export function stepsOfProject(project: string): number {
+  const m = /^\s*(\d+)\s*(?:步|steps?)/i.exec(project)
+  return m ? +m[1] : 1
+}
+
 export function handleSearch(profitList: Calculator[], params: any) {
   // 多物品名称筛选：name 可为 string 或 string[]，命中任一即保留
   const names = Array.isArray(params.name)
@@ -125,7 +141,9 @@ export function handleSearch(profitList: Calculator[], params: any) {
   }
 
   // 单值动作筛选（兼容旧调用方：jungle/enhanposer 等）
-  params.project && (profitList = profitList.filter(cal => cal.project.match(params.project!)))
+  // 用 includes 而非 match：params.project 是用户选中的项目名，可能含正则元字符，
+  // 且 match 是子串包含语义，includes 更贴切也更安全。
+  params.project && (profitList = profitList.filter(cal => cal.project.includes(params.project!)))
 
   // 组合条件并行筛选：多行 (步数, 动作, 等级区间) 组合，命中任一组合即保留
   // 如「5步锻造」+「3步缝纫」+「转化」可同时检索；等级限制也可作为组合条件之一
@@ -134,8 +152,7 @@ export function handleSearch(profitList: Calculator[], params: any) {
     : []
   if (conditions.length) {
     profitList = profitList.filter((cal) => {
-      const m = /^(\d+)步/.exec(cal.project)
-      const steps = m ? +m[1] : 1
+      const steps = stepsOfProject(cal.project)
       return conditions.some((cond: any) => {
         if (cond.steps != null && cond.steps !== "" && steps !== cond.steps) return false
         if (cond.project && !cal.project.includes(cond.project)) return false
@@ -180,8 +197,7 @@ export function handleSearch(profitList: Calculator[], params: any) {
 
   // 精确步数筛选：只保留 N 步方案，排除 N-1 / N+1 步（兼容旧调用方）
   params.steps && (profitList = profitList.filter((cal) => {
-    const m = /^(\d+)步/.exec(cal.project)
-    const steps = m ? +m[1] : 1
+    const steps = stepsOfProject(cal.project)
     return steps === params.steps
   }))
 

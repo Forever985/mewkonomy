@@ -116,7 +116,7 @@ function showDetail(row: Calculator) {
             style="flex: 1"
             @change="step.outHrid = ''"
           >
-            <el-option v-for="opt in itemOptions(step)" :key="opt.hrid" :label="opt.name" :value="opt.hrid" />
+            <el-option v-for="opt in itemOptions(step)" :key="opt.hrid" :label="t(opt.name)" :value="opt.hrid" />
           </el-select>
           <el-select v-if="isAlchemyKind(step.kind)" v-model="step.catalystRank" style="width: 120px">
             <el-option v-for="r in [0, 1, 2]" :key="r" :label="catalystLabel(r)" :value="r" />
@@ -129,7 +129,7 @@ function showDetail(row: Calculator) {
             :placeholder="t('衔接产物')"
             style="width: 180px"
           >
-            <el-option v-for="opt in alchemyOutputs(step)" :key="opt.hrid" :label="opt.name" :value="opt.hrid" />
+            <el-option v-for="opt in alchemyOutputs(step)" :key="opt.hrid" :label="t(opt.name)" :value="opt.hrid" />
           </el-select>
           <el-button-group>
             <el-button :icon="ArrowUp" :disabled="index === 0" @click="moveStep(index, -1)" />
