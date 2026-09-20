@@ -13,6 +13,15 @@ MewKonomy 市场历史高频采样脚本
 采样点结构：
   { "t": epoch秒, "p": { hrid: { level: [ask, bid, volume] } } }
 
+  `t` 取自官方 marketplace.json 的顶层 `timestamp` 字段，即**市场快照本身的生成时间**，
+  不是「本脚本运行的时间」。因此若官方快照尚未刷新，连续两次运行会拿到同一个 `t`，
+  此时按下面的去重规则跳过 —— 这是**预期行为**（同一个快照重复写没有意义），
+  并不代表流水线停摆。官方该快照的刷新间隔约 20 分钟，与 cron 频率一致。
+
+  官方 marketplace.json 顶层只有 `timestamp` 与 `marketData` 两个字段；
+  `marketData[hrid][level]` 形如 `{"a": ask, "b": bid, "p": price, "v": volume}`，
+  其中 `v` 是当日累计成交量。本脚本只取 a/b/v。
+
   兼容说明：早期版本只写 [ask, price]（两个元素），前端已同时兼容两种长度。
   volume 是官方当日累计成交量，因此前端做成交量对比时要看「增量/速率」而不是绝对值。
 

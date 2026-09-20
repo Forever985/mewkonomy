@@ -275,13 +275,22 @@ AIGC:
 动机：这些函数原先内部读 `Date.now()`，而测试里 `vi.setSystemTime` 与模块级时序互相干扰，反复产生「期望值与实际值互不自洽」的假失败。显式 `now` 让时间逻辑可以确定性测试。
 （`tests/marketvolume-history.test.ts` 中原有一条依赖 mock 时钟的用例即因此删除，其语义由 `tests/marketvolume-history-format.test.ts` 用确定性样本完全覆盖。）
 
-### 12.3 仍未解决：游戏数据源
+**F. 部署安全规则：`gh-pages:data/` 是多脚本共享目录（重要）**
 
-**没有找到可用的 `data.json` 上游**。线上那份 4,063,375 字节的完整官方数据（48 个顶层键）来源不明，已核查：
+- **归属划分**：`sample_market_history.py` **只拥有** `data/market_history.json`；`fetch_game_data.py` **只拥有** `data/data.json` 与 `data/market.json`。
+- **外科手术式部署**：两者都改为「clone `gh-pages` → 只复制自己负责的文件进去 → commit + push」，**绝不允许 `rmtree` + `copytree` 整个 `data/`**。
+- **教训（commit `93f0107`）**：早期采样脚本用 `public/data` 整目录替换线上 `data/`，而 `main` 上的 `public/data` 不含新抓的 `data.json`/`market.json`，结果**每次采样都会误删线上 4MB 的 `data.json` 与 70KB 的 `market.json`**。
+- **双保险**：两脚本都调用 `assert_no_unintended_deletions()`，只要 `git status` 出现「本脚本不负责的删除」就中止部署。
+- **CI 取脚本方式**：先 `actions/checkout` 检出 `gh-pages`（线上数据落在 `./data/`，供脚本做增量比对），再 `git fetch origin main:main` + `git checkout main -- scripts/<file>` 取回脚本（脚本只在 `main` 上维护）。
 
-- `silent1b/MWIData`：停在 2025-08，且 `gameVersion = v1.20250818.0`
-- `holychikenz/MWIApi`：不含游戏数据
-- `Polokikiki/Milkonomy` fork：有 `v1.20260309.0`，但只有 **2,744,882 字节**（比完整版小 1.3MB，疑似裁剪版），**不能直接替代**
-- `raw.githubusercontent.com` 取 3MB 级文件要 270~290 秒或超时；`api.github.com` Contents API **对 >1MB 文件返回空 `content`**
+### 12.3 上游数据源：多源回退与现状
+
+`fetch_game_data.py` 的 `DATA_SOURCES` 按顺序回退，第一个抓成功即用：**jsDelivr CDN**（`cdn.jsdelivr.net/gh/...`，实测约 25~35 秒）→ **ghproxy**（`ghproxy.net/...`，实测约 35 秒）→ **`raw.githubusercontent.com`**（本网络下取 3MB 级文件要 270~290 秒甚至超时，仅作最后兜底）。`HTTP_TIMEOUT = 120`、`RETRY_TOTAL = 3`；每个源都要过结构校验（见 C.2），不合格的源直接跳过，全源失败才报错。
+
+即便多源回退可用，**当前配置的上游仍不是可靠的完整版 `data.json` 源**。线上那份 4,063,375 字节的完整官方数据（48 个顶层键）来源不明，已核查：
+
+- `silent1b/MWIData`：停在 2025-08，且 `gameVersion = v1.20250818.0`——比线上 `v1.20260309.0` 旧 7 个月，即便抓到也会被「禁止降级」护栏拦下；
+- `holychikenz/MWIApi`：不含游戏数据；
+- `Polokikiki/Milkonomy` fork：有 `v1.20260309.0`，但只有 **2,744,882 字节**（比完整版小 1.3MB，疑似裁剪版），**不能直接替代**。
 
 因此 `update-data.yml` 目前的状态是：**有护栏保护、不会破坏线上，但也抓不到新数据**。要真正恢复它的自动更新，需要先确认一个能提供完整版 data.json 的可靠源。

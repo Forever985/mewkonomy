@@ -42,6 +42,7 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 
 - **数据源**：`data.json`（静态游戏数据，**严禁改动**，含硬上限）+ `market.json`（市场快照 `{market:{名称:{ask,bid,vendor}}, time}`）。
 - **价格语义**：`PriceStatus.ASK`=左挂单（ask），`BID`=右收购（bid）。全局规则——**材料/成本用 ask，成品/收益用 bid**（个别页面可切换成品计价口径）。
+- **市场历史归档**：`data/market_history.json`（由 GitHub Actions 每 20 分钟采样、滚动 7 天）供市场监控页计算涨跌，详见 §4.1；页面另有 localStorage 本地兜底采样。
 
 ### 1.3 Vite 别名
 
@@ -91,7 +92,7 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 - 各域在 `src/common/apis/<domain>/index.ts` 聚合，页面只 import 该入口。
 - `src/common/apis/utils.ts` 提供通用检索 `handleSearch`（支持 `banEquipment` / `banJewelry` / `banCombat` / `banLife`、`conditions` 组合条件、等级/利润率/风险双头、`steps` 精确步数等）。
 - 检索类 API 使用 `usePagination` 组合式做分页，页码/大小状态可持久化到 localStorage。
-- **页面级辅助模块可内聚在域目录下**：如 `marketvolume/history.ts` 维护「市场历史采样」——`MarketPriceSample`（`{t, p:{hrid:{level:[ask,price]}}}`）、`recordLocalSample`（localStorage 兜底，节流 30min、上限 48 条、26h 滚动窗口）、`loadMarketHistory`（拉取 `public/data/market_history.json` 服务端归档）、`getMarketChangeMap`（基准 = 时间窗起点前最近采样，`pct=(当前-基准)/基准`，key=`hrid|level`，无基准 / 当前价无效时该项不出现）。
+- **页面级辅助模块可内聚在域目录下**：如 `marketvolume/history.ts` 维护「市场历史采样」——`MarketPriceSample`（`{t, p:{hrid:{level:[ask,bid,volume]}}}`；**旧样本只有 `[ask,price]` 两个元素，两种长度都要兼容**，取值必须走内部 `valueAt()` / `priceOf()`，不要直接下标）、`recordLocalSample`（localStorage 兜底，节流 30min、上限 200 条、7 天滚动窗口）、`loadMarketHistory`（拉取服务端归档 `gh-pages:data/market_history.json`，页面按 `<BASE_URL>data/market_history.json` 请求）、`getMarketChangeMap(list, windowHours, metric, now)`（基准 = 时间窗起点前最近采样，key=`hrid|level`，无基准 / 当前值无效时该项不出现）。`metric` 可选 `price`（ask/bid **中点**）/`ask`/`bid`/`volume`；`volume` 是官方**当日累计成交量**（UTC 0 点归零），比的是**增量速率**而非绝对值。
 
 ### 2.4 Pinia store 与 timestamp 缓存（重点）
 
@@ -143,6 +144,22 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 - **部署脚本**（项目自带，用于 GitHub Pages）：
   - `deploy.ps1`（全量）：`pnpm build:public` → 提交 main（`--no-verify` 跳过 husky）→ `npx gh-pages -d dist` 推 `gh-pages`。内置网络通道探测与回退（Steam++ 443 / 直连 / 本地代理），并用临时 git 配置覆盖全局失效代理、`sslVerify` 按通道设置、凭据 `wincred`。
   - `sync-fast.ps1`（免编译增量）：仅当**只改 `public/` 静态文件**时使用，按哈希增量复制到 `dist` 后推 gh-pages；若检测到 `src/`、`vite.config.ts` 等有变更会警告改用全量部署。
+- 上述两个脚本负责**站点产物**；`gh-pages:data/` 下的数据另由 GitHub Actions 维护（见 4.1）。
+
+### 4.1 线上数据流水线（GitHub Actions）
+
+两条 workflow **刻意解耦**，各自只依赖自己的数据源，任一源故障不会连带拖停另一条：
+
+| workflow | 频率 | 脚本 | 职责与产出 |
+| --- | --- | --- | --- |
+| `market-history.yml`（Market History Sampling） | 每 20 分钟（`cron: "*/20 * * * *"`）+ 手动 `workflow_dispatch`；`concurrency: market-history-sampling` 保证不并发 | `scripts/sample_market_history.py` | 抓官方 `https://www.milkywayidle.com/game_data/marketplace.json`（约 0.4s、极稳定），追加采样点到 `gh-pages:data/market_history.json`；滚动 7 天、上限 520 点 |
+| `update-data.yml`（Update Game Data） | 每天 UTC 00:20（`cron: "20 0 * * *"`）+ 手动 `workflow_dispatch` | `scripts/fetch_game_data.py` | 抓上游 `data.json` / `market.json`，只负责这两个文件 |
+
+- **为什么拆开**：历史采样与游戏数据抓取原先共用一个 job，`data.json` 上游一挂，历史采样一起停摆——线上曾因此**连续 8 天没有任何新采样点**。
+- **为什么游戏数据改为每天一次**：游戏数据只在游戏版本更新时变化，原先每小时跑一次纯属浪费 Actions 配额。
+- **部署安全红线（必读）**：`gh-pages` 的 `data/` 是**多脚本共享目录**——`sample_market_history.py` **只拥有** `market_history.json`，`fetch_game_data.py` **只拥有** `data.json` / `market.json`。两脚本都只把自己的文件复制进 `gh-pages` 的全新克隆再提交，**绝不允许 `rmtree` + `copytree` 整个 `data/`**：早期采样脚本用 `public/data` 整目录替换线上目录，而 `main` 的 `public/data` 不含新抓的 `data.json`/`market.json`，导致**每次采样都会删掉线上 4MB 的 `data.json` 与 70KB 的 `market.json`**（commit `93f0107`）。两脚本另调用 `assert_no_unintended_deletions()`，`git status` 一旦出现本脚本不负责的删除就中止部署。
+- **CI 执行顺序**：先 `actions/checkout` 检出 `gh-pages`（线上数据落在 `./data/`，供脚本做增量比对），再 `git fetch origin main:main` + `git checkout main -- scripts/<file>` 取回脚本（脚本只在 `main` 上维护）。
+- **本地调试**：`DRY_RUN=1 python scripts/<script>.py` 只抓取 + 写本地，不推送。
 
 ---
 

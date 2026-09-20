@@ -48,18 +48,19 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 - **缓存**：Pinia store 的 `*Cache` 字段按 `marketData.timestamp` + 计算模式分桶存 localStorage；`fetchData/tryFetchData` 集中调 `clearAllCaches()`；`useXxxStoreOutside` 可组件外直连。
 - **计算器**：扁平 `src/calculator/*.ts`，基类 `Calculator` + `WorkflowCalculator` 聚合，`CLASS_MAP` 序列化。
 - **API**：各域 `src/common/apis/<domain>/index.ts`（game/price/player/favorite/leaderboard/manualchemy/chainbuilder/charmtransform/enhanposer/jungle/marketvolume）；通用检索在 `src/common/apis/utils.ts` `handleSearch`（banEquipment/banJewelry/banCombat/banLife、conditions 组合、等级/利润率/风险双头、steps 精确步数）。
-  - `marketvolume/history.ts`（市场历史采样）：`MarketPriceSample`（`{t, p:{hrid:{level:[ask,bid,volume]}}}`）；**双通道历史**——服务端 `public/data/market_history.json`（**7 天滚动**）＋ 本地 `localStorage` 兜底（key `mewkonomy-market-history`，节流 30min、上限 200 条）；`getMarketChangeMap(list, windowHours, metric, now)` 以「时间窗起点前最近采样」为基准，key=`hrid|level`。**两种采样长度都要兼容**（旧 `[ask,price]` / 新 `[ask,bid,volume]`），取值一律走内部 `valueAt()`，不要直接下标。`metric` 可选 `price`（ask/bid 中点）/`ask`/`bid`/`volume`；volume 是**当日累计成交量**，所以比的是**增量速率**，跨 UTC 归零（负增量）时该项不出现。时间相关函数都接受显式 `now` 参数，便于确定性测试。
+  - `marketvolume/history.ts`（市场历史采样）：`MarketPriceSample`（`{t, p:{hrid:{level:[ask,bid,volume]}}}`）；**双通道历史**——服务端归档 `gh-pages:data/market_history.json`（**7 天滚动**、上限 520 点，页面按 `<BASE_URL>data/market_history.json` 拉取）＋ 本地 `localStorage` 兜底（key `mewkonomy-market-history`，节流 30min、上限 200 条、同样 7 天窗口），两者合并后按 `t` 升序；`getMarketChangeMap(list, windowHours, metric, now)` 以「时间窗起点前最近采样」为基准，key=`hrid|level`。**两种采样长度都要兼容**（旧 `[ask,price]` / 新 `[ask,bid,volume]`），取值一律走内部 `valueAt()` / `priceOf()`，不要直接下标（`price` 口径取 ask/bid **中点**，因为 index 1 在新旧格式里含义不同）。`metric` 可选 `price`（ask/bid 中点）/`ask`/`bid`/`volume`；volume 是**当日累计成交量**，所以比的是**增量速率**，跨 UTC 归零（负增量）时该项不出现。时间相关函数都接受显式 `now` 参数，便于确定性测试。
 - **数据流水线（线上站点如何持续拿到数据）**：全靠 GitHub Actions 写 `gh-pages` 的 `data/`，**不需要本地挂机**：
 
   | workflow | 频率 | 职责 |
   | --- | --- | --- |
-  | `market-history.yml` → `scripts/sample_market_history.py` | **每 20 分钟** | 抓官方 `marketplace.json`，追加 `market_history.json` 采样点（7 天滚动、约 520 点）。只依赖官方端点（约 0.4s），**与游戏数据抓取完全解耦** |
-  | `update-data.yml` → `scripts/fetch_game_data.py` | **每天 1 次** | 抓上游 `data.json`/`market.json`，带**多源回退**与**禁止降级护栏** |
+  | `market-history.yml` → `scripts/sample_market_history.py` | **每 20 分钟**（`*/20 * * * *`）+ 手动；`concurrency: market-history-sampling` 不并发 | 抓官方 `marketplace.json`，追加 `market_history.json` 采样点（7 天滚动、约 520 点）。只依赖官方端点（约 0.4s），**与游戏数据抓取完全解耦** |
+  | `update-data.yml` → `scripts/fetch_game_data.py` | **每天 1 次**（`20 0 * * *`，游戏数据只在版本更新时变化，原先每小时纯属浪费配额） | 抓上游 `data.json`/`market.json`，带**多源回退**与**禁止降级护栏** |
 
-  - **禁止降级护栏**：抓到 `versionTimestamp` 比线上更旧的 data.json 时直接拒绝写入。历史教训：上游 `silent1b/MWIData` 已停在 `v1.20250818.0`（2025-08 后未再更新），而线上是 `v1.20260309.0`，旧的「哈希不同就覆盖」策略会用**旧数据反向覆盖线上新数据**。
-  - **market.json 体积护栏**：该文件正常只有几十 KB，若某源返回 3MB 级载荷（上游仓库结构变化时会发生）直接拒绝。
-  - **raw 通道不可靠**：`raw.githubusercontent.com` 在本网络下取 3MB 级文件要 270~290 秒甚至超时；jsDelivr（`cdn.jsdelivr.net/gh/...`）约 25~35 秒、`api.github.com` 的 Contents API 更快，但**对 >1MB 文件返回空 content**（大文件用不了）。
-  - GitHub 定时任务在高峰期会**延迟甚至跳过**，所以采样策略是「高频 + 按时间戳去重」，而不是精确每 20 分钟。
+  - **部署安全红线（共享目录）**：`gh-pages:data/` 由多个脚本共享写入，`sample_market_history.py` **只拥有** `market_history.json`，`fetch_game_data.py` **只拥有** `data.json`/`market.json`。两者都只把自己的文件复制进 gh-pages 的全新克隆后提交，**严禁 `rmtree` + `copytree` 整个 `data/`**——早期采样脚本用 `public/data` 整目录替换，删掉了线上 4MB `data.json` 与 70KB `market.json`（commit `93f0107`）。两脚本都调用 `assert_no_unintended_deletions()`，`git status` 出现非自己负责的删除即中止部署。CI 先检出 `gh-pages`（线上数据在 `./data/`），再 `git checkout main -- scripts/<file>` 取脚本。
+  - **禁止降级护栏**：抓到 `versionTimestamp` 比线上更旧的 data.json 时直接拒绝写入。历史教训：上游 `silent1b/MWIData` 已停在 `v1.20250818.0`（2025-08 后未再更新），而线上是 `v1.20260309.0`，旧的「哈希不同就覆盖」策略会用**旧数据反向覆盖线上新数据**。`version_stamp_of()` 依次取 `versionTimestamp`/`currentTimestamp`/`time`，epoch 数字补零到 20 位（保证字典序 == 时间序）；任一侧取不到版本戳时保守放行，不阻塞正常刷新。
+  - **market.json 体积护栏**：该文件正常只有几十 KB，若某源返回 3MB 级载荷（上游仓库结构变化时会发生）直接拒绝；`data.json` 则必须含 `itemDetailMap`，否则跳过该源。
+  - **多源回退**：`DATA_SOURCES` 依次尝试 **jsDelivr CDN**（`cdn.jsdelivr.net/gh/...`，约 25~35 秒）→ **ghproxy**（`ghproxy.net/...`，约 35 秒）→ **`raw.githubusercontent.com`**（本网络下取 3MB 级文件要 270~290 秒甚至超时，仅作最后兜底）；`HTTP_TIMEOUT = 120`、`RETRY_TOTAL = 3`。每个源都过上面的结构校验，不合格即跳过。
+  - GitHub 定时任务在高峰期会**延迟甚至跳过**，所以采样策略是「高频 + 按时间戳去重」，而不是精确每 20 分钟。采样脚本另有两道护栏：官方快照物品数为 0 时放弃本次采样（绝不用空快照覆盖 7 天历史）；采样时间戳与线上最后一点相同时跳过。
 - **入口挂载门控与失败回退（game store）**：`main.ts` 等 `tryFetchData().then(router.isReady)` 才 `mount`。`tryFetchData` 用 **`success` 标志**（**勿用 `retryCount===0`，循环后恒 -1 为死代码**）；全部重试失败时若已有 `gameData`+`marketData` 则**回退使用缓存**，仅完全无数据才抛「强制宕机」；`fetchData` 的 `Promise.all` 带 **15s `AbortController` 超时**。
 
 ## 5. 已知待办与未完成项
@@ -78,7 +79,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 5. **负利润不过滤**：`enhanposer`/`enhanposest` 已移除 `!enhancer.profitable` 预筛——**负利润方案也会输出**，勿再「修复」为过滤。
 6. **兜底价**：`getPriceOf` 对市场完全无记录的物品（如 back 披风）用 `item.sellPrice` 兜底 ask/bid——查不到价≠无价，可能是兜底显示。
 7. **非安全隔离**：路由/页面始终全部打包，私有页只是隐藏 + 守卫；`checkSecret()` 恒 true，**别把敏感逻辑放在前端**。
-8. **市场监控涨跌依赖历史采样**：涨跌列 = 当前价 vs 「时间窗起点前最近采样」，无历史（未采样且无服务端归档）时显示 `--` 属正常，不是 bug。本地兜底节流 30min、上限 48 条，仅线上（GitHub Pages）有服务端 26h 归档。改采样结构需兼容旧 `mewkonomy-market-history` 缓存。
+8. **市场监控涨跌依赖历史采样**：涨跌列 = 当前值 vs「时间窗起点前最近采样」，无历史（未采样且无服务端归档）时显示 `--` 属正常，不是 bug。本地兜底节流 30min、上限 200 条、7 天窗口；线上（GitHub Pages）另有服务端 `data/market_history.json` 归档（同样 7 天、最多 520 点，每 20 分钟一点）。页面可选时间窗 `1/3/6/12/24/72/168` 小时，对比口径 `price/ask/bid/volume`。改采样结构需兼容旧 `mewkonomy-market-history` 缓存。
 9. **入口挂载与外部数据源**：主界面空白多为外部 `marketplace.json` 不可达且无本地缓存。`tryFetchData` 已用 `success` 标志 + 缓存回退 + 15s 超时兜底；**不要改回 `retryCount===0` 判断**（死代码）。
 
 ## 7. 常规工作流（AI 接手后）

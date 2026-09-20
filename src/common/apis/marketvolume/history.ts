@@ -15,7 +15,7 @@ import type { MarketVolumeItem } from "./index"
  * 采样点结构（**两种长度都要兼容**）：
  *   { t: epoch秒, p: { hrid: { level: [ask, price] } } }            ← 早期版本只存两个
  *   { t: epoch秒, p: { hrid: { level: [ask, bid, volume] } } }      ← 现行版本存三个
- * 因此读取一律走 valueAt() / volumeAt()，不要直接下标。
+ * 因此读取一律走 valueAt() / priceOf()，不要直接下标。
  *
  * volume 语义提醒：官方 `v` 是**当日累计成交量**（每天 UTC 0 点归零），
  * 所以成交量对比要看「增量 / 速率」，不能直接比绝对值。
