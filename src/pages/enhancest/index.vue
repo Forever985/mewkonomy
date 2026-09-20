@@ -489,7 +489,7 @@ watch(menuVisible, (value) => {
               <template #default>
                 <el-tooltip placement="top" effect="light">
                   <template #content>
-                    {{ t('#逃逸等级提示') }}
+                    {{ t('逃逸等级提示') }}
                   </template>
                   <div class="flex items-center">
                     <el-icon>
@@ -521,7 +521,7 @@ watch(menuVisible, (value) => {
               <template #default>
                 <el-tooltip placement="top" effect="light">
                   <template #content>
-                    {{ t('#逃逸价格提示') }}
+                    {{ t('逃逸价格提示') }}
                   </template>
                   <div class="flex items-center">
                     <el-icon>
@@ -546,7 +546,7 @@ watch(menuVisible, (value) => {
               <template #default>
                 <el-tooltip placement="top" effect="light">
                   <template #content>
-                    {{ t('#白板价格提示') }}
+                    {{ t('白板价格提示') }}
                   </template>
                   <div class="flex items-center">
                     <el-icon>
@@ -866,7 +866,7 @@ watch(menuVisible, (value) => {
               <div>{{ t('逃逸损耗') }}</div>
               <el-tooltip placement="top" effect="light">
                 <template #content>
-                  {{ t('#逃逸损耗提示') }}
+                  {{ t('逃逸损耗提示') }}
                 </template>
                 <el-icon>
                   <Warning />
@@ -885,7 +885,7 @@ watch(menuVisible, (value) => {
                 <div>{{ t('利润 / 件') }}</div>
                 <el-tooltip placement="top" effect="light">
                   <template #content>
-                    {{ t('#超级强化利润/件提示') }}
+                    {{ t('超级强化利润/件提示') }}
                   </template>
                   <el-icon>
                     <Warning />

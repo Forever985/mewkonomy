@@ -165,7 +165,7 @@ const { t } = useI18n()
  * 说明文案：key 采用项目统一的 `#` 前缀（说明性词条）。
  * zh-cn 未收录时 vue-i18n 会回落显示 key 本身，这里去掉前导 `#`，保证中文界面文案干净。
  */
-const levelingTip = computed(() => t("#强化练级说明").replace(/^#/, ""))
+const levelingTip = computed(() => t("强化练级说明"))
 </script>
 
 <template>

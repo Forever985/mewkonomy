@@ -282,9 +282,9 @@ const onPriceStatusChange = usePriceStatus("manualchemy-price-status")
                       <template #content>
                         {{ t('单次动作产生的利润。') }}
                         <br>
-                        {{ t('#多步动作利润提示') }}
+                        {{ t('多步动作利润提示') }}
                         <br>
-                        {{ t('#多步动作利润举例') }}
+                        {{ t('多步动作利润举例') }}
                       </template>
                       <el-icon>
                         <Warning />

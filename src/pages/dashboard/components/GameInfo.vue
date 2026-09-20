@@ -33,9 +33,9 @@ const gameStore = useGameStore()
         </span>
       </template>
       <el-select :model-value="gameStore.priceFallbackMode" style="width: 170px" @change="(value) => gameStore.setPriceFallbackMode(value)">
-        <el-option label="A - 显示 -1（不兜底）" value="A" />
-        <el-option label="B - 使用 sellPrice 兜底" value="B" />
-        <el-option label="C - 使用大全套价格兜底" value="C" />
+        <el-option :label="t('A - 显示 -1（不兜底）')" value="A" />
+        <el-option :label="t('B - 使用 sellPrice 兜底')" value="B" />
+        <el-option :label="t('C - 使用大全套价格兜底')" value="C" />
       </el-select>
     </el-tooltip>
   </div>

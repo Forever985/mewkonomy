@@ -5,6 +5,8 @@ interface Props {
   total: number
 }
 const props = defineProps<Props>()
+
+const { t } = useI18n()
 const { isMobile } = useDevice()
 </script>
 
@@ -13,19 +15,19 @@ const { isMobile } = useDevice()
     <template v-if="!isMobile">
       <span class="search-footer-item">
         <SvgIcon name="keyboard-enter" class="svg-icon" />
-        <span>确认</span>
+        <span>{{ t("确认") }}</span>
       </span>
       <span class="search-footer-item">
         <SvgIcon name="keyboard-up" class="svg-icon" />
         <SvgIcon name="keyboard-down" class="svg-icon" />
-        <span>切换</span>
+        <span>{{ t("切换") }}</span>
       </span>
       <span class="search-footer-item">
         <SvgIcon name="keyboard-esc" class="svg-icon" />
-        <span>关闭</span>
+        <span>{{ t("关闭") }}</span>
       </span>
     </template>
-    <span class="search-footer-total">共 {{ props.total }} 项</span>
+    <span class="search-footer-total">{{ t("共") }} {{ props.total }} {{ t("项") }}</span>
   </div>
 </template>
 

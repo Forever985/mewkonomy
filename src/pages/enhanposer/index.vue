@@ -176,7 +176,7 @@ const { t } = useI18n()
       <PriceStatusSelect @change="onPriceStatusChange" />
 
       <div>
-        {{ t('#强化纪念') }}
+        {{ t('强化纪念') }}
       </div>
     </div>
     <el-row :gutter="20" class="row">
@@ -320,9 +320,9 @@ const { t } = useI18n()
                       <template #content>
                         {{ t('单次动作产生的利润。') }}
                         <br>
-                        {{ t('#多步动作利润提示') }}
+                        {{ t('多步动作利润提示') }}
                         <br>
-                        {{ t('#多步动作利润举例') }}
+                        {{ t('多步动作利润举例') }}
                       </template>
                       <el-icon>
                         <Warning />

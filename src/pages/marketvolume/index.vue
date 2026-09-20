@@ -273,7 +273,7 @@ function fmtTime(value: number) {
           </span>
         </div>
         <div v-if="!hasRemoteHistory()" class="text-xs text-gray-400 mt-1">
-          {{ t("#无线上历史提示") }}
+          {{ t("无线上历史提示") }}
         </div>
       </template>
 

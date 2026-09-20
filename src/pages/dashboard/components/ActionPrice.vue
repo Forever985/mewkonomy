@@ -23,7 +23,7 @@ function sourceLabel(s?: PriceSource) {
 }
 function sourceTip(s?: PriceSource) {
   switch (s) {
-    case "selfcraft": return "市场无价，按大全套自产成本估值（非真实成交价）"
+    case "selfcraft": return t("市场无价，按大全套自产成本估值（非真实成交价）")
     case "shop": return "市场无价，按商店价格兜底（非真实成交价）"
     case "none": return "无价（-1），暂无法定价"
     default: return ""

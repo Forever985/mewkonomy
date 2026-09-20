@@ -30,7 +30,7 @@ export const freezeConfig: FreezeConfig = {
   // 提示信息
   message: {
     title: "暂停服务",
-    content: "#暂停公告"
+    content: "暂停公告"
   }
 }
 

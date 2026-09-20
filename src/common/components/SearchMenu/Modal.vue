@@ -13,6 +13,7 @@ const modelValue = defineModel<boolean>({ required: true })
 
 const router = useRouter()
 const { isMobile } = useDevice()
+const { t } = useI18n()
 
 const inputRef = ref<HTMLInputElement | null>(null)
 const scrollbarRef = ref<InstanceType<typeof ElScrollbar> | null>(null)
@@ -158,9 +159,9 @@ function handleReleaseUpOrDown() {
         <SvgIcon name="search" class="svg-icon" />
       </template>
     </el-input>
-    <el-empty v-if="result.length === 0" description="暂无搜索结果" :image-size="100" />
+    <el-empty v-if="result.length === 0" :description="t('暂无搜索结果')" :image-size="100" />
     <template v-else>
-      <p>搜索结果</p>
+      <p>{{ t("搜索结果") }}</p>
       <el-scrollbar ref="scrollbarRef" max-height="40vh" always>
         <Result
           ref="resultRef"

@@ -725,7 +725,7 @@ watch(menuVisible, (value) => {
             </el-table-column>
           </ElTable>
           <div class="text-12px color-gray-500 mt-1 leading-4">
-            {{ t('#件数与期望说明') }}
+            {{ t('件数与期望说明') }}
           </div>
         </el-card>
       </el-col>
