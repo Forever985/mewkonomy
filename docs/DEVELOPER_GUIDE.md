@@ -172,11 +172,18 @@ const panelFields: PanelField[] = [ /* 声明字段 */ ]
 3. `.rank-card` 布局样式已收敛到 `SearchPanel` 内部（非 scoped）。页面**不要再**自己定义
    同名样式——页面级 scoped 样式也作用不到组件内部。
 
-**迁移进度**：已完成 `decompose` / `junglest` / `junglest-inherit` / `inherit` / `jungle-pickout`。
-尚待迁移：`jungle`（含售价区间）/ `dashboard`（两个表单）/ `manualchemy` /
-`enhanposer` / `enhanposest` / `enhanceexp`（levelRange 型条件）。
-迁移时务必**逐控件核对**（复选框含 `disabled` 与各自的 handler、区间字段、条件首列文案），
-只比 `:label` 会漏掉类似 `junglest/inherit` 的 `noEscape` 复选框。
+**迁移进度**：**11 个检索页已全部迁移**——`decompose` / `junglest` / `junglest-inherit` / `inherit` /
+`jungle-pickout` / `manualchemy` / `enhanceexp` / `jungle` / `enhanposer` / `enhanposest` / `dashboard`（含主排行与收藏夹两个表单）。
+
+**唯一未迁移的是 `pages/dashboard/components/ManualPriceCard.vue`**，这是有意的：它只有 2 个控件
+（一个绑定 price store 的 `<el-switch>` + 一个**单字符串**的物品名输入），既不是多变检索表单，
+也复用了 `name` 的单值语义。为它加一个 switch 字段类型 + 单字符串 name 变体，改动量大于它自身那 9 行，不划算。
+
+**迁移时务必逐控件核对**（复选框含 `disabled` 与各自的 handler、区间字段、条件首列文案、价格口径下拉），
+只比 `:label` 会漏掉类似 `junglest/inherit` 的 `noEscape` 复选框 —— 本次就漏过一次。
+
+**行尾注意**：批量脚本改写 `.vue` 时容易把 LF 文件写成 CRLF，导致整文件进 diff。
+改完用 `git diff --stat` 自查，必要时按基线行尾归一。
 
 ---
 
