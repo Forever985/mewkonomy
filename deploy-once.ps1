@@ -179,14 +179,19 @@ try {
 
     # ---------------------------------------------------------- [4/5] gh-pages
     Step "[4/5] 推送构建产物到 gh-pages"
+
+    # 用自带的发布器而不是 `npx gh-pages`：后者默认 CLEAN=true 会清空整条分支，
+    # 把线上由 Actions 每 20 分钟维护的 data/ 一起冲掉
+    # （实测 a4192aa 把 market_history.json 从 2 个采样点覆盖回 1 个）。
+    # scripts/publish-gh-pages.mjs 只同步非 data 文件，并在推送前断言没有删除 data/。
     $attempt = 0
     while ($true) {
         $attempt++
-        Info "npx gh-pages -d dist -b gh-pages（第 $attempt 次）..."
-        # 同上：npx/gh-pages 也会往 stderr 写进度，不能让它触发终止性错误
+        Info "node scripts\publish-gh-pages.mjs（第 $attempt 次）..."
+        # 同上：git 会往 stderr 写进度，不能让它触发终止性错误
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
-        & npx --yes gh-pages -d dist -b gh-pages --repo $Remote
+        & node (Join-Path $PSScriptRoot 'scripts\publish-gh-pages.mjs') --dir dist --repo $Remote
         $pagesExit = $LASTEXITCODE
         $ErrorActionPreference = $prevEap
 

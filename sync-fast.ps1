@@ -25,6 +25,7 @@ $env:GIT_CONFIG_NOSYSTEM = '1'  # 忽略系统级 git 配置，进一步隔离�
 $ProxyPorts    = @(7897, 7890, 10808, 10809, 1080, 8118)       # 常见本地代理端口，逐个试（含旧 10808）
 $BranchPages   = 'gh-pages'
 $DistDir       = 'dist'
+$RemoteRepo    = 'https://github.com/Forever985/mewkonomy.git'
 $ProbeRepo     = 'https://github.com/octocat/Hello-World.git'  # 连通性探测（公开仓库，无需凭据）
 # 以下为"需要重新编译"的源码路径，用于检测是否误用本脚本
 $SourcePaths   = @('src', 'vite.config.ts', 'package.json', 'pnpm-lock.yaml', '.env.public', 'uno.config.ts', 'tsconfig.json')
@@ -169,10 +170,12 @@ try {
 
     # ============ [3/4] 推送产物到 gh-pages ============
     Write-Step "[3/4] 推送构建产物到 gh-pages"
-    Write-Host "  npx gh-pages -d $DistDir -b $BranchPages ..."
-    & npx --yes gh-pages -d $DistDir -b $BranchPages
-    if ($LASTEXITCODE -ne 0) { throw "gh-pages 推送失败，请检查网络/凭据" }
-    Write-Host "  gh-pages 推送成功" -ForegroundColor Green
+    # 用自带发布器而非 `npx gh-pages`：后者默认 CLEAN=true 会清空整条 gh-pages 分支，
+    # 把线上由 Actions 维护的 data/（每 20 分钟采样的市场历史）一并冲掉。
+    Write-Host "  node scripts/publish-gh-pages.mjs --dir $DistDir --repo $RemoteRepo ..."
+    & node (Join-Path $PSScriptRoot 'scripts\publish-gh-pages.mjs') --dir $DistDir --repo $RemoteRepo
+    if ($LASTEXITCODE -ne 0) { throw "gh-pages 发布失败，请检查网络/凭据" }
+    Write-Host "  gh-pages 发布成功" -ForegroundColor Green
 
     # ============ 完成 ============
     Write-Host ""

@@ -157,9 +157,17 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 
 - **为什么拆开**：历史采样与游戏数据抓取原先共用一个 job，`data.json` 上游一挂，历史采样一起停摆——线上曾因此**连续 8 天没有任何新采样点**。
 - **为什么游戏数据改为每天一次**：游戏数据只在游戏版本更新时变化，原先每小时跑一次纯属浪费 Actions 配额。
+- **官方快照实际是 1 小时粒度（实测）**：`marketplace.json` 顶层 `timestamp` 代表**市场快照本身的生成时间**，实测它以**整点、每小时**为粒度前进（例如 07:06:00 → 08:06:00），而不是每 20 分钟。因此：
+  - 每 20 分钟的 cron 实际每天只能产出约 **24 个不同采样点**（其余运行都因时间戳相同被去重跳过，属预期行为，不是故障）；
+  - 7 天窗口下约 168 点，远低于 520 的上限，所以上限目前不会触发；
+  - 这意味着「涨跌」基准点的最细分辨率是 1 小时：**1 小时时间窗常常找不到更早的基准点而显示 `--`**，属正常现象；3 小时及以上的窗口才有稳定意义。
 - **部署安全红线（必读）**：`gh-pages` 的 `data/` 是**多脚本共享目录**——`sample_market_history.py` **只拥有** `market_history.json`，`fetch_game_data.py` **只拥有** `data.json` / `market.json`。两脚本都只把自己的文件复制进 `gh-pages` 的全新克隆再提交，**绝不允许 `rmtree` + `copytree` 整个 `data/`**：早期采样脚本用 `public/data` 整目录替换线上目录，而 `main` 的 `public/data` 不含新抓的 `data.json`/`market.json`，导致**每次采样都会删掉线上 4MB 的 `data.json` 与 70KB 的 `market.json`**（commit `93f0107`）。两脚本另调用 `assert_no_unintended_deletions()`，`git status` 一旦出现本脚本不负责的删除就中止部署。
 - **CI 执行顺序**：先 `actions/checkout` 检出 `gh-pages`（线上数据落在 `./data/`，供脚本做增量比对），再 `git fetch origin main:main` + `git checkout main -- scripts/<file>` 取回脚本（脚本只在 `main` 上维护）。
+- **本地部署也必须守同一条红线**：`gh-pages` 的 `data/` 同样**不能被本地部署覆盖**。原先 `deploy.ps1` / `deploy-once.ps1` / `sync-fast.ps1` 都用 `npx gh-pages -d dist`，而该命令默认 `CLEAN=true`，会**先清空整条 gh-pages 分支**再上传 `dist`；`dist/data/` 只是仓库里 `public/data/` 的静态副本，于是每次本地部署都把 Actions 每 20 分钟采样的 `market_history.json` 覆盖回旧快照（实测 commit `a4192aa` 把 2 个采样点覆盖回 1 个）。`.github/workflows/deploy.yml` 早就用 `rm -rf dist/data` + `CLEAN: false` 规避，本地脚本此前漏了。
+  - 现统一改用自带发布器 **`scripts/publish-gh-pages.mjs`**：只同步「非 `data/`」文件，推送前断言受保护文件既未消失、也未改大小，并检查 `git status` / 暂存区里没有任何 `D data/...`，一旦发现立即中止。
+  - 调试可用 `DRY_RUN=1 node scripts/publish-gh-pages.mjs --dir dist --repo <url>`。
 - **本地调试**：`DRY_RUN=1 python scripts/<script>.py` 只抓取 + 写本地，不推送。
+- **注意 PowerShell 脚本必须以 UTF-8 + BOM 保存**：Windows PowerShell 5.1 在没有 BOM 时按 ANSI 读取，中文注释会破坏语法并报出与真实原因无关的解析错误（`Unexpected token`、`missing terminator` 等）。改完 `.ps1` 后务必确认 BOM 还在、且用 `[System.Management.Automation.Language.Parser]::ParseFile()` 复核为 0 错误。
 
 ---
 

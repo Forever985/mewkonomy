@@ -178,10 +178,12 @@ try {
     # ============ [3/5] 推送产物到 gh-pages ============
     Write-Step "[3/5] 推送构建产物到 gh-pages"
     $t = Get-Date
-    Write-Host "  npx gh-pages -d $DistDir -b $BranchPages ..."
-    & npx --yes gh-pages -d $DistDir -b $BranchPages
-    if ($LASTEXITCODE -ne 0) { throw "gh-pages 推送失败，请检查网络/凭据（当前通道: $selected）" }
-    Write-Host "  gh-pages 推送成功 (耗时 $([math]::Round(((Get-Date)-$t).TotalSeconds,1))s)" -ForegroundColor Green
+    # 用自带发布器而非 `npx gh-pages`：后者默认 CLEAN=true 会清空整条 gh-pages 分支，
+    # 把线上由 Actions 维护的 data/（每 20 分钟采样的市场历史）一并冲掉。
+    Write-Host "  node scripts/publish-gh-pages.mjs --dir $DistDir --repo $RemoteRepo ..."
+    & node (Join-Path $PSScriptRoot 'scripts\publish-gh-pages.mjs') --dir $DistDir --repo $RemoteRepo
+    if ($LASTEXITCODE -ne 0) { throw "gh-pages 发布失败，请检查网络/凭据（当前通道: $selected）" }
+    Write-Host "  gh-pages 发布成功 (耗时 $([math]::Round(((Get-Date)-$t).TotalSeconds,1))s)" -ForegroundColor Green
 
     # ============ [4/5] 通道探测汇总 ============
     Write-Step "[4/5] 通道探测汇总"
