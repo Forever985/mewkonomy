@@ -69,7 +69,7 @@ export interface RangeField extends FieldBase {
   maxKey: string
   /** 区间分隔符，默认 "~" */
   separator?: string
-  /** 单位后缀，默认无；传 "%" 会在两端都追加 `&nbsp;%` */
+  /** 单位后缀，默认无。只写 "M" 这类纯单位；"%"" 会渲染成 `&nbsp;%`（与旧模板一致） */
   unit?: string
   placeholderMin?: string
   placeholderMax?: string

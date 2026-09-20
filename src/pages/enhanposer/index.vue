@@ -1,9 +1,11 @@
 <script lang="ts" setup>
 import type Calculator from "@/calculator"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
+import SearchPanel from "@@/components/SearchPanel/index.vue"
+import type { PanelField } from "@@/components/SearchPanel/types"
 import { usePagination } from "@@/composables/usePagination"
-import { Delete, Edit, Plus, Search } from "@element-plus/icons-vue"
-import { ElMessageBox, type FormInstance, type Sort } from "element-plus"
+import { Edit, Search } from "@element-plus/icons-vue"
+import { ElMessageBox, type Sort } from "element-plus"
 import { cloneDeep, debounce } from "lodash-es"
 import { getEnhanposerDataApi } from "@/common/apis/enhanposer"
 
@@ -22,7 +24,6 @@ import ManualPriceCard from "../dashboard/components/ManualPriceCard.vue"
 // #region 查
 const { paginationData: paginationDataLD, handleCurrentChange: handleCurrentChangeLD, handleSizeChange: handleSizeChangeLD } = usePagination({}, "enhanposer-leaderboard-pagination")
 const leaderboardData = ref<Calculator[]>([])
-const ldSearchFormRef = ref<FormInstance | null>(null)
 
 const ldSearchData = useMemory("enhanposer-leaderboard-search-data", {
   name: [],
@@ -66,18 +67,51 @@ delete ldSearchData.value.targetLevel
 delete ldSearchData.value.minLevel
 delete ldSearchData.value.maxLevel
 
-/** 目标强化等级从 1~20 并行选择 */
-function addCondition() {
-  ldSearchData.value.conditions.push({ steps: undefined, minLevel: undefined, maxLevel: undefined })
-}
-function removeCondition(index: number) {
-  ldSearchData.value.conditions.splice(index, 1)
-}
-
+/** 材料买价 / 成品售价可选口径（须在 panelFields 之前声明，否则配置求值时处于暂时性死区） */
 const priceTypeOptions = computed(() => [
   { value: "ask", label: `${t("左挂单")}(${t("左价")})` },
   { value: "bid", label: `${t("右收购")}(${t("右价")})` }
 ])
+
+/** 搜索面板配置：字段顺序/文案/边界与原手写模板完全一致 */
+const panelFields: PanelField[] = [
+  { type: "name", key: "name", label: "物品", width: 220 },
+  {
+    type: "conditions",
+    label: "只看目标等级",
+    stepsCount: 20,
+    stepLabel: n => `${t("目标等级")} ${n}`,
+    levelRange: { min: 1, max: 20, placeholderMin: "1", placeholderMax: "20" }
+  },
+  {
+    type: "range",
+    label: "利润率",
+    minKey: "minProfitRate",
+    maxKey: "maxProfitRate",
+    min: 0,
+    unit: "%",
+    placeholderMin: "0",
+    placeholderMax: "100"
+  },
+  {
+    type: "range",
+    label: "风险",
+    minKey: "minRisk",
+    maxKey: "maxRisk",
+    min: 0,
+    placeholderMin: "0",
+    placeholderMax: "∞"
+  },
+  { type: "checkbox", key: "banEquipment", label: "排除装备" },
+  { type: "checkbox", key: "banJewelry", label: "排除首饰" },
+  { type: "checkbox", key: "banCombat", label: "排除战斗装备" },
+  { type: "checkbox", key: "banLife", label: "排除生活装备" },
+  { type: "checkbox", key: "noDecompose", label: "不分解模式" },
+  { type: "select", key: "materialPriceType", label: "材料买价", options: () => priceTypeOptions.value },
+  { type: "select", key: "productPriceType", label: "成品售价", options: () => priceTypeOptions.value }
+]
+
+
 
 const loadingLD = ref(false)
 const getLeaderboardData = debounce(() => {
@@ -183,94 +217,7 @@ const { t } = useI18n()
       <el-col :xs="24" :sm="24" :md="24" :lg="24" :xl="14">
         <el-card>
           <template #header>
-            <el-form class="rank-card" ref="ldSearchFormRef" :inline="true" :model="ldSearchData">
-              <div class="title">
-                {{ t('利润排行') }}
-              </div>
-              <el-form-item prop="name" :label="t('物品')" style="width:100%; margin-right:0;">
-                <el-select
-                  v-model="ldSearchData.name"
-                  multiple
-                  filterable
-                  allow-create
-                  default-first-option
-                  :reserve-keyword="false"
-                  :placeholder="t('输入多个物品名，回车添加')"
-                  style="width:260px"
-                  clearable
-                  @change="handleSearchLD"
-                />
-              </el-form-item>
-
-              <el-form-item :label="t('只看目标等级')" style="width:100%; margin-right:0;">
-                <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
-                  <div v-for="(cond, i) in ldSearchData.conditions" :key="i" style="display:flex; align-items:center; gap:8px;">
-                    <el-select v-model="cond.steps" :placeholder="t('不限（默认全部）')" clearable style="width:130px" @change="handleSearchLD">
-                      <el-option v-for="n in 20" :key="n" :label="`${t('目标等级')} ${n}`" :value="n" />
-                    </el-select>
-                    <el-input-number v-model="cond.minLevel" :min="1" :max="20" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="1" />
-                    <span>~</span>
-                    <el-input-number v-model="cond.maxLevel" :min="1" :max="20" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="20" />
-                    <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
-                  </div>
-                  <div style="color:#909399; font-size:12px;">{{ t('多选后仅显示这些强化等级的方案') }}</div>
-                  <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('利润率')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number v-model="ldSearchData.minProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />&nbsp;%
-                  <span>~</span>
-                  <el-input-number v-model="ldSearchData.maxProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="100" />&nbsp;%
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('风险')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number v-model="ldSearchData.minRisk" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />
-                  <span>~</span>
-                  <el-input-number v-model="ldSearchData.maxRisk" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="∞" />
-                </div>
-              </el-form-item>
-
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.banEquipment" @change="handleSearchLD">
-                  {{ t('排除装备') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.banJewelry" @change="handleSearchLD">
-                  {{ t('排除首饰') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.banCombat" @change="handleSearchLD">
-                  {{ t('排除战斗装备') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.banLife" @change="handleSearchLD">
-                  {{ t('排除生活装备') }}
-                </el-checkbox>
-              </el-form-item>
-              <el-form-item>
-                <el-checkbox v-model="ldSearchData.noDecompose" @change="handleSearchLD">
-                  {{ t('不分解模式') }}
-                </el-checkbox>
-              </el-form-item>
-
-              <el-form-item :label="t('材料买价')">
-                <el-select v-model="ldSearchData.materialPriceType" style="width:150px" @change="handleSearchLD">
-                  <el-option v-for="opt in priceTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-                </el-select>
-              </el-form-item>
-              <el-form-item :label="t('成品售价')">
-                <el-select v-model="ldSearchData.productPriceType" style="width:150px" @change="handleSearchLD">
-                  <el-option v-for="opt in priceTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-                </el-select>
-              </el-form-item>
-            </el-form>
+            <SearchPanel v-model="ldSearchData" :fields="panelFields" title="利润排行" @change="handleSearchLD" />
           </template>
           <template #default>
             <el-table :data="leaderboardData" v-loading="loadingLD" @sort-change="handleSortLD">
@@ -396,15 +343,6 @@ const { t } = useI18n()
 </template>
 
 <style lang="scss" scoped>
-.rank-card {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  .title {
-    width: 160px;
-    margin-bottom: 12px;
-  }
-}
 .pager-wrapper {
   display: flex;
   justify-content: center;
