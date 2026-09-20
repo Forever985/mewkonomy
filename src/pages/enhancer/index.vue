@@ -43,7 +43,9 @@ const protectionList = ref<Ingredient[]>([])
 const defaultConfig = {
   hourlyRate: 5000000,
   taxRate: 5,
-  enhanceLevel: 10
+  enhanceLevel: 10,
+  pieceCount: 1,
+  expectationFactor: 1
 }
 
 onMounted(() => {
@@ -175,45 +177,75 @@ const results = computed(() => {
     })
 
     const { actions, protects } = calc.enhancelate()
+    // 「几件装备」：材料与本体成本按件数线性放大（每件都独立从 0 强化到目标等级）
+    const pieceCount = Math.max(1, enhancerStore.config.pieceCount ?? defaultConfig.pieceCount)
+    // 「成功期望」：1 = 马尔科夫链算出的平均期望次数；1.2 = 假设 1.2 倍期望才成功，
+    // 于是材料与保护消耗整体上浮 20%（只放大消耗，不改成功率与产出）
+    const expectationFactor = Math.max(0.1, enhancerStore.config.expectationFactor ?? defaultConfig.expectationFactor)
+    // 实际会消耗的强化次数与保护次数（含期望系数与件数）
+    const scaledActions = actions * expectationFactor * pieceCount
+    const scaledProtects = protects * expectationFactor * pieceCount
+
+    const protectionPrice = typeof currentItem.value.protection?.price === "number"
+      ? currentItem.value.protection!.price
+      : currentItem.value.protection!.originPrice
+
     const matCost
         = enhancementCosts.value.reduce((acc, item) => {
           const price = typeof item.price === "number" ? item.price : item.originPrice
-          return acc + (price * item.count * actions)
-        }, 0) + (typeof currentItem.value.protection?.price === "number"
-          ? currentItem.value.protection!.price
-          : currentItem.value.protection!.originPrice) * protects
+          return acc + (price * item.count * scaledActions)
+        }, 0) + protectionPrice * scaledProtects
 
-    const totalCostNoHourly = matCost + (typeof currentItem.value?.price === "number"
+    const piecePrice = typeof currentItem.value?.price === "number"
       ? currentItem.value!.price
-      : currentItem.value!.originPrice)
-    let totalCost = totalCostNoHourly + (enhancerStore.hourlyRate ?? defaultConfig.hourlyRate) * (actions / calc.actionsPH)
+      : currentItem.value!.originPrice
+
+    // 单件口径（不受件数影响，用于「单个利润」）
+    const matCostPerPiece = matCost / pieceCount
+    const totalCostNoHourlyPerPiece = matCostPerPiece + piecePrice
+    // 全批口径：本体（买/做 N 件）+ 材料
+    const totalCostNoHourly = totalCostNoHourlyPerPiece * pieceCount
+    const hourlyTotal = (enhancerStore.hourlyRate ?? defaultConfig.hourlyRate) * (scaledActions / calc.actionsPH)
+    let totalCost = totalCostNoHourly + hourlyTotal
     totalCost *= (1 + (enhancerStore.taxRate ?? defaultConfig.taxRate) / 100)
 
+    // 产出：每件都强化成功后售出，件数线性放大
     const productPrice = typeof currentItem.value.productPrice === "number"
       ? currentItem.value.productPrice
       : getPriceOf(currentItem.value.hrid, enhanceLevel).bid
 
-    const hourlyCost = (productPrice * 0.98 - totalCostNoHourly) / actions * calc.actionsPH
-    const profitPP = productPrice * 0.98 - totalCostNoHourly
+    const incomeTotal = productPrice * 0.98 * pieceCount
+    const hourlyCost = (incomeTotal - totalCostNoHourly) / scaledActions * calc.actionsPH
+    const profitPP = productPrice * 0.98 - totalCostNoHourlyPerPiece
+    const profitTotal = incomeTotal - totalCostNoHourly
 
-    const seconds = actions / calc.actionsPH * 3600
+    const seconds = scaledActions / calc.actionsPH * 3600
     result.push({
       actions,
+      scaledActions,
+      scaledActionsFormatted: Format.number(scaledActions, 2),
       actionsFormatted: Format.number(actions, 2),
       protects,
-      protectsFormatted: Format.number(protects, 2),
+      scaledProtects,
+      protectsFormatted: Format.number(scaledProtects, 2),
       protectLevel: i,
       time: Format.costTime(seconds * 1000000000),
       expPHFormat: Format.money(calc.exp * calc.actionsPH),
       matCost: Format.money(matCost),
+      matCostPerPiece,
+      matCostPerPieceFormatted: Format.money(matCostPerPiece),
       totalCostFormatted: Format.money(totalCost),
       totalCost,
       totalCostNoHourly,
+      totalCostNoHourlyFormatted: Format.money(totalCostNoHourly),
+      gearCostFormatted: Format.money(piecePrice * pieceCount),
       matCostPH: `${Format.money(matCost / seconds * 3600)} / h`,
       hourlyCost,
       hourlyCostFormatted: Format.money(hourlyCost),
       profitPPFormatted: Format.money(profitPP),
-      profitRateFormatted: Format.percent(profitPP / totalCostNoHourly)
+      profitTotal,
+      profitTotalFormatted: Format.money(profitTotal),
+      profitRateFormatted: Format.percent(profitPP / totalCostNoHourlyPerPiece)
     })
   }
   return result
@@ -223,6 +255,8 @@ const columnWidths = computed(() => {
   interface ResultItem {
     actions: number
     actionsFormatted: string
+    scaledActions: number
+    scaledActionsFormatted: string
     protects: number
     protectsFormatted: string
     protectLevel: number
@@ -242,7 +276,7 @@ const columnWidths = computed(() => {
     widths[prop] = Math.max(maxWidth * 10 + 20, 60)
   }
   for (const item of enhancementCosts.value) {
-    const maxWidth = Math.max(...results.value.map(result => (Format.number(item.count * result.actions)).toString().length || 0))
+    const maxWidth = Math.max(...results.value.map(result => (Format.number(item.count * result.scaledActions)).toString().length || 0))
     widths[item.hrid] = Math.max(maxWidth * 10 + 20, 60)
   }
   return widths
@@ -646,6 +680,53 @@ watch(menuVisible, (value) => {
               </template>
             </el-table-column>
           </ElTable>
+          <el-divider class="mt-2 mb-2" />
+          <ElTable :data="[{}]" :show-header="false" style="--el-table-border-color:none" :cell-style="{ padding: '4px 0' }">
+            <el-table-column>
+              <template #default>
+                {{ t('件数') }}:
+              </template>
+            </el-table-column>
+            <el-table-column />
+            <el-table-column min-width="120" align="center">
+              <template #default>
+                <el-input-number
+                  v-model="enhancerStore.config.pieceCount"
+                  :min="1"
+                  :max="9999"
+                  :step="1"
+                  :placeholder="String(defaultConfig.pieceCount)"
+                  controls-position="right"
+                  class="max-w-100%"
+                />
+              </template>
+            </el-table-column>
+          </ElTable>
+          <ElTable :data="[{}]" :show-header="false" style="--el-table-border-color:none" :cell-style="{ padding: '4px 0' }">
+            <el-table-column>
+              <template #default>
+                {{ t('成功期望') }}:
+              </template>
+            </el-table-column>
+            <el-table-column />
+            <el-table-column min-width="120" align="center">
+              <template #default>
+                <el-input-number
+                  v-model="enhancerStore.config.expectationFactor"
+                  :min="0.1"
+                  :max="10"
+                  :step="0.1"
+                  :precision="2"
+                  :placeholder="String(defaultConfig.expectationFactor)"
+                  controls-position="right"
+                  class="max-w-100%"
+                />
+              </template>
+            </el-table-column>
+          </ElTable>
+          <div class="text-12px color-gray-500 mt-1 leading-4">
+            {{ t('#件数与期望说明') }}
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -662,6 +743,7 @@ watch(menuVisible, (value) => {
       >
         <el-table-column prop="protectLevel" :label="t('Prot')" :min-width="columnWidths.protectLevel" header-align="center" align="right" />
         <el-table-column prop="actionsFormatted" :label="t('次数')" :min-width="columnWidths.actionsFormatted" header-align="center" align="right" />
+        <el-table-column prop="scaledActionsFormatted" :label="t('实际次数')" :min-width="100" header-align="center" align="right" />
         <el-table-column prop="time" :label="t('时间')" :min-width="columnWidths.time" align="right" />
         <!-- <el-table-column prop="exp" :label="t('经验')" :min-width="100" align="right" /> -->
         <el-table-column prop="expPHFormat" :label="t('经验 / h')" :min-width="100" align="right" />
@@ -671,17 +753,20 @@ watch(menuVisible, (value) => {
             <ItemIcon class="mt-[8px]" :width="20" :height="20" :hrid="item.hrid" />
           </template>
           <template #default="{ row }">
-            {{ Format.money(item.count * row.actions) }}
+            {{ Format.money(item.count * row.scaledActions) }}
           </template>
         </el-table-column>
 
         <el-table-column prop="protectsFormatted" :label="t('保护')" :min-width="columnWidths.protectsFormatted" header-align="center" align="right" />
         <el-table-column prop="matCost" :label="t('材料费用')" :min-width="100" header-align="center" align="right" />
+        <el-table-column v-if="gearManufacture" prop="matCostPerPieceFormatted" :label="t('材料 / 件')" :min-width="100" header-align="center" align="right" />
         <el-table-column prop="matCostPH" :label="t('损耗')" :min-width="120" header-align="center" align="right" />
         <el-table-column v-if="enhancerStore.config.tab === '1' && useGameStore().checkSecret()" prop="profitRateFormatted" :label="t('利润率')" :min-width="100" header-align="center" align="right" />
         <el-table-column v-if="enhancerStore.config.tab === '1' " prop="profitPPFormatted" :label="t('单个利润')" :min-width="100" header-align="center" align="right" />
         <el-table-column v-if="enhancerStore.config.tab === '1' " prop="hourlyCostFormatted" :label="t('工时费')" :min-width="100" header-align="center" align="right" />
-        <el-table-column v-else prop="totalCostFormatted" :label="t('总费用')" :min-width="120" header-align="center" align="right" />
+        <el-table-column v-if="enhancerStore.config.tab !== '1' " prop="totalCostFormatted" :label="t('总费用')" :min-width="120" header-align="center" align="right" />
+        <el-table-column prop="totalCostNoHourlyFormatted" :label="t('全批总成本')" :min-width="120" header-align="center" align="right" />
+        <el-table-column prop="profitTotalFormatted" :label="t('全批利润')" :min-width="120" header-align="center" align="right" />
       </ElTable>
     </el-card>
   </div>

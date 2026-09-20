@@ -302,6 +302,45 @@ export default {
   "物品等级 ≥": "Item Lv. ≥",
   "初始等级从": "Initial Level from",
 
+  // 排序优先级（多级排序）
+  "排序优先级": "Sort Priority",
+  "第一优先级用于分组，其余优先级在同一组内继续排序": "The first priority groups results; the remaining priorities sort within each group.",
+  "添加优先级": "Add Priority",
+  "恢复默认排序": "Reset to Default",
+  "默认排序": "Default Sort",
+  "优先": "then",
+  "先按": "Group by",
+  "组内再按": "then sort within group by",
+  "升序": "Asc",
+  "降序": "Desc",
+  "利润率（按显示精度分组）": "Profit Rate (group by shown precision)",
+  "目标等级": "Target Level",
+
+  // 强化计算：件数 / 成功期望
+  "件数": "Pieces",
+  "成功期望": "Success Expectation",
+  "实际次数": "Actual Actions",
+  "材料 / 件": "Material / Piece",
+  "全批总成本": "Batch Total Cost",
+  "全批利润": "Batch Profit",
+  "#件数与期望说明": "Pieces: enhance this many identical items (materials & gear cost scale with the count). Success Expectation: 1 = the average expected attempts from the Markov chain; 1.2 means you assume you finish at 1.2x the expected attempts, so materials and protections are scaled up by 20%.",
+
+  // 强化练级性价比
+  "强化练级": "Enhance Leveling",
+  "经验性价比": "EXP Value",
+  "每次经验成本": "Cost / EXP",
+  "每次经验成本 ≤": "Cost / EXP ≤",
+  "总经验": "Total EXP",
+  "净成本": "Net Cost",
+  "保护档位": "Protect From",
+  "不保护": "No Protection",
+  "是否赚钱": "Profitable",
+  "赚钱": "Profits",
+  "纯消耗": "Pure Cost",
+  "仅看赚钱方案": "Profitable Only",
+  "最少经验": "Min EXP",
+  "#强化练级说明": "Level up by enhancing: plans are ranked by Cost per EXP (lower is better). Total EXP = attempts x EXP per enhance; Net Cost = total material cost - sale value of the enhanced gear. A negative net cost means the gear sells for more than the whole investment, so you gain EXP and profit at the same time; those plans are highlighted and listed first.",
+
   // 开源公告
   "开源公告": "Open Source Announcement",
   "#开源公告": "MewKonomy is now fully open source! Welcome to star, fork, and contribute.",

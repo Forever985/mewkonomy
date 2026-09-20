@@ -78,6 +78,12 @@ export interface EnhancerConfig {
   taxRate?: number
   hrid?: string
   tab?: string
+  /** 鏈瑕佸己鍖栫殑鍚岀瑁呭浠舵暟锛堟潗鏂欎笌鏈綋鎸変欢鏁版眹鎬伙級 */
+  pieceCount?: number
+  /**
+   * 鏈熸湜鎴愬姛绯绘暟锛歚1` = 鎸夐┈灏旂澶摼绠楀嚭鐨勩€屽钩鍧囨湡鏈涙鏁般€嶏紱
+   * `1.2` = 鍋囪鑷繁鍦?1.2 鍊嶆湡鏈涘墠鍚庢墠鎴愬姛锛屾潗鏂欎笌淇濇姢娑堣€楁暣浣撲笂娴?20%銆?   */
+  expectationFactor?: number
 }
 const KEY_PREFIX = "enhancer-"
 function loadConfig(): EnhancerConfig {

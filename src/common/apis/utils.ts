@@ -1,26 +1,101 @@
 import type Calculator from "@/calculator"
 import { getEquipmentClassOf, getEquipmentTypeOf } from "../utils/game"
 
+/**
+ * 单条排序规则
+ *
+ * `rules[0]` 是**第一优先级**（分组依据），`rules[1]` 在第一优先级取值相同的结果内生效，以此类推。
+ * 这与 Element Plus 表头点击（单列排序）等价于「只有一条规则」。
+ */
+export interface SortRule {
+  /** Calculator 上的取值路径，如 `result.profitPH`、`actionLevel` */
+  prop: string
+  order: "ascending" | "descending"
+}
+
+/** 从任意嵌套对象按 `a.b.c` 路径取值 */
+function valueAtPath(target: any, path: string): any {
+  let value = target
+  for (const key of path.split(".")) {
+    if (value == null) {
+      return undefined
+    }
+    value = value[key]
+  }
+  return value
+}
+
+/** 把「数字、或形如 12.34% / 1,234 / $12.3万 / 1.2M 的字符串」归一成 number；无法解析时返回 null。 */
+function normalizeNumeric(value: any): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null
+  }
+  if (typeof value !== "string") {
+    return null
+  }
+  const cleaned = value.replace(/[,\s%$¥€£]/g, "").replace(/万$|亿$|M$|K$|B$/i, "")
+  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) {
+    return null
+  }
+  const num = Number(cleaned)
+  return Number.isFinite(num) ? num : null
+}
+
+/**
+ * 比较两个值。
+ *
+ * 字符串会先尝试按「带格式的数字」比较——展示型列（`12.34%`、`1,234`）本质是数字，
+ * 按字典序会得出 `"5.00%" > "20.00%"` 这种反直觉结果。
+ * 按展示值比较意味着**相等判定发生在显示精度上**，正好符合「先按利润率分组、组内再按时薪排」的直觉。
+ * 缺失值（null / undefined / NaN）统一视为最小。
+ */
+function compareValues(a: any, b: any): number {
+  const na = normalizeNumeric(a)
+  const nb = normalizeNumeric(b)
+  if (na === null && nb === null) return 0
+  if (na === null) return -1
+  if (nb === null) return 1
+  if (typeof na === "number" && typeof nb === "number") {
+    return na - nb
+  }
+  return String(a).localeCompare(String(b))
+}
+
+/**
+ * 把排序参数统一成规则数组（向后兼容旧的单条 `sort: { prop, order }` 形态）。
+ * - `params.sortRules` 优先（多级排序）；
+ * - 否则回落到 `params.sort`（Element Plus 表头点击的原生形态）。
+ */
+export function parseSortRules(params: any): SortRule[] {
+  const raw = Array.isArray(params?.sortRules) && params.sortRules.length
+    ? params.sortRules
+    : params?.sort?.prop && params.sort?.order
+      ? [params.sort]
+      : []
+  return raw
+    .filter((r: any) => r && r.prop && (r.order === "ascending" || r.order === "descending"))
+    .map((r: any) => ({ prop: String(r.prop), order: r.order as SortRule["order"] }))
+}
+
 export function handleSort(profitList: Calculator[], params: any) {
-  // 首先进行一次利润排序
+  // 默认先按时薪降序，保证任何情况下列表都不是随机序
   profitList.sort((a, b) => b.result.profitPH - a.result.profitPH)
 
-  // 排序
-  if (params.sort && params.sort.order) {
-    const props = params.sort.prop.split(".")
-    function getValue(c: any) {
-      let value = c
-      for (let i = 0; i < props.length; ++i) {
-        value = value[props[i]]
-      }
-      return value
-    }
-    const order = params.sort.order
-    profitList.sort((a, b) => {
-      return order === "descending" ? getValue(b) - getValue(a) : getValue(a) - getValue(b)
-    })
+  const rules = parseSortRules(params)
+  if (!rules.length) {
+    return profitList
   }
-  return profitList
+
+  // 逐级比较：第 i 条规则仅在前 i-1 条全部相等时生效
+  return profitList.sort((a, b) => {
+    for (const rule of rules) {
+      const cmp = compareValues(valueAtPath(a, rule.prop), valueAtPath(b, rule.prop))
+      if (cmp !== 0) {
+        return rule.order === "descending" ? -cmp : cmp
+      }
+    }
+    return 0
+  })
 }
 
 export function handlePage(profitList: Calculator[], params: any) {

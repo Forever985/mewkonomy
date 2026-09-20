@@ -103,6 +103,16 @@ export const privateRoutes: RouteRecordRaw[] = [
           affix: false,
           elIcon: "MagicStick"
         }
+      },
+      {
+        path: "enhanceexp",
+        component: () => import("@/pages/enhanceexp/index.vue"),
+        name: "Enhanceexp",
+        meta: {
+          title: t("强化练级"),
+          affix: false,
+          elIcon: "TrendCharts"
+        }
       }
     ]
   },
