@@ -156,8 +156,16 @@ try {
         if ($LASTEXITCODE -eq 0) { Ok "已提交: deploy: $stamp" } else { Info "没有新的源码改动，跳过提交" }
 
         Info "推送 main（第 $attempt 次）..."
+        # 注意：git 会把「进度/统计」写到 stderr。若让 PowerShell 把它当错误记录，
+        # 配合 $ErrorActionPreference='Stop' 会在 push **成功**时误抛异常。
+        # 因此这里临时降级错误策略，只用 $LASTEXITCODE 判定成败。
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         $pushOut = & git push origin main 2>&1
-        if ($LASTEXITCODE -eq 0) { Ok "main 推送完成"; break }
+        $pushExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
+
+        if ($pushExit -eq 0) { Ok "main 推送完成"; break }
         if (($pushOut -join "`n") -match 'Everything up-to-date') { Ok "main 已是最新"; break }
 
         Warn "main 推送失败："
@@ -173,8 +181,14 @@ try {
     while ($true) {
         $attempt++
         Info "npx gh-pages -d dist -b gh-pages（第 $attempt 次）..."
+        # 同上：npx/gh-pages 也会往 stderr 写进度，不能让它触发终止性错误
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         & npx --yes gh-pages -d dist -b gh-pages --repo $Remote
-        if ($LASTEXITCODE -eq 0) { Ok "gh-pages 推送完成"; break }
+        $pagesExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
+
+        if ($pagesExit -eq 0) { Ok "gh-pages 推送完成"; break }
         Warn "gh-pages 推送失败"
         if ($attempt -ge $MaxAttempts) {
             throw "gh-pages 连续失败 $MaxAttempts 次。`n       注意：main 已推送成功，只是静态站未更新 —— 稍后重跑本脚本即可（无源码变化时会跳过提交，只重推 gh-pages）"
