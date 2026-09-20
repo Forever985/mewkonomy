@@ -122,6 +122,41 @@ export function handleSearch(profitList: Calculator[], params: any) {
 }
 
 /**
+ * 多行组合条件（并行检索）通用过滤
+ *
+ * 语义与各处检索区一致：**行间 OR、行内 AND**。
+ * 同一个 `conditions` 数组在不同页面的字段含义不同，因此由调用方提供 `levelOf` 取值函数：
+ * - dashboard / manualchemy：`steps` = 生产步数（`N步X` 的 project 前缀），无等级字段
+ * - enhanposer / enhanposest / jungle 组：无步数语义，`steps` 映射为「目标强化等级」相等匹配，
+ *   `minLevel` / `maxLevel` 为等级区间
+ *
+ * 注意：`handleSearch` 里的组合条件走的是「步数」正则，对强化类数据会误伤，
+ * 因此那些页面必须先调用本函数做条件过滤，再把 `conditions` 从入参中剔除后交给 handleSearch。
+ */
+export function handleConditions<T extends Calculator>(
+  profitList: T[],
+  params: any,
+  levelOf: (cal: T) => number
+): T[] {
+  const conditions = Array.isArray(params?.conditions)
+    ? params.conditions.filter((c: any) => c && ((c.steps != null && c.steps !== "") || c.project || c.minLevel != null || c.maxLevel != null))
+    : []
+  if (!conditions.length) {
+    return profitList
+  }
+  return profitList.filter((cal) => {
+    const level = levelOf(cal)
+    return conditions.some((cond: any) => {
+      if (cond.steps != null && cond.steps !== "" && level !== cond.steps) return false
+      if (cond.project && !cal.project.includes(cond.project)) return false
+      if (cond.minLevel != null && level < cond.minLevel) return false
+      if (cond.maxLevel != null && level > cond.maxLevel) return false
+      return true
+    })
+  })
+}
+
+/**
  * 多样产业链精简：同一最终产物（result.name 相同）的多条产业链方案中，
  * 只保留时薪（profitPH）最高的一条，便于列表默认突出每个物品的最优方案。
  * 与比较模式（handleCompare）互补：比较模式展示组内全部方案并标排名，本函数只留最优。

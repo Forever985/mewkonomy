@@ -9,15 +9,16 @@ import locales, { getTrans } from "@/locales"
 import { useGameStoreOutside } from "@/pinia/stores/game"
 import { getGameDataApi } from "../game"
 import { getUsedPriceOf } from "../price"
-import { handlePage, handlePush, handleSearch, handleSort } from "../utils"
+import { handleConditions, handlePage, handlePush, handleSearch, handleSort } from "../utils"
 
 const { t } = locales.global
 /** 查 */
 export async function getDataApi(params: any) {
-  let profitList: WorkflowCalculator[] = []
-  if (useGameStoreOutside().getJungleCache("junglerit")) {
-    profitList = useGameStoreOutside().getJungleCache("junglerit")
-  } else {
+  // noEscape 属于「计算模式」：必须参与缓存签名，否则勾选/取消后仍会命中按旧模式算出的结果
+  const signature = params.noEscape ? "noEscape" : "escape"
+  const store = useGameStoreOutside()
+  let profitList: WorkflowCalculator[] = store.getModeCache<WorkflowCalculator>("junglerit", signature) ?? []
+  if (!profitList.length) {
     await new Promise(resolve => setTimeout(resolve, 300))
     const startTime = Date.now()
     try {
@@ -25,13 +26,18 @@ export async function getDataApi(params: any) {
     } catch (e: any) {
       console.error(e)
     }
-    useGameStoreOutside().setJungleCache(profitList, "junglerit")
+    store.setModeCache("junglerit", signature, profitList)
     ElMessage.success(t("计算完成，耗时{0}秒", [(Date.now() - startTime) / 1000]))
   }
 
   profitList = profitList.filter(item => params.maxLevel ? item.calculator.enhanceLevel <= params.maxLevel : true)
   profitList = profitList.filter(item => params.minLevel ? item.calculator.enhanceLevel >= params.minLevel : true)
-  return handlePage(handleSort(handleSearch(profitList, params), params), params)
+
+  // 组合条件（目标强化等级/动作，行间 OR、行内 AND）；先处理再剔除，避免 handleSearch 的步数正则误伤
+  profitList = handleConditions(profitList, params, item => item.calculator.enhanceLevel)
+  const searchParams = { ...params }
+  delete searchParams.conditions
+  return handlePage(handleSort(handleSearch(profitList, searchParams), searchParams), params)
 }
 
 function calcEnhanceProfit(params: any) {

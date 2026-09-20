@@ -30,33 +30,54 @@ const ldSearchData = useMemory("enhanposer-leaderboard-search-data", {
   maxProfitRate: undefined,
   minRisk: undefined,
   maxRisk: undefined,
+  // 目标强化等级并行筛选（与超级强化分解页同构；行内 steps/区间 AND、行间 OR）
+  conditions: [{ steps: undefined, minLevel: undefined, maxLevel: undefined }],
   banEquipment: false,
+  banJewelry: false,
   banCombat: false,
   banLife: false,
   noDecompose: false,
   materialPriceType: "ask",
-  productPriceType: "bid",
-  enhanposer: true
+  productPriceType: "bid"
 })
 // 兼容旧版字符串 name，迁移为数组（多物品选择）
 if (typeof ldSearchData.value.name === "string") {
   ldSearchData.value.name = ldSearchData.value.name ? [ldSearchData.value.name] : []
 }
-// 旧数据迁移：profitRate → minProfitRate
+// 旧数据迁移：profitRate → minProfitRate；project/单值等级 → conditions
 if (ldSearchData.value.profitRate != null && ldSearchData.value.minProfitRate == null) {
   ldSearchData.value.minProfitRate = ldSearchData.value.profitRate
 }
-// 清理旧版「目标等级」筛选残留字段（已整体移除该筛选，不再参与查询）
-delete ldSearchData.value.project
-delete ldSearchData.value.profitRate
-delete ldSearchData.value.minLevel
-delete ldSearchData.value.maxLevel
-delete ldSearchData.value.conditions
+if (!Array.isArray(ldSearchData.value.conditions)) {
+  ldSearchData.value.conditions = [{
+    steps: ldSearchData.value.targetLevel ?? undefined,
+    minLevel: ldSearchData.value.minLevel ?? undefined,
+    maxLevel: ldSearchData.value.maxLevel ?? undefined
+  }]
+}
 // 旧数据迁移：单向 priceType → 拆分的 materialPriceType / productPriceType（成品售价沿用旧 priceType）
 if (ldSearchData.value.priceType != null && ldSearchData.value.productPriceType == null) {
   ldSearchData.value.productPriceType = ldSearchData.value.priceType
 }
+delete ldSearchData.value.project
+delete ldSearchData.value.profitRate
 delete ldSearchData.value.priceType
+delete ldSearchData.value.targetLevel
+delete ldSearchData.value.minLevel
+delete ldSearchData.value.maxLevel
+
+/** 目标强化等级从 1~20 并行选择 */
+function addCondition() {
+  ldSearchData.value.conditions.push({ steps: undefined, minLevel: undefined, maxLevel: undefined })
+}
+function removeCondition(index: number) {
+  ldSearchData.value.conditions.splice(index, 1)
+}
+
+const priceTypeOptions = computed(() => [
+  { value: "ask", label: `${t("左挂单")}(${t("左价")})` },
+  { value: "bid", label: `${t("右收购")}(${t("右价")})` }
+])
 
 const loadingLD = ref(false)
 const getLeaderboardData = debounce(() => {
@@ -78,7 +99,6 @@ const getLeaderboardData = debounce(() => {
 }, 300)
 function handleSearchLD() {
   paginationDataLD.currentPage === 1 ? getLeaderboardData() : (paginationDataLD.currentPage = 1)
-  console.log("va", JSON.stringify(ldSearchData.value))
 }
 
 const sortLD: Ref<Sort | undefined> = ref()
@@ -106,8 +126,12 @@ watch(() => usePriceStore(), () => {
 }, { deep: true })
 // #endregion
 
-// 不分解模式变化：清除旧缓存后重算（缓存基于不同计算模式区分）
-watch(() => ldSearchData.value.noDecompose, () => {
+// 影响「计算模式」的参数变化：清缓存后重算（缓存按模式签名校验，签名不符也会自动重算）
+watch([
+  () => ldSearchData.value.noDecompose,
+  () => ldSearchData.value.materialPriceType,
+  () => ldSearchData.value.productPriceType
+], () => {
   useGameStoreOutside().clearEnhanposerCache()
   handleSearchLD()
 })
@@ -115,7 +139,6 @@ watch(() => ldSearchData.value.noDecompose, () => {
 const currentRow = ref<Calculator>()
 const detailVisible = ref<boolean>(false)
 async function showDetail(row: Calculator) {
-  console.log("showDetail", row)
   currentRow.value = cloneDeep(row)
   detailVisible.value = true
 }
@@ -179,6 +202,22 @@ const { t } = useI18n()
                 />
               </el-form-item>
 
+              <el-form-item :label="t('只看目标等级')" style="width:100%; margin-right:0;">
+                <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
+                  <div v-for="(cond, i) in ldSearchData.conditions" :key="i" style="display:flex; align-items:center; gap:8px;">
+                    <el-select v-model="cond.steps" :placeholder="t('不限（默认全部）')" clearable style="width:130px" @change="handleSearchLD">
+                      <el-option v-for="n in 20" :key="n" :label="`${t('目标等级')} ${n}`" :value="n" />
+                    </el-select>
+                    <el-input-number v-model="cond.minLevel" :min="1" :max="20" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="1" />
+                    <span>~</span>
+                    <el-input-number v-model="cond.maxLevel" :min="1" :max="20" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="20" />
+                    <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
+                  </div>
+                  <div style="color:#909399; font-size:12px;">{{ t('多选后仅显示这些强化等级的方案') }}</div>
+                  <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
+                </div>
+              </el-form-item>
+
               <el-form-item :label="t('利润率')">
                 <div style="display:flex; align-items:center; gap:4px;">
                   <el-input-number v-model="ldSearchData.minProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />&nbsp;%
@@ -196,6 +235,16 @@ const { t } = useI18n()
               </el-form-item>
 
               <el-form-item>
+                <el-checkbox v-model="ldSearchData.banEquipment" @change="handleSearchLD">
+                  {{ t('排除装备') }}
+                </el-checkbox>
+              </el-form-item>
+              <el-form-item>
+                <el-checkbox v-model="ldSearchData.banJewelry" @change="handleSearchLD">
+                  {{ t('排除首饰') }}
+                </el-checkbox>
+              </el-form-item>
+              <el-form-item>
                 <el-checkbox v-model="ldSearchData.banCombat" @change="handleSearchLD">
                   {{ t('排除战斗装备') }}
                 </el-checkbox>
@@ -209,6 +258,17 @@ const { t } = useI18n()
                 <el-checkbox v-model="ldSearchData.noDecompose" @change="handleSearchLD">
                   {{ t('不分解模式') }}
                 </el-checkbox>
+              </el-form-item>
+
+              <el-form-item :label="t('材料买价')">
+                <el-select v-model="ldSearchData.materialPriceType" style="width:150px" @change="handleSearchLD">
+                  <el-option v-for="opt in priceTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item :label="t('成品售价')">
+                <el-select v-model="ldSearchData.productPriceType" style="width:150px" @change="handleSearchLD">
+                  <el-option v-for="opt in priceTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
               </el-form-item>
             </el-form>
           </template>
@@ -242,7 +302,11 @@ const { t } = useI18n()
                   </el-link>
                 </template>
               </el-table-column>
-              <el-table-column prop="result.profitPHFormat" :label="t('利润 / h')" align="center" min-width="120" />
+              <el-table-column prop="result.profitPH" :label="t('利润 / h')" align="center" min-width="120" sortable="custom" :sort-orders="['descending', null]">
+                <template #default="{ row }">
+                  <span :class="row.hasManualPrice ? 'manual' : ''">{{ row.result.profitPHFormat }}</span>
+                </template>
+              </el-table-column>
               <el-table-column prop="result.profitRate" :label="t('利润率')" min-width="100" align="center" sortable="custom" :sort-orders="['descending', null]">
                 <template #default="{ row }">
                   {{ row.result.profitRateFormat }}

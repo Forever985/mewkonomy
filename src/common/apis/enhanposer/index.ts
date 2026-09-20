@@ -10,24 +10,38 @@ import { getUsedPriceOf } from "../price"
 import { handlePage, handlePush, handleSearch, handleSort } from "../utils"
 
 const { t } = locales.global
+
+/** 计算模式签名：任一模式/价格口径变化都必须重算（缓存按签名校验，不匹配即视为未命中） */
+function modeSignatureOf(mode: { noDecompose?: boolean; materialPriceType?: string; productPriceType?: string }) {
+  return [
+    mode.noDecompose ? "noDecompose" : "decompose",
+    `mat=${mode.materialPriceType ?? "ask"}`,
+    `prod=${mode.productPriceType ?? "bid"}`
+  ].join("|")
+}
+
 /** 查 */
 export async function getEnhanposerDataApi(params: any) {
-  let profitList: WorkflowCalculator[] = []
-  if (useGameStoreOutside().getEnhanposerCache()) {
-    profitList = useGameStoreOutside().getEnhanposerCache()
-  } else {
+  const options = {
+    noDecompose: params.noDecompose,
+    materialPriceType: params.materialPriceType,
+    productPriceType: params.productPriceType
+  }
+  const signature = modeSignatureOf(options)
+  const store = useGameStoreOutside()
+  let profitList: WorkflowCalculator[] = store.getModeCache<WorkflowCalculator>("enhanposer", signature) ?? []
+  if (!profitList.length) {
     await new Promise(resolve => setTimeout(resolve, 300))
     const startTime = Date.now()
     try {
-      profitList = profitList.concat(calcEnhanceProfit({ noDecompose: params.noDecompose, materialPriceType: params.materialPriceType, productPriceType: params.productPriceType }))
+      profitList = profitList.concat(calcEnhanceProfit(options))
     } catch (e: any) {
       console.error(e)
     }
-    useGameStoreOutside().setEnhanposerCache(profitList)
+    store.setModeCache("enhanposer", signature, profitList)
     ElMessage.success(t("计算完成，耗时{0}秒", [(Date.now() - startTime) / 1000]))
   }
 
-  console.log("params", params)
   return handlePage(handleSort(handleSearch(profitList, params), params), params)
 }
 

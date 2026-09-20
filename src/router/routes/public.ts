@@ -6,7 +6,12 @@ const { t } = locale.global
 
 /**
  * 公开路由配置
- * 这些路由将在公开版本中包含
+ *
+ * 说明：本文件的页面只保留「公开版也必须存在」的基础路由与站外链接。
+ * 业务页面（利润排行 / 强化系列 / 生产炼金 / 打野系列）全部注册在 private.ts，
+ * 因为本 fork 定位为纯本地自用完整版（`pnpm dev` = private 模式），
+ * 曾经「同一页面在 public.ts 与 private.ts 各注册一份」会造成同名路由重复注册，
+ * 侧边栏也会出现顺序错乱的重复入口——现已统一收敛到 private.ts。
  */
 export const publicRoutes: RouteRecordRaw[] = [
   {
@@ -37,75 +42,6 @@ export const publicRoutes: RouteRecordRaw[] = [
     },
     alias: "/:pathMatch(.*)*"
   },
-  {
-    path: "/",
-    component: Layouts,
-    redirect: "/dashboard",
-    children: [
-      {
-        path: "dashboard",
-        component: () => import("@/pages/dashboard/index.vue"),
-        name: "Dashboard",
-        meta: {
-          title: t("首页"),
-          svgIcon: "dashboard",
-          affix: true
-        }
-      }
-    ]
-  },
-  {
-    path: "/",
-    component: Layouts,
-    redirect: "/enhancer",
-    children: [
-      {
-        path: "enhancer",
-        component: () => import("@/pages/enhancer/index.vue"),
-        name: "Enhancer",
-        meta: {
-          title: t("强化计算"),
-          elIcon: "MagicStick",
-          affix: true
-        }
-      }
-    ]
-  },
-  {
-    path: "/",
-    component: Layouts,
-    redirect: "/enhanposer",
-    children: [
-      {
-        path: "enhanposer",
-        component: () => import("@/pages/enhanposer/index.vue"),
-        name: "Enhanposer",
-        meta: {
-          title: t("强化分解"),
-          affix: false,
-          svgIcon: "dashboard"
-        }
-      }
-    ]
-  },
-  {
-    path: "/",
-    component: Layouts,
-    redirect: "/sponsor",
-    children: [
-      {
-        path: "sponsor",
-        component: () => import("@/pages/sponsor/index.vue"),
-        name: "Sponsor",
-        meta: {
-          title: t("打赏"),
-          elIcon: "Coin",
-          affix: true
-        }
-      }
-    ]
-  },
-
   {
     path: "/link",
     meta: {
@@ -153,7 +89,6 @@ export const publicRoutes: RouteRecordRaw[] = [
           title: "MWI Data"
         }
       }
-
     ]
   }
 ]

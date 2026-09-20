@@ -9,7 +9,18 @@ import locales, { getTrans } from "@/locales"
 import { useGameStoreOutside } from "@/pinia/stores/game"
 import { getGameDataApi } from "../game"
 import { getUsedPriceOf } from "../price"
-import { handlePage, handlePush, handleSearch, handleSort } from "../utils"
+import { handleConditions, handlePage, handlePush, handleSearch, handleSort } from "../utils"
+
+/**
+ * 本页方案的目标强化等级。
+ * 单步方案（EnhanceCalculator）与多步方案（WorkflowCalculator）的强化阶段都在末尾，
+ * 故统一取末尾阶段的等级，避免两种方案因取值不同被条件筛掉。
+ */
+function enhanceLevelOf(item: WorkflowCalculator): number {
+  const calculators = item.calculatorList.flat()
+  const last = calculators[calculators.length - 1] as any
+  return last?.enhanceLevel ?? 0
+}
 
 const { t } = locales.global
 /** 查 */
@@ -36,6 +47,9 @@ export async function getDataApi(params: any, cacheKey: string = "jungle") {
 
   profitList = profitList.filter(item => params.minItemLevel ? (item.calculator.item.itemLevel >= params.minItemLevel) : true)
 
+  // 组合条件（目标强化等级/动作，行间 OR、行内 AND）；先处理再剔除，避免 handleSearch 的步数正则误伤
+  profitList = handleConditions(profitList, params, enhanceLevelOf)
+
   if (params.bestManufacture) {
     const maxProfitMap: Record<string, WorkflowCalculator> = {}
     profitList.forEach((item) => {
@@ -47,7 +61,9 @@ export async function getDataApi(params: any, cacheKey: string = "jungle") {
     profitList = Object.values(maxProfitMap)
   }
 
-  return handlePage(handleSort(handleSearch(profitList, params), params), params)
+  const searchParams = { ...params }
+  delete searchParams.conditions
+  return handlePage(handleSort(handleSearch(profitList, searchParams), searchParams), params)
 }
 
 async function calcEnhanceProfit() {

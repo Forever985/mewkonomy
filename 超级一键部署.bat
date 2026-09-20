@@ -15,13 +15,13 @@ echo [2/3] Pushing main...
 git push origin main
 if errorlevel 1 (
     echo PUSH failed, retrying once...
-    timeout /t 2 >nul
+    timeout /t 3 >nul
     git push origin main
 )
 
 echo.
 echo [3/3] Deploying gh-pages...
-call npx --yes gh-pages -d dist -b gh-pages
+call npx --yes gh-pages -d dist -b gh-pages --repo https://github.com/Forever985/mewkonomy
 if errorlevel 1 (
     echo GH-PAGES FAILED
     pause

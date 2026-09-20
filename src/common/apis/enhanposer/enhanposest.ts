@@ -7,23 +7,33 @@ import { useGameStoreOutside } from "@/pinia/stores/game"
 import { getGameDataApi } from "../game"
 
 import { getUsedPriceOf } from "../price"
-import { handlePage, handlePush, handleSearch, handleSort } from "../utils"
+import { handleConditions, handlePage, handlePush, handleSearch, handleSort } from "../utils"
 
 const { t } = locales.global
+
+/** 计算模式签名：价格口径变化必须重算（缓存按签名校验，不匹配即视为未命中） */
+function modeSignatureOf(mode: { materialPriceType?: string; productPriceType?: string }) {
+  return [`mat=${mode.materialPriceType ?? "ask"}`, `prod=${mode.productPriceType ?? "bid"}`].join("|")
+}
+
 /** 查 */
 export async function getEnhanposestDataApi(params: any) {
-  let profitList: WorkflowCalculator[] = []
-  if (useGameStoreOutside().getJungleCache("enhanposest")) {
-    profitList = useGameStoreOutside().getJungleCache("enhanposest")
-  } else {
+  const options = {
+    materialPriceType: params.materialPriceType,
+    productPriceType: params.productPriceType
+  }
+  const signature = modeSignatureOf(options)
+  const store = useGameStoreOutside()
+  let profitList: WorkflowCalculator[] = store.getModeCache<WorkflowCalculator>("enhanposest", signature) ?? []
+  if (!profitList.length) {
     await new Promise(resolve => setTimeout(resolve, 300))
     const startTime = Date.now()
     try {
-      profitList = profitList.concat(calcEnhanceProfit())
+      profitList = profitList.concat(calcEnhanceProfit(options))
     } catch (e: any) {
       console.error(e)
     }
-    useGameStoreOutside().setJungleCache(profitList, "enhanposest")
+    store.setModeCache("enhanposest", signature, profitList)
     ElMessage.success(t("计算完成，耗时{0}秒", [(Date.now() - startTime) / 1000]))
   }
 
@@ -31,44 +41,28 @@ export async function getEnhanposestDataApi(params: any) {
   profitList = profitList.filter(item => params.minLevel ? (item.calculator as DecomposeCalculator).enhanceLevel >= params.minLevel : true)
 
   // 多元组合条件：目标强化等级并行（OR），命中任一组合即保留
-  // 强化分解方案无「N步」语义，故 conditions.steps 映射为目标强化等级（相等匹配）
-  // minLevel/maxLevel 为等级区间，与 steps 在同一组合内 AND、行间 OR
-  const conditions = Array.isArray(params.conditions)
-    ? params.conditions.filter((c: any) => c && ((c.steps != null && c.steps !== "") || c.minLevel != null || c.maxLevel != null))
-    : []
-  if (conditions.length) {
-    profitList = profitList.filter(item => {
-      const enhanceLevel = (item.calculator as DecomposeCalculator).enhanceLevel
-      return conditions.some((cond: any) => {
-        if (cond.steps != null && cond.steps !== "" && enhanceLevel !== cond.steps) return false
-        if (cond.minLevel != null && enhanceLevel < cond.minLevel) return false
-        if (cond.maxLevel != null && enhanceLevel > cond.maxLevel) return false
-        return true
-      })
-    })
-  }
+  // 强化分解方案无「N步」语义，steps 映射为目标强化等级相等匹配，min/maxLevel 为等级区间
+  profitList = handleConditions(profitList, params, item => (item.calculator as DecomposeCalculator).enhanceLevel)
   // 剔除 conditions 后再走通用 handleSearch，避免其「步数」正则对本页数据误伤
   const searchParams = { ...params }
   delete searchParams.conditions
   return handlePage(handleSort(handleSearch(profitList, searchParams), searchParams), params)
 }
 
-function calcEnhanceProfit() {
+function calcEnhanceProfit(options: { materialPriceType?: "ask" | "bid"; productPriceType?: "ask" | "bid" } = {}) {
+  const { materialPriceType = "ask", productPriceType = "bid" } = options
   const gameData = getGameDataApi()
   // 所有物品列表
   const list = Object.values(gameData.itemDetailMap)
   const profitList: WorkflowCalculator[] = []
   const escapeLevels = [-1, 0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
   const originLevels = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-  const targetLevels = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-  // const targetLevels = [15]
-
-  // const escapeLevels = Array.from({ length: 20 }, (_, i) => i)
-  // const originLevels = Array.from({ length: 20 }, (_, i) => i)
-  // const targetLevels = Array.from({ length: 20 }, (_, i) => i)
+  // 注意：这里必须用不修改原数组的降序遍历。历史实现写成 `targetLevels.reverse()`，
+  // 会在每个物品上原地翻转一次数组，导致相邻物品的等级遍历顺序来回颠倒（首级方案随机丢失）。
+  const targetLevels = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10]
 
   list.filter(item => item.enhancementCosts).forEach((item) => {
-    for (const enhanceLevel of targetLevels.reverse()) {
+    for (const enhanceLevel of targetLevels) {
       let bestProfit = -Infinity
       let bestCal: WorkflowCalculator | undefined
 
@@ -81,7 +75,7 @@ function calcEnhanceProfit() {
             continue
           }
           for (let protectLevel = (enhanceLevel > 2 ? 2 : enhanceLevel); protectLevel <= enhanceLevel; protectLevel++) {
-            const enhancer = new EnhanceCalculator({ enhanceLevel, escapeLevel, originLevel, protectLevel, hrid: item.hrid })
+            const enhancer = new EnhanceCalculator({ enhanceLevel, escapeLevel, originLevel, protectLevel, hrid: item.hrid, materialPriceType, productPriceType })
             // 仅保留可用方案；放开负利润过滤（功能3：负利润也写入结果）
             if (!enhancer.available) {
               continue

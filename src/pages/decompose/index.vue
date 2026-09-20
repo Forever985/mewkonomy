@@ -2,7 +2,7 @@
 import type Calculator from "@/calculator"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import { usePagination } from "@@/composables/usePagination"
-import { Edit, Search } from "@element-plus/icons-vue"
+import { Delete, Edit, Plus, Search } from "@element-plus/icons-vue"
 import { ElMessageBox, type FormInstance, type Sort } from "element-plus"
 import { cloneDeep, debounce } from "lodash-es"
 
@@ -24,14 +24,51 @@ const leaderboardData = ref<Calculator[]>([])
 const ldSearchFormRef = ref<FormInstance | null>(null)
 
 const ldSearchData = useMemory("decompose-leaderboard-search-data", {
-  name: "",
-  project: "",
-  profitRate: "",
+  name: [],
+  // 组合条件 = 并行检索行：每行（目标强化等级 + 催化剂动作）
+  conditions: [{ steps: undefined, project: undefined }],
+  excludes: [{ name: undefined, project: undefined }],
+  minProfitRate: undefined,
+  maxProfitRate: undefined,
+  maxRisk: undefined,
   maxLevel: 20,
   minLevel: 1,
   banEquipment: false,
-  bestManufacture: false
+  banJewelry: false,
+  banCombat: false,
+  banLife: false
 })
+// 兼容旧版字符串 name，迁移为数组（多物品选择）
+if (typeof ldSearchData.value.name === "string") {
+  ldSearchData.value.name = ldSearchData.value.name ? [ldSearchData.value.name] : []
+}
+// 旧数据迁移：project → conditions、profitRate → minProfitRate
+if (!Array.isArray(ldSearchData.value.conditions)) {
+  ldSearchData.value.conditions = [{ steps: undefined, project: ldSearchData.value.project || undefined }]
+}
+if (!Array.isArray(ldSearchData.value.excludes)) {
+  ldSearchData.value.excludes = [{ name: undefined, project: undefined }]
+}
+if (ldSearchData.value.profitRate != null && ldSearchData.value.minProfitRate == null) {
+  ldSearchData.value.minProfitRate = ldSearchData.value.profitRate
+}
+delete ldSearchData.value.project
+delete ldSearchData.value.profitRate
+
+/** 可检索的动作列表（专业）：分解只有炼金动作 */
+const projectOptions = ["分解"]
+function addCondition() {
+  ldSearchData.value.conditions.push({ steps: undefined, project: undefined })
+}
+function removeCondition(index: number) {
+  ldSearchData.value.conditions.splice(index, 1)
+}
+function addExclude() {
+  ldSearchData.value.excludes.push({ name: undefined, project: undefined })
+}
+function removeExclude(index: number) {
+  ldSearchData.value.excludes.splice(index, 1)
+}
 
 const loadingLD = ref(false)
 const getLeaderboardData = debounce(() => {
@@ -128,12 +165,94 @@ const { t } = useI18n()
                 {{ t('利润排行') }}
               </div>
               <el-form-item prop="name" :label="t('物品')">
-                <el-input style="width:100px" v-model="ldSearchData.name" :placeholder="t('请输入')" clearable @input="handleSearchLD" />
+                <el-select
+                  v-model="ldSearchData.name"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  :reserve-keyword="false"
+                  :placeholder="t('输入多个物品名，回车添加')"
+                  style="width:220px"
+                  clearable
+                  @change="handleSearchLD"
+                />
+              </el-form-item>
+
+              <el-form-item :label="t('条件')" style="width:100%; margin-right:0;">
+                <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
+                  <div v-for="(cond, i) in ldSearchData.conditions" :key="i" style="display:flex; align-items:center; gap:8px;">
+                    <el-select v-model="cond.steps" :placeholder="t('不限（默认全部）')" clearable style="width:130px" @change="handleSearchLD">
+                      <el-option v-for="n in 20" :key="n" :label="`${t('目标等级')} ${n}`" :value="n" />
+                    </el-select>
+                    <el-select v-model="cond.project" :placeholder="t('动作不限')" clearable style="width:130px" @change="handleSearchLD">
+                      <el-option v-for="p in projectOptions" :key="p" :label="t(p)" :value="t(p)" />
+                    </el-select>
+                    <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
+                  </div>
+                  <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
+                </div>
               </el-form-item>
 
               <el-form-item :label="t('目标等级从')">
                 <el-input-number style="width:80px" :min="1" :max="20" v-model="ldSearchData.minLevel" placeholder="1" clearable @change="handleSearchLD" controls-position="right" />&nbsp;{{ t('到') }}&nbsp;
                 <el-input-number style="width:80px" :min="1" :max="20" v-model="ldSearchData.maxLevel" placeholder="20" clearable @change="handleSearchLD" controls-position="right" />
+              </el-form-item>
+
+              <el-form-item :label="`${t('风险')} ≤`">
+                <el-input-number style="width:80px" v-model="ldSearchData.maxRisk" clearable @change="handleSearchLD" :controls="false" />
+              </el-form-item>
+
+              <el-form-item :label="t('利润率')">
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <el-input-number v-model="ldSearchData.minProfitRate" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="-100" />&nbsp;%
+                  <span>~</span>
+                  <el-input-number v-model="ldSearchData.maxProfitRate" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="100" />&nbsp;%
+                </div>
+              </el-form-item>
+
+              <el-form-item :label="t('排除')" style="width:100%; margin-right:0;">
+                <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
+                  <div v-for="(ex, i) in ldSearchData.excludes" :key="i" style="display:flex; align-items:center; gap:8px;">
+                    <el-select
+                      v-model="ex.name"
+                      filterable
+                      allow-create
+                      default-first-option
+                      :reserve-keyword="false"
+                      :placeholder="t('排除的产品名')"
+                      clearable
+                      style="width:220px"
+                      @change="handleSearchLD"
+                    />
+                    <el-select v-model="ex.project" :placeholder="t('排除的生产动作，留空=该产品全部')" clearable style="width:280px" @change="handleSearchLD">
+                      <el-option v-for="p in projectOptions" :key="p" :label="t(p)" :value="t(p)" />
+                    </el-select>
+                    <el-button v-if="ldSearchData.excludes.length > 1" type="danger" :icon="Delete" link @click="removeExclude(i)" />
+                  </div>
+                  <el-button size="small" :icon="Plus" @click="addExclude">{{ t('添加排除') }}</el-button>
+                </div>
+              </el-form-item>
+
+              <el-form-item>
+                <el-checkbox v-model="ldSearchData.banEquipment" @change="handleSearchLD">
+                  {{ t('排除装备') }}
+                </el-checkbox>
+              </el-form-item>
+              <el-form-item>
+                <el-checkbox v-model="ldSearchData.banJewelry" @change="handleSearchLD">
+                  {{ t('排除首饰') }}
+                </el-checkbox>
+              </el-form-item>
+              <el-form-item>
+                <el-checkbox v-model="ldSearchData.banCombat" @change="handleSearchLD">
+                  {{ t('排除战斗装备') }}
+                </el-checkbox>
+              </el-form-item>
+              <el-form-item>
+                <el-checkbox v-model="ldSearchData.banLife" @change="handleSearchLD">
+                  {{ t('排除生活装备') }}
+                </el-checkbox>
               </el-form-item>
             </el-form>
           </template>

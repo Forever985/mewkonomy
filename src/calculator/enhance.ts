@@ -35,7 +35,6 @@ export class EnhanceCalculator extends Calculator {
   protectLevel: number
   originLevel: number
   escapeLevel: number
-  protectionItem: IngredientWithPrice
   /** 强化成品计价价格源，默认 "bid"（右收购单价，与旧行为一致） */
   productPriceType: "ask" | "bid"
   /** 材料侧（本体/垫子/强化材料）计价价格源，默认 "ask"（左挂单价，与旧行为一致） */
@@ -48,28 +47,41 @@ export class EnhanceCalculator extends Calculator {
     this.escapeLevel = config.escapeLevel ?? -1
     this.productPriceType = config.productPriceType ?? "bid"
     this.materialPriceType = config.materialPriceType ?? "ask"
-    let protectionList = [{
-      hrid: super.item.hrid,
+  }
+
+  _protectionItem?: IngredientWithPrice
+  /**
+   * 垫子自动选择：保护道具列表 + 镜子，取单价最低者。
+   * 价格源跟随 `materialPriceType`（材料侧口径），此处必须用 getter 延迟计算——
+   * 构造函数里 `materialPriceType` 尚未赋值，早期实现因此在构造期写死 `.ask`，
+   * 导致「材料买价」口径切换对本体/垫子/强化材料整体失效（只有 UI 开关在动）。
+   */
+  get protectionItem(): IngredientWithPrice {
+    if (this._protectionItem) {
+      return this._protectionItem
+    }
+    let protectionList: Ingredient[] = [{
+      hrid: this.item.hrid,
       count: 1,
-      marketPrice: getPriceOf(super.item.hrid).ask
+      marketPrice: getPriceOf(this.item.hrid)[this.materialPriceType]
     }]
-    if (super.item.protectionItemHrids) {
-      protectionList = super.item.protectionItemHrids!.map(hrid => ({
+    if (this.item.protectionItemHrids) {
+      protectionList = this.item.protectionItemHrids.map(hrid => ({
         hrid,
         count: 1,
-        marketPrice: getPriceOf(hrid).ask
+        marketPrice: getPriceOf(hrid)[this.materialPriceType]
       }))
     }
-    const list = super.handlePrice(
+    const list = this.handlePrice(
       protectionList.concat([{
         hrid: "/items/mirror_of_protection",
         count: 1,
-        marketPrice: getPriceOf("/items/mirror_of_protection").ask
+        marketPrice: getPriceOf("/items/mirror_of_protection")[this.materialPriceType]
       }]),
       [],
-      "ask"
+      this.materialPriceType
     )
-    this.protectionItem = list.reduce((min, item) => {
+    this._protectionItem = list.reduce((min, item) => {
       if (min.price === -1) {
         return item
       }
@@ -78,6 +90,7 @@ export class EnhanceCalculator extends Calculator {
       }
       return (item.price < min.price) ? item : min
     }, list[0])
+    return this._protectionItem
   }
 
   get timeCost() {
@@ -102,7 +115,7 @@ export class EnhanceCalculator extends Calculator {
         {
           hrid: this.item.hrid,
           count: 1 / actions,
-          marketPrice: getPriceOf(this.item.hrid, this.originLevel).ask,
+          marketPrice: getPriceOf(this.item.hrid, this.originLevel)[this.materialPriceType],
           level: this.originLevel
         },
         // 垫子
@@ -116,7 +129,7 @@ export class EnhanceCalculator extends Calculator {
         this.item.enhancementCosts!.map(item => ({
           hrid: item.itemHrid,
           count: item.count,
-          marketPrice: getPriceOf(item.itemHrid).ask
+          marketPrice: getPriceOf(item.itemHrid)[this.materialPriceType]
         }))
       )
 

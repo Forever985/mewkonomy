@@ -97,9 +97,10 @@ export const useGameStore = defineStore("game", {
     gameData: getGameData(),
     marketData: getMarketData(),
     leaderboardCache: {} as { [time: number]: Calculator[] },
-    enhanposerCache: {} as { [time: number]: WorkflowCalculator[] },
     manualchemyCache: {} as { [time: number]: Calculator[] },
     jungleCache: {} as { [key: string]: WorkflowCalculator[] },
+    /** 计算模式签名缓存：modeKey → { signature, list }，签名不符即视为未命中（见 getModeCache 注释） */
+    modeCache: {} as { [key: string]: { signature: string; list: Calculator[] } },
     junglestCache: {} as { [time: number]: EnhanceCalculator[] },
     inheritCache: {} as { [time: number]: ManufactureCalculator[] },
     decomposeCache: {} as { [time: number]: DecomposeCalculator[] },
@@ -201,15 +202,12 @@ export const useGameStore = defineStore("game", {
     clearLeaderBoardCache() {
       this.leaderboardCache = {}
     },
-    getEnhanposerCache() {
-      return this.enhanposerCache[this.marketData!.timestamp]
-    },
-    setEnhanposerCache(list: WorkflowCalculator[]) {
-      this.clearEnhanposerCache()
-      this.enhanposerCache[this.marketData!.timestamp] = list
-    },
+    /**
+     * 强化分解缓存：保留对外方法名（页面/clearAllCaches 均在用），
+     * 内部改用模式签名缓存（modeCache），确保 noDecompose / 价格口径切换后必然重算。
+     */
     clearEnhanposerCache() {
-      this.enhanposerCache = {}
+      this.clearModeCache("enhanposer")
     },
     getManualchemyCache() {
       return this.manualchemyCache[this.marketData!.timestamp]
@@ -232,6 +230,31 @@ export const useGameStore = defineStore("game", {
         delete this.jungleCache[key]
       } else {
         this.jungleCache = {}
+      }
+    },
+    /**
+     * 计算模式签名缓存（用于按 key 分桶的页内模式参数）
+     *
+     * 背景：`jungleCache` 按 key 分桶只能区分「不同页面」，无法区分「同一页面的不同计算模式」。
+     * 例如 enhanposer 的 `noDecompose` / `materialPriceType` / `productPriceType`、
+     * junglerit 的 `noEscape`：切换后若仍命中同一桶，就会读到按旧模式算出的结果。
+     * 这里把「模式签名」与结果一起存，读取时签名不一致即视为未命中（自动重算）。
+     */
+    getModeCache<T extends Calculator = Calculator>(modeKey: string, signature: string): T[] | undefined {
+      const entry = this.modeCache[modeKey]
+      if (!entry || entry.signature !== signature) {
+        return undefined
+      }
+      return entry.list as T[]
+    },
+    setModeCache(modeKey: string, signature: string, list: Calculator[]) {
+      this.modeCache[modeKey] = { signature, list }
+    },
+    clearModeCache(modeKey?: string) {
+      if (modeKey) {
+        delete this.modeCache[modeKey]
+      } else {
+        this.modeCache = {}
       }
     },
     getJunglestCache() {
@@ -281,6 +304,7 @@ export const useGameStore = defineStore("game", {
       this.clearEnhanposerCache()
       this.clearJungleCache()
       this.clearJunglestCache()
+      this.clearModeCache()
     }
   }
 })

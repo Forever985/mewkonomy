@@ -33,8 +33,11 @@ const ldSearchData = useMemory("enhanposest-leaderboard-search-data", {
   maxRisk: undefined,
   conditions: [{ steps: undefined, minLevel: undefined, maxLevel: undefined }],
   banEquipment: false,
+  banJewelry: false,
   banCombat: false,
-  banLife: false
+  banLife: false,
+  materialPriceType: "ask",
+  productPriceType: "bid"
 })
 // 兼容旧版字符串 name，迁移为数组（多物品选择）
 if (typeof ldSearchData.value.name === "string") {
@@ -61,8 +64,13 @@ if (Array.isArray(ldSearchData.value.conditions)) {
     if (c.maxLevel == null) c.maxLevel = undefined
   })
 }
+// 旧数据迁移：单向 priceType → 拆分的 materialPriceType / productPriceType（成品售价沿用旧 priceType）
+if (ldSearchData.value.priceType != null && ldSearchData.value.productPriceType == null) {
+  ldSearchData.value.productPriceType = ldSearchData.value.priceType
+}
 delete ldSearchData.value.project
 delete ldSearchData.value.profitRate
+delete ldSearchData.value.priceType
 delete ldSearchData.value.minLevel
 delete ldSearchData.value.maxLevel
 
@@ -73,6 +81,11 @@ function addCondition() {
 function removeCondition(index: number) {
   ldSearchData.value.conditions.splice(index, 1)
 }
+
+const priceTypeOptions = computed(() => [
+  { value: "ask", label: `${t("左挂单")}(${t("左价")})` },
+  { value: "bid", label: `${t("右收购")}(${t("右价")})` }
+])
 
 const loadingLD = ref(false)
 const getLeaderboardData = debounce(() => {
@@ -94,7 +107,6 @@ const getLeaderboardData = debounce(() => {
 }, 300)
 function handleSearchLD() {
   paginationDataLD.currentPage === 1 ? getLeaderboardData() : (paginationDataLD.currentPage = 1)
-  console.log("va", JSON.stringify(ldSearchData.value))
 }
 
 const sortLD: Ref<Sort | undefined> = ref()
@@ -122,10 +134,18 @@ watch(() => usePriceStore(), () => {
 }, { deep: true })
 // #endregion
 
+// 影响「计算模式」的参数变化：清缓存后重算（缓存按模式签名校验，签名不符也会自动重算）
+watch([
+  () => ldSearchData.value.materialPriceType,
+  () => ldSearchData.value.productPriceType
+], () => {
+  useGameStoreOutside().clearModeCache("enhanposest")
+  handleSearchLD()
+})
+
 const currentRow = ref<Calculator>()
 const detailVisible = ref<boolean>(false)
 async function showDetail(row: Calculator) {
-  console.log("showDetail", row)
   currentRow.value = cloneDeep(row)
   detailVisible.value = true
 }
@@ -218,6 +238,16 @@ const { t } = useI18n()
               </el-form-item>
 
               <el-form-item>
+                <el-checkbox v-model="ldSearchData.banEquipment" @change="handleSearchLD">
+                  {{ t('排除装备') }}
+                </el-checkbox>
+              </el-form-item>
+              <el-form-item>
+                <el-checkbox v-model="ldSearchData.banJewelry" @change="handleSearchLD">
+                  {{ t('排除首饰') }}
+                </el-checkbox>
+              </el-form-item>
+              <el-form-item>
                 <el-checkbox v-model="ldSearchData.banCombat" @change="handleSearchLD">
                   {{ t('排除战斗装备') }}
                 </el-checkbox>
@@ -226,6 +256,17 @@ const { t } = useI18n()
                 <el-checkbox v-model="ldSearchData.banLife" @change="handleSearchLD">
                   {{ t('排除生活装备') }}
                 </el-checkbox>
+              </el-form-item>
+
+              <el-form-item :label="t('材料买价')">
+                <el-select v-model="ldSearchData.materialPriceType" style="width:150px" @change="handleSearchLD">
+                  <el-option v-for="opt in priceTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item :label="t('成品售价')">
+                <el-select v-model="ldSearchData.productPriceType" style="width:150px" @change="handleSearchLD">
+                  <el-option v-for="opt in priceTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
               </el-form-item>
             </el-form>
           </template>
@@ -256,7 +297,7 @@ const { t } = useI18n()
                 </template>
               </el-table-column>
 
-              <el-table-column prop="result.profitPHFormat" :label="t('利润 / h')" align="center" min-width="120">
+              <el-table-column prop="result.profitPH" :label="t('利润 / h')" align="center" min-width="120" sortable="custom" :sort-orders="['descending', null]">
                 <template #default="{ row }">
                   <span :class="row.hasManualPrice ? 'manual' : ''">
                     {{ row.result.profitPHFormat }}&nbsp;
@@ -266,7 +307,7 @@ const { t } = useI18n()
                   </el-link>
                 </template>
               </el-table-column>
-              Z
+
               <el-table-column align="center" min-width="120">
                 <template #header>
                   <div style="display: flex; justify-content: center; align-items: center; gap: 5px">

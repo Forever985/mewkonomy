@@ -5,7 +5,7 @@ import locales, { getTrans } from "@/locales"
 import { useGameStoreOutside } from "@/pinia/stores/game"
 import { getGameDataApi } from "../game"
 import { getUsedPriceOf } from "../price"
-import { handlePage, handlePush, handleSearch, handleSort } from "../utils"
+import { handleConditions, handlePage, handlePush, handleSearch, handleSort } from "../utils"
 
 const { t } = locales.global
 /** 查 */
@@ -28,7 +28,11 @@ export async function getDataApi(params: any) {
   profitList = profitList.filter(item => params.maxLevel ? item.originLevel <= params.maxLevel : true)
   profitList = profitList.filter(item => params.minLevel ? item.originLevel >= params.minLevel : true)
 
-  return handlePage(handleSort(handleSearch(profitList, params), params), params)
+  // 组合条件（初始等级/动作，行间 OR、行内 AND）；先处理再剔除，避免 handleSearch 的步数正则误伤
+  profitList = handleConditions(profitList, params, item => (item as ManufactureCalculator).originLevel)
+  const searchParams = { ...params }
+  delete searchParams.conditions
+  return handlePage(handleSort(handleSearch(profitList, searchParams), searchParams), params)
 }
 
 function calcProfit() {

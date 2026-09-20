@@ -32,24 +32,27 @@ const ldSearchFormRef = ref<FormInstance | null>(null)
 
 const ldSearchData = useMemory("dashboard-leaderboard-search-data", {
   name: [],
-  minLevel: undefined,
-  maxLevel: undefined,
   minProfitRate: undefined,
   maxProfitRate: undefined,
   minRisk: undefined,
   maxRisk: undefined,
-  conditions: [{ steps: undefined, project: undefined, minLevel: undefined, maxLevel: undefined }],
+  minLevel: undefined,
+  maxLevel: undefined,
+  // 组合条件 = 并行检索行：每行（步数 + 动作）为一个生产模式，行间 OR、行内 AND
+  conditions: [{ steps: undefined, project: undefined }],
   // 反向排除：命中任一组合（产品×生产模式）即剔除；name 缺省=排除该生产全部，project 缺省=排除该产品全部
   excludes: [{ name: undefined, project: undefined }],
   banEquipment: true,
   banJewelry: false,
+  banCombat: false,
+  banLife: false,
   compare: false
 })
 // 兼容旧版字符串 name，迁移为数组（多物品选择）
 if (typeof ldSearchData.value.name === "string") {
   ldSearchData.value.name = ldSearchData.value.name ? [ldSearchData.value.name] : []
 }
-// 旧数据迁移：project/steps → conditions，actionLevel → minLevel，profitRate → minProfitRate
+// 旧数据迁移：project/steps → conditions；actionLevel → minLevel；profitRate → minProfitRate
 if (!Array.isArray(ldSearchData.value.conditions)) {
   const old = ldSearchData.value
   ldSearchData.value.conditions = [{
@@ -57,7 +60,6 @@ if (!Array.isArray(ldSearchData.value.conditions)) {
     project: old.project || undefined
   }]
 }
-// 旧数据迁移：排除条件缺省补默认行
 if (!Array.isArray(ldSearchData.value.excludes)) {
   ldSearchData.value.excludes = [{ name: undefined, project: undefined }]
 }
@@ -67,32 +69,21 @@ if (ldSearchData.value.actionLevel != null && ldSearchData.value.minLevel == nul
 if (ldSearchData.value.profitRate != null && ldSearchData.value.minProfitRate == null) {
   ldSearchData.value.minProfitRate = ldSearchData.value.profitRate
 }
-// 旧数据迁移：要求等级 minLevel/maxLevel 移入组合条件 conditions[0]（多行条件各补等级字段）
-if (Array.isArray(ldSearchData.value.conditions)) {
-  const cond0 = ldSearchData.value.conditions[0] || {}
-  if (cond0.minLevel == null && ldSearchData.value.minLevel != null) {
-    cond0.minLevel = ldSearchData.value.minLevel
-  }
-  if (cond0.maxLevel == null && ldSearchData.value.maxLevel != null) {
-    cond0.maxLevel = ldSearchData.value.maxLevel
-  }
-  ldSearchData.value.conditions.forEach((c: any) => {
-    if (c.minLevel == null) c.minLevel = undefined
-    if (c.maxLevel == null) c.maxLevel = undefined
-  })
-}
-// 清理旧字段，避免残留参数干扰组合条件过滤
+// 组合条件只承载「步数 + 动作」；要求等级由本页顶层 minLevel/maxLevel 承担（由 leaderboard API 过滤），
+// 历史版本曾把等级塞进 conditions[i]，会导致「选了动作就搜不到」的静默失效，这里按层清理
+ldSearchData.value.conditions.forEach((c: any) => {
+  delete c.minLevel
+  delete c.maxLevel
+})
 delete ldSearchData.value.project
 delete ldSearchData.value.steps
 delete ldSearchData.value.actionLevel
 delete ldSearchData.value.profitRate
-delete ldSearchData.value.minLevel
-delete ldSearchData.value.maxLevel
 
 /** 可检索的动作列表（专业） */
 const projectOptions = ["挤奶", "采摘", "伐木", "锻造", "制造", "裁缝", "烹饪", "冲泡", "点金", "分解", "转化"]
 function addCondition() {
-  ldSearchData.value.conditions.push({ steps: undefined, project: undefined, minLevel: undefined, maxLevel: undefined })
+  ldSearchData.value.conditions.push({ steps: undefined, project: undefined })
 }
 function removeCondition(index: number) {
   ldSearchData.value.conditions.splice(index, 1)
@@ -284,18 +275,39 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
               <el-form-item :label="t('条件')" style="width:100%; margin-right:0;">
                 <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
                   <div v-for="(cond, i) in ldSearchData.conditions" :key="i" style="display:flex; align-items:center; gap:8px;">
-                    <el-select v-model="cond.steps" :placeholder="t('步数不限')" clearable style="width:92px" @change="handleSearchLD">
+                    <el-select v-model="cond.steps" :placeholder="t('步数不限')" clearable style="width:110px" @change="handleSearchLD">
                       <el-option v-for="n in 10" :key="n" :label="`${n}${t('步')}`" :value="n" />
                     </el-select>
-                    <el-select v-model="cond.project" :placeholder="t('动作不限')" clearable style="width:110px" @change="handleSearchLD">
+                    <el-select v-model="cond.project" :placeholder="t('动作不限')" clearable style="width:130px" @change="handleSearchLD">
                       <el-option v-for="p in projectOptions" :key="p" :label="t(p)" :value="t(p)" />
                     </el-select>
-                    <el-input-number v-model="cond.minLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="0" />
-                    <span>~</span>
-                    <el-input-number v-model="cond.maxLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:60px" placeholder="120" />
                     <el-button v-if="ldSearchData.conditions.length > 1" type="danger" :icon="Delete" link @click="removeCondition(i)" />
                   </div>
                   <el-button size="small" :icon="Plus" @click="addCondition">{{ t('添加条件') }}</el-button>
+                </div>
+              </el-form-item>
+
+              <el-form-item :label="t('要求等级')">
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <el-input-number v-model="ldSearchData.minLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />
+                  <span>~</span>
+                  <el-input-number v-model="ldSearchData.maxLevel" :min="0" :max="120" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="120" />
+                </div>
+              </el-form-item>
+
+              <el-form-item :label="t('利润率')">
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <el-input-number v-model="ldSearchData.minProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />&nbsp;%
+                  <span>~</span>
+                  <el-input-number v-model="ldSearchData.maxProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="100" />&nbsp;%
+                </div>
+              </el-form-item>
+
+              <el-form-item :label="t('风险')">
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <el-input-number v-model="ldSearchData.minRisk" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />
+                  <span>~</span>
+                  <el-input-number v-model="ldSearchData.maxRisk" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="∞" />
                 </div>
               </el-form-item>
 
@@ -313,28 +325,12 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
                       style="width:220px"
                       @change="handleSearchLD"
                     />
-                    <el-select v-model="ex.project" :placeholder="t('排除的生产动作，留空=该产品全部')" clearable style="width:200px" @change="handleSearchLD">
+                    <el-select v-model="ex.project" :placeholder="t('排除的生产动作，留空=该产品全部')" clearable style="width:280px" @change="handleSearchLD">
                       <el-option v-for="p in projectOptions" :key="p" :label="t(p)" :value="t(p)" />
                     </el-select>
                     <el-button v-if="ldSearchData.excludes.length > 1" type="danger" :icon="Delete" link @click="removeExclude(i)" />
                   </div>
                   <el-button size="small" :icon="Plus" @click="addExclude">{{ t('添加排除') }}</el-button>
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('利润率')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number v-model="ldSearchData.minProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />&nbsp;%
-                  <span>~</span>
-                  <el-input-number v-model="ldSearchData.maxProfitRate" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="100" />&nbsp;%
-                </div>
-              </el-form-item>
-
-              <el-form-item :label="t('风险')">
-                <div style="display:flex; align-items:center; gap:4px;">
-                  <el-input-number v-model="ldSearchData.minRisk" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="0" />
-                  <span>~</span>
-                  <el-input-number v-model="ldSearchData.maxRisk" :min="0" :controls="false" clearable @change="handleSearchLD" style="width:70px" placeholder="∞" />
                 </div>
               </el-form-item>
 
@@ -386,7 +382,7 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
                 </template>
               </el-table-column>
               <el-table-column prop="project" :label="t('动作')" />
-              <el-table-column prop="actionLevel" :label="t('要求等级')" align="center">
+              <el-table-column prop="actionLevel" :label="t('要求等级')" align="center" sortable="custom" :sort-orders="['ascending', null]">
                 <template #default="{ row }">
                   <div :class="row.actionLevel > getActionConfigOf(row.action).playerLevel ? 'red' : ''">
                     <template v-if="getActionLevelBonusOf(row.action) > 0">
@@ -409,7 +405,11 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
                   </el-link>
                 </template>
               </el-table-column>
-              <el-table-column prop="result.profitPHFormat" :label="t('利润 / h')" align="center" min-width="120" />
+              <el-table-column prop="result.profitPH" :label="t('利润 / h')" align="center" min-width="120" sortable="custom" :sort-orders="['descending', null]">
+                <template #default="{ row }">
+                  <span :class="row.hasManualPrice ? 'manual' : ''">{{ row.result.profitPHFormat }}</span>
+                </template>
+              </el-table-column>
               <el-table-column prop="result.profitRate" :label="t('利润率')" min-width="120" align="center" sortable="custom" :sort-orders="['descending', null]">
                 <template #default="{ row }">
                   {{ row.result.profitRateFormat }}
