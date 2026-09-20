@@ -185,6 +185,26 @@ const panelFields: PanelField[] = [ /* 声明字段 */ ]
 **行尾注意**：批量脚本改写 `.vue` 时容易把 LF 文件写成 CRLF，导致整文件进 diff。
 改完用 `git diff --stat` 自查，必要时按基线行尾归一。
 
+### 2.9 通用分页脚（PagerFooter）
+
+同样由重复度调查发现：**12 个页面的分页块逐字相同**，且 `.pager-wrapper` 样式各自写了一份
+（12 处写法完全一致）。已收敛为 `src/common/components/PagerFooter/index.vue`，配合 `usePagination()` 使用：
+
+```vue
+<template #footer>
+  <PagerFooter
+    :pagination="paginationDataLD"
+    @size-change="handleSizeChangeLD"
+    @current-change="handleCurrentChangeLD"
+  />
+</template>
+```
+
+- 共替换 13 处分页块（`dashboard` 有两个列表）、删除 12 处重复样式，净减约 138 行。
+- `.pager-wrapper` 样式随组件走（非 scoped），页面**不要再**自行定义。
+- `pages/marketvolume/index.vue` 仍直接使用 `<el-pagination>`：它自带独立的摘要区与
+  「只看有成交」开关，分页块并非同一形态，未强行统一。
+
 ---
 
 ## 三、测试

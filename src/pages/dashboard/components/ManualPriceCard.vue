@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { FormInstance } from "element-plus"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
+import PagerFooter from "@@/components/PagerFooter/index.vue"
 import { Delete, Edit } from "@element-plus/icons-vue"
 import { getItemDetailOf, getPriceOf } from "@/common/apis/game"
 import { getPriceDataApi } from "@/common/apis/price"
@@ -148,18 +149,11 @@ const { t } = useI18n()
       </el-table>
     </template>
     <template #footer>
-      <div class="pager-wrapper">
-        <el-pagination
-          background
-          :layout="paginationDataPrice.layout"
-          :page-sizes="paginationDataPrice.pageSizes"
-          :total="paginationDataPrice.total"
-          :page-size="paginationDataPrice.pageSize"
-          :current-page="paginationDataPrice.currentPage"
-          @size-change="handleSizeChangePrice"
-          @current-change="handleCurrentChangePrice"
-        />
-      </div>
+      <PagerFooter
+              :pagination="paginationDataPrice"
+              @size-change="handleSizeChangePrice"
+              @current-change="handleCurrentChangePrice"
+            />
     </template>
   </el-card>
 </template>
@@ -175,8 +169,4 @@ const { t } = useI18n()
   }
 }
 
-.pager-wrapper {
-  display: flex;
-  justify-content: center;
-}
 </style>

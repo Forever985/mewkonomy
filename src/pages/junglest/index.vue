@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import type Calculator from "@/calculator"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
+import PagerFooter from "@@/components/PagerFooter/index.vue"
 import SearchPanel from "@@/components/SearchPanel/index.vue"
 import type { PanelField } from "@@/components/SearchPanel/types"
 import { usePagination } from "@@/composables/usePagination"
@@ -351,18 +352,11 @@ const onPriceStatusChange = usePriceStatus("junglest-price-status")
             </el-table>
           </template>
           <template #footer>
-            <div class="pager-wrapper">
-              <el-pagination
-                background
-                :layout="paginationDataLD.layout"
-                :page-sizes="paginationDataLD.pageSizes"
-                :total="paginationDataLD.total"
-                :page-size="paginationDataLD.pageSize"
-                :current-page="paginationDataLD.currentPage"
-                @size-change="handleSizeChangeLD"
-                @current-change="handleCurrentChangeLD"
-              />
-            </div>
+            <PagerFooter
+              :pagination="paginationDataLD"
+              @size-change="handleSizeChangeLD"
+              @current-change="handleCurrentChangeLD"
+            />
           </template>
         </el-card>
       </el-col>
@@ -384,11 +378,6 @@ const onPriceStatusChange = usePriceStatus("junglest-price-status")
 .success {
   color: #67c23a;
 }
-.pager-wrapper {
-  display: flex;
-  justify-content: center;
-}
-
 .row {
   .el-col {
     margin-bottom: 20px;
