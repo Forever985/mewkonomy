@@ -114,8 +114,10 @@ try {
     & git config --file $tmpCfg credential.helper wincred
     & git config --file $tmpCfg http.postBuffer 524288000
     # 本仓库目录属主可能不是当前用户（例如曾被管理员账户操作过），
-    # 那会让所有 git 写操作以 "detected dubious ownership" 失败。
-    # 在临时配置里把本仓库标记为安全目录即可，不改动用户的全局配置。
+    # 那会让所有 git 写操作以 "detected dubious ownership" 失败；
+    # gh-pages 内部还会 clone 到临时目录，同样会撞上。
+    # 在临时配置里放行即可，不改动用户的全局配置。
+    & git config --file $tmpCfg --add safe.directory '*'
     & git config --file $tmpCfg --add safe.directory ($PSScriptRoot -replace '\\', '/')
     $gName  = & git config --global --get user.name  2>$null
     $gEmail = & git config --global --get user.email 2>$null
