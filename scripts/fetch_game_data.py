@@ -207,6 +207,24 @@ def assert_no_unintended_deletions(repo_dir: str, owned_files: set) -> None:
         )
 
 
+def push_with_retry(repo_dir: str, branch: str = "gh-pages", attempts: int = 3) -> None:
+    """
+    推送 gh-pages，被抢占时 rebase 后重试。
+
+    为什么需要：update-data.yml 与 market-history.yml 用的是**不同的** concurrency group，
+    两者可能在同一个时间窗口内先后推送 gh-pages。后推的一方若直接失败，这次更新就白跑了。
+    rebase 后重试成本极低。
+    """
+    for attempt in range(1, attempts + 1):
+        push = subprocess.run(["git", "push", "origin", branch], cwd=repo_dir, capture_output=True, text=True)
+        if push.returncode == 0:
+            return
+        print(f"   [!] 推送失败（第 {attempt}/{attempts} 次）：{(push.stderr or '').strip()[-200:]}")
+        if attempt == attempts:
+            raise SystemExit(f"[x] gh-pages 推送连续 {attempts} 次失败，放弃本次部署")
+        subprocess.run(["git", "pull", "--rebase", "--autostash", "origin", branch], cwd=repo_dir, check=True)
+
+
 def deploy_to_gh_pages() -> None:
     """部署 public/data 到 gh-pages 分支"""
     if DRY_RUN:
@@ -276,7 +294,7 @@ def deploy_to_gh_pages() -> None:
             cwd=temp_dir,
             check=True,
         )
-        subprocess.run(["git", "push", "origin", "gh-pages"], cwd=temp_dir, check=True)
+        push_with_retry(temp_dir)
         print("[OK] 已部署到 gh-pages 分支")
     except subprocess.CalledProcessError as e:
         print(f"[x] 部署失败：{e}")
