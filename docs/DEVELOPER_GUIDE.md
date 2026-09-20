@@ -118,6 +118,66 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 - 玩家配置集中在 `src/pages/dashboard/components/`（GameInfo / ActionConfig / ActionDetail / ActionPrice / ManualPriceCard / SinglePrice 等），各计算页通过引入这些组件复用全局配置。
 - buff 逻辑在 `src/common/apis/player/index.ts` 的 `initBuffMap` / `getActionLevelBonusOf`：如工匠茶（`/buff_types/action_level`）给对应行动等级 **+5**（计算时 `actionLevel = levelRequirement.level + bonus`）。
 
+### 2.8 通用「多变搜索」面板（SearchPanel，重点）
+
+**背景**：11 个检索页原先各自手写一份搜索表单，实测重复度极高（Jaccard 相似度）——
+`jungle` / `decompose` / `inherit` / `junglest` 系列两两 **91%~100%**，
+`dashboard` ↔ `manualchemy` **94%**，`enhanposer` ↔ `enhanposest` **100%**；
+其中 12 个字段（`name`/`conditions`/`banEquipment`/`minProfitRate`/`maxProfitRate`/
+`banJewelry`/`banCombat`/`banLife`/`maxRisk`/`minLevel`/`maxLevel`/`excludes`）
+在 9~11 个页面反复出现。另有「旧数据迁移」样板在 10 个页面逐字重复。
+因此把这套东西收敛成**配置驱动**的复用模块。
+
+**两个复用单元**：
+- `src/common/components/SearchPanel/index.vue` + `types.ts` —— 由 `fields: PanelField[]` 配置驱动渲染。
+  支持 7 种字段（各字段的差异都只是「标签文案 + 取值范围 + 是否显示 + 可选项」）：
+
+  | type | 说明 | 关键配置 |
+  | --- | --- | --- |
+  | `name` | 物品名多选（可自由输入） | `width`、`placeholder` |
+  | `conditions` | 可增删的「步数/等级 + 动作」行 | `stepsCount`、`stepLabel`、`projectOptions`、`levelRange`、`hint`、`minRows` |
+  | `excludes` | 可增删的「产品名 + 生产动作」行 | `namePlaceholder`、`projectPlaceholder`、`projectOptions` |
+  | `range` | 数值区间（双头或单头） | `minKey`/`maxKey`、`unit`、`separator`、`min`/`max`、`placeholder*`、`width` |
+  | `checkbox` | 复选开关 | `key`、`disabled`、`onChange`（额外回调） |
+  | `select` | 下拉 | `key`、`options`、`width` |
+  | `sort` | 排序优先级编辑器 | `key`、`fields`、`defaultProp` |
+
+- `src/common/composables/useSearchPanel.ts` 的 `normalizeSearchData()` ——
+  统一的**旧结构迁移**（`name` 字符串转数组、`conditions`/`excludes` 补数组、
+  `profitRate` → `minProfitRate`、清理已废弃的 `project`/`profitRate`/`steps`）。
+
+**使用方式**（照抄即可）：
+```ts
+import SearchPanel from "@@/components/SearchPanel/index.vue"
+import type { PanelField } from "@@/components/SearchPanel/types"
+import { normalizeSearchData } from "@@/composables/useSearchPanel"
+
+const ldSearchData = useMemory("xxx-leaderboard-search-data", { /* 默认值 */ })
+normalizeSearchData(ldSearchData.value)
+
+const projectOptions = [/* 该页可用的动作 */]
+const panelFields: PanelField[] = [ /* 声明字段 */ ]
+```
+```vue
+<SearchPanel v-model="ldSearchData" :fields="panelFields" title="利润排行" @change="handleSearchLD" />
+```
+
+**两个必须注意的点**：
+1. **标签不要写成 `` `${t("风险")} ≤` ``**。`t()` 会在 `setup` 阶段求值一次，切换语言时不会更新。
+   带符号的标签请用 `label: "风险"` + `labelSuffix: " ≤"`（或 `labelPrefix`），
+   由组件在模板里拼接，才能保持响应式。`conditions.stepLabel` 是函数，不受此限。
+2. **面板不改动数据结构**，只负责增删 `conditions`/`excludes` 行并写各字段值；
+   取值的 `min`/`max` 边界由配置给出，其余一律透传。所有交互统一 `emit("change")`，
+   页面照旧调自己的 `handleSearchLD`。
+3. `.rank-card` 布局样式已收敛到 `SearchPanel` 内部（非 scoped）。页面**不要再**自己定义
+   同名样式——页面级 scoped 样式也作用不到组件内部。
+
+**迁移进度**：已完成 `decompose` / `junglest` / `junglest-inherit` / `inherit` / `jungle-pickout`。
+尚待迁移：`jungle`（含售价区间）/ `dashboard`（两个表单）/ `manualchemy` /
+`enhanposer` / `enhanposest` / `enhanceexp`（levelRange 型条件）。
+迁移时务必**逐控件核对**（复选框含 `disabled` 与各自的 handler、区间字段、条件首列文案），
+只比 `:label` 会漏掉类似 `junglest/inherit` 的 `noEscape` 复选框。
+
 ---
 
 ## 三、测试
