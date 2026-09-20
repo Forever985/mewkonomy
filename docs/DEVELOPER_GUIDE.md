@@ -42,7 +42,7 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 
 - **数据源**：`data.json`（静态游戏数据，**严禁改动**，含硬上限）+ `market.json`（市场快照 `{market:{名称:{ask,bid,vendor}}, time}`）。
 - **价格语义**：`PriceStatus.ASK`=左挂单（ask），`BID`=右收购（bid）。全局规则——**材料/成本用 ask，成品/收益用 bid**（个别页面可切换成品计价口径）。
-- **市场历史归档**：`data/market_history.json`（由 GitHub Actions 每 20 分钟采样、滚动 7 天）供市场监控页计算涨跌，详见 §4.1；页面另有 localStorage 本地兜底采样。
+- **市场历史归档**：`data/market_history.json`（由 GitHub Actions 每小时采样、滚动 7 天）供市场监控页计算涨跌，详见 §4.1；页面另有 localStorage 本地兜底采样。
 
 ### 1.3 Vite 别名
 
@@ -152,13 +152,13 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 
 | workflow | 频率 | 脚本 | 职责与产出 |
 | --- | --- | --- | --- |
-| `market-history.yml`（Market History Sampling） | 每 20 分钟（`cron: "*/20 * * * *"`）+ 手动 `workflow_dispatch`；`concurrency: market-history-sampling` 保证不并发 | `scripts/sample_market_history.py` | 抓官方 `https://www.milkywayidle.com/game_data/marketplace.json`（约 0.4s、极稳定），追加采样点到 `gh-pages:data/market_history.json`；滚动 7 天、上限 520 点 |
+| `market-history.yml`（Market History Sampling） | 每小时第 5 分钟（`cron: "5 * * * *"`）+ 手动 `workflow_dispatch`；`concurrency: market-history-sampling` 保证不并发 | `scripts/sample_market_history.py` | 抓官方 `https://www.milkywayidle.com/game_data/marketplace.json`（约 0.4s、极稳定），追加采样点到 `gh-pages:data/market_history.json`；滚动 7 天、上限 520 点 |
 | `update-data.yml`（Update Game Data） | 每天 UTC 00:20（`cron: "20 0 * * *"`）+ 手动 `workflow_dispatch` | `scripts/fetch_game_data.py` | 抓上游 `data.json` / `market.json`，只负责这两个文件 |
 
 - **为什么拆开**：历史采样与游戏数据抓取原先共用一个 job，`data.json` 上游一挂，历史采样一起停摆——线上曾因此**连续 8 天没有任何新采样点**。
 - **为什么游戏数据改为每天一次**：游戏数据只在游戏版本更新时变化，原先每小时跑一次纯属浪费 Actions 配额。
 - **官方快照实际是 1 小时粒度（实测）**：`marketplace.json` 顶层 `timestamp` 代表**市场快照本身的生成时间**，实测它以**整点、每小时**为粒度前进（例如 07:06:00 → 08:06:00），而不是每 20 分钟。因此：
-  - 每 20 分钟的 cron 实际每天只能产出约 **24 个不同采样点**（其余运行都因时间戳相同被去重跳过，属预期行为，不是故障）；
+  - 因此稳定产出约 **24 个采样点/天**；更频繁的运行会因时间戳相同被去重跳过（属预期行为，不是故障）。cron 仍取每小时第 5 分钟并保留手动触发，作为对 GitHub 调度延迟（实测 2~4 倍）的容错；
   - 7 天窗口下约 168 点，远低于 520 的上限，所以上限目前不会触发；
   - 这意味着「涨跌」基准点的最细分辨率是 1 小时：**1 小时时间窗常常找不到更早的基准点而显示 `--`**，属正常现象；3 小时及以上的窗口才有稳定意义。
 - **部署安全红线（必读）**：`gh-pages` 的 `data/` 是**多脚本共享目录**——`sample_market_history.py` **只拥有** `market_history.json`，`fetch_game_data.py` **只拥有** `data.json` / `market.json`。两脚本都只把自己的文件复制进 `gh-pages` 的全新克隆再提交，**绝不允许 `rmtree` + `copytree` 整个 `data/`**：早期采样脚本用 `public/data` 整目录替换线上目录，而 `main` 的 `public/data` 不含新抓的 `data.json`/`market.json`，导致**每次采样都会删掉线上 4MB 的 `data.json` 与 70KB 的 `market.json`**（commit `93f0107`）。两脚本另调用 `assert_no_unintended_deletions()`，`git status` 一旦出现本脚本不负责的删除就中止部署。

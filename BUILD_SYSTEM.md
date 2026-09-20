@@ -95,7 +95,7 @@ pnpm build
 
 | workflow | 频率 | 职责 | 负责的数据文件 |
 | --- | --- | --- | --- |
-| `market-history.yml`（Market History Sampling） | 每 20 分钟（`*/20 * * * *`）+ 手动触发 | 抓官方 `marketplace.json`（约 0.4s）追加采样点，滚动 7 天、上限 520 点 | `data/market_history.json` |
+| `market-history.yml`（Market History Sampling） | 每小时第 5 分钟（`5 * * * *`）+ 手动触发 | 抓官方 `marketplace.json`（约 0.4s）追加采样点，滚动 7 天、上限 520 点 | `data/market_history.json` |
 | `update-data.yml`（Update Game Data） | 每天 UTC 00:20（`20 0 * * *`） | 抓上游 `data.json` / `market.json`，多源回退 + 「禁止降级」护栏 | `data/data.json`、`data/market.json` |
 
 - **刻意解耦**：历史采样与游戏数据抓取原先共用一个 job，`data.json` 上游一挂，历史采样会一起停摆（线上曾连续 8 天没有新采样点）。

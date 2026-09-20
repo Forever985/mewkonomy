@@ -247,12 +247,12 @@ AIGC:
 
 | workflow | 频率 | 脚本 | 依赖 |
 | --- | --- | --- | --- |
-| `market-history.yml` | **每 20 分钟** | `scripts/sample_market_history.py` | **仅**官方 `marketplace.json`（约 0.4s，稳定） |
+| `market-history.yml` | **每小时第 5 分钟**（`5 * * * *`） | `scripts/sample_market_history.py` | **仅**官方 `marketplace.json`（约 0.4s，稳定） |
 | `update-data.yml` | **每天 1 次** | `scripts/fetch_game_data.py` | 上游 data.json / market.json |
 
 **B. 采样内容与窗口升级**
 
-- 窗口：26 小时 → **7 天**（`HISTORY_WINDOW_SEC = 7*24*3600`，上限 520 点 ≈ 每 20 分钟一个）
+- 窗口：26 小时 → **7 天**（`HISTORY_WINDOW_SEC = 7*24*3600`，上限 520 点；实测官方快照是 1 小时粒度，故稳定产出约 24 点/天）
 - 采样点从 `[ask, price]` 扩为 **`[ask, bid, volume]`**；前端**同时兼容两种长度**（历史文件是滚动累积的）
 - 本地兜底上限 48 → 200 条，同样 7 天窗口
 

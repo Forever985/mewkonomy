@@ -16,7 +16,11 @@ MewKonomy 市场历史高频采样脚本
   `t` 取自官方 marketplace.json 的顶层 `timestamp` 字段，即**市场快照本身的生成时间**，
   不是「本脚本运行的时间」。因此若官方快照尚未刷新，连续两次运行会拿到同一个 `t`，
   此时按下面的去重规则跳过 —— 这是**预期行为**（同一个快照重复写没有意义），
-  并不代表流水线停摆。官方该快照的刷新间隔约 20 分钟，与 cron 频率一致。
+  并不代表流水线停摆。
+
+  实测该快照是**整点、每小时**才前进一次（连续 18 分钟观察同一个值不变），
+  所以「市场历史」的有效分辨率就是 1 小时。cron 刻意跑得比这频繁一点作为容错
+  （GitHub 对本仓库的定时任务实测会延迟 2~4 倍），重复的运行会被去重丢弃。
 
   官方 marketplace.json 顶层只有 `timestamp` 与 `marketData` 两个字段；
   `marketData[hrid][level]` 形如 `{"a": ask, "b": bid, "p": price, "v": volume}`，
@@ -26,7 +30,7 @@ MewKonomy 市场历史高频采样脚本
   volume 是官方当日累计成交量，因此前端做成交量对比时要看「增量/速率」而不是绝对值。
 
 运行方式：
-  - CI：.github/workflows/market-history.yml 每 20 分钟调用
+  - CI：.github/workflows/market-history.yml 每小时调用
         需要环境变量 GITHUB_REPOSITORY 与 GITHUB_TOKEN
   - 本地：python scripts/sample_market_history.py
           只抓取不推送：DRY_RUN=1 python scripts/sample_market_history.py
@@ -58,7 +62,7 @@ HISTORY_FILE = "market_history.json"
 # 线上数据读取目录（CI 检出 gh-pages → ./data；本地在 main 上跑 → ./public/data）
 READ_DIRS = ("./data", "./public/data")
 
-# 保留窗口与上限：7 天 / 每 20 分钟一个点 → 7*24*3 = 504
+# 保留窗口与上限：7 天 / 官方快照 1 小时粒度 → 7*24 = 168，上限留足余量
 HISTORY_WINDOW_SEC = 7 * 24 * 3600
 HISTORY_MAX_SAMPLES = 520
 
