@@ -1,16 +1,24 @@
 """
-MewKonomy 线上游戏数据抓取与部署脚本。
+MewKonomy 游戏数据抓取与部署脚本。
 
 作用：
   1. 抓取上游 data.json / market.json，与线上（gh-pages 分支的 data/）比对，有变化才更新；
-  2. 抓取官方 marketplace.json，追加一个市场历史采样点到 market_history.json
-     （滚动保留最近 26 小时，供前端「涨跌」计算使用）；
-  3. 有变化时把 public/data 整体部署到 gh-pages 分支的 data/ 目录。
+  2. 有变化时把 public/data 部署到 gh-pages 分支的 data/ 目录。
+
+**本脚本不再负责市场历史采样**（原先它同时做这件事，导致 data.json 源一挂、
+历史采样就一起停摆——实测线上因此连续 8 天没有新采样点）。
+历史采样已迁到独立的高频 workflow：
+  scripts/sample_market_history.py + .github/workflows/market-history.yml
+
+**安全护栏（重要）**：
+  抓到的 data.json 若 `versionTimestamp` 比线上已部署的**更旧**，则拒绝写入。
+  历史上本脚本用「哈希不同就覆盖」的策略，而上游源可能停留在旧版本
+  （实测 silent1b/MWIData 停在 v1.20250818.0，比线上 v1.20260309.0 旧 7 个月），
+  一旦抓取成功就会**用旧数据覆盖线上新数据**。现在这种降级会被直接拦下。
 
 运行方式：
-  - CI：.github/workflows/update-data.yml 每小时调用；
+  - CI：.github/workflows/update-data.yml 每天调用；
         需要环境变量 GITHUB_REPOSITORY 与 GITHUB_TOKEN
-        （workflow 传入内置 token，配合 permissions: contents: write 即可推送 gh-pages）。
   - 本地：python scripts/fetch_game_data.py
           只抓取不推送：DRY_RUN=1 python scripts/fetch_game_data.py
 """
@@ -20,8 +28,7 @@ import os
 import shutil
 import subprocess
 import sys
-import time
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -35,13 +42,20 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-DATA_URL = [
-    "https://raw.githubusercontent.com/silent1b/MWIData/main/init_client_info.json",
-    "https://raw.githubusercontent.com/holychikenz/MWIApi/main/milkyapi.json",
+# 上游数据源候选：(url, 输出文件名)，按顺序尝试，第一个成功即用。
+# 之所以给多源：raw.githubusercontent.com 在本网络下极不稳定
+# （实测同一个文件要 270~290 秒，甚至直接超时），而 jsDelivr / ghproxy 快得多。
+DATA_SOURCES: List[Tuple[str, str]] = [
+    # jsDelivr CDN（实测 24~35 秒拿到 3MB 级文件）
+    ("https://cdn.jsdelivr.net/gh/silent1b/MWIData@main/init_client_info.json", "data.json"),
+    ("https://cdn.jsdelivr.net/gh/silent1b/MWIData@main/init_client_info.json", "market.json"),
+    # ghproxy 转发（实测 35 秒）
+    ("https://ghproxy.net/https://raw.githubusercontent.com/silent1b/MWIData/main/init_client_info.json", "data.json"),
+    ("https://ghproxy.net/https://raw.githubusercontent.com/silent1b/MWIData/main/init_client_info.json", "market.json"),
+    # 原始通道兜底（慢且易超时，放最后）
+    ("https://raw.githubusercontent.com/silent1b/MWIData/main/init_client_info.json", "data.json"),
+    ("https://raw.githubusercontent.com/silent1b/MWIData/main/init_client_info.json", "market.json"),
 ]
-
-# 官方市场快照（与前端展示同源），用于涨跌历史归档
-MARKETPLACE_URL = "https://www.milkywayidle.com/game_data/marketplace.json"
 
 # 待部署目录（与本地 `pnpm build` 的产物结构一致：public/data → dist/data → gh-pages:data）
 OUTPUT_DIR = "./public/data"
@@ -49,14 +63,9 @@ OUTPUT_DIR = "./public/data"
 #   CI 检出的是 gh-pages 分支 → ./data；本地在 main 分支跑 → ./data 或 ./public/data
 READ_DIRS = ("./data", "./public/data")
 DATA_FILES = ("data.json", "market.json")
-HISTORY_FILE = "market_history.json"
-# 历史采样窗口（与前端 history.ts 保持一致）
-HISTORY_WINDOW_SEC = 26 * 3600
-# 历史采样点数量硬上限（正常窗口内约 26 个）
-HISTORY_MAX_SAMPLES = 26
-# 单次 HTTP 请求超时与重试（上游偶发掐断连接，重试可自愈）
-HTTP_TIMEOUT = 30
-RETRY_TOTAL = 4
+# 单次 HTTP 请求超时与重试（大文件 + 慢通道，超时给足）
+HTTP_TIMEOUT = 120
+RETRY_TOTAL = 3
 
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 
@@ -88,8 +97,39 @@ def fetch_data(url: str) -> Any:
     return response.json()
 
 
+def fetch_first_available(filename: str) -> Any:
+    """按 DATA_SOURCES 顺序尝试，返回第一个成功抓取到的 JSON（要求是 dict）。"""
+    last_error: Exception | None = None
+    for url, target in DATA_SOURCES:
+        if target != filename:
+            continue
+        try:
+            print(f"   尝试 {url}")
+            data = fetch_data(url)
+            if not isinstance(data, dict) or not data:
+                print("   [!] 返回内容不是非空对象，跳过该源")
+                continue
+            # data.json 必须含物品表，否则视为无效响应（防止被错误页/空对象覆盖）
+            if filename == "data.json" and not data.get("itemDetailMap"):
+                print("   [!] 缺少 itemDetailMap，跳过该源")
+                continue
+            # market.json 是「名称 → 行情」的扁平表，正常只有几十 KB；
+            # 若某源返回 3MB 级的 data.json 载荷（上游仓库结构变化时会发生），直接拒绝，
+            # 否则会把 3.8MB 的错误文件推到线上 data/ 目录。
+            if filename == "market.json":
+                top_keys = list(data.keys())[:5]
+                if "itemDetailMap" in data or len(json.dumps(data)) > 2_000_000:
+                    print(f"   [!] 内容不像 market.json（顶层键示例 {top_keys}），跳过该源")
+                    continue
+            return data
+        except Exception as e:  # noqa: BLE001 - 逐源容错，最后统一报错
+            last_error = e
+            print(f"   [!] 该源失败：{type(e).__name__}: {e}")
+    raise RuntimeError(f"{filename} 的全部上游源均不可达，最后一个错误：{last_error}")
+
+
 def save_as_json(data: Any, output_file: str, compact: bool = False) -> None:
-    """保存数据为 JSON 文件；compact=True 时用紧凑格式（历史文件体积小很多）"""
+    """保存数据为 JSON 文件；compact=True 时用紧凑格式"""
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     with open(output_file, "w", encoding="utf-8") as f:
         if compact:
@@ -123,44 +163,30 @@ def load_deployed_json(filename: str) -> Any:
     return None
 
 
-def update_market_history(marketplace_data: Dict[str, Any]) -> bool:
-    """将官方 marketplace 快照追加为历史采样点（滚动保留最近 26h）。返回是否新增。"""
-    md = marketplace_data.get("marketData")
-    timestamp = marketplace_data.get("timestamp") or marketplace_data.get("time")
-    output_file = os.path.join(OUTPUT_DIR, HISTORY_FILE)
-    if not md or not timestamp:
-        print("   [!] marketplace 数据缺少 marketData/timestamp，跳过历史采样")
+def version_stamp_of(data: Any) -> str:
+    """取数据的版本时间戳，用于「禁止降级」比较。取不到时返回空串（视为未知）。"""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("versionTimestamp", "currentTimestamp", "time"):
+        v = data.get(key)
+        if isinstance(v, str) and v:
+            return v
+        if isinstance(v, (int, float)) and v:
+            # epoch 秒统一成 20 位零填充字符串，保证字典序 == 时间序
+            return f"{int(v):020d}"
+    return ""
+
+
+def is_downgrade(new_data: Any, existing_data: Any) -> bool:
+    """
+    判断新数据是否比线上已部署的更旧（降级）。
+    只在两边都能取到版本戳时才有结论；取不到时保守放行（不阻塞正常更新）。
+    """
+    new_stamp = version_stamp_of(new_data)
+    old_stamp = version_stamp_of(existing_data)
+    if not new_stamp or not old_stamp:
         return False
-
-    existing = load_deployed_json(HISTORY_FILE)
-    history = existing if isinstance(existing, list) else []
-    # 过滤掉结构不完整的旧采样点，避免 KeyError
-    history = [
-        s
-        for s in history
-        if isinstance(s, dict) and isinstance(s.get("t"), (int, float)) and isinstance(s.get("p"), dict)
-    ]
-
-    if history and history[-1].get("t") == timestamp:
-        print(f"   = 市场历史：时间戳 {timestamp} 与上一点相同，不重复采样")
-        save_as_json(history, output_file, compact=True)  # 仍落盘，保证部署目录完整
-        return False
-
-    sample = {"t": timestamp, "p": {}}
-    for hrid, entry in (md.items() if isinstance(md, dict) else []):
-        pp = {}
-        if isinstance(entry, dict):
-            for level, e in entry.items():
-                if isinstance(e, dict):
-                    pp[level] = [e.get("a"), e.get("p")]
-        sample["p"][hrid] = pp
-
-    history.append(sample)
-    now = time.time()
-    history = [h for h in history if now - h["t"] < HISTORY_WINDOW_SEC][-HISTORY_MAX_SAMPLES:]
-    save_as_json(history, output_file, compact=True)
-    print(f"   [OK] 市场历史：新增采样 t={timestamp}，当前共 {len(history)} 个采样点")
-    return True
+    return new_stamp < old_stamp
 
 
 def deploy_to_gh_pages() -> None:
@@ -237,35 +263,41 @@ def main() -> None:
     has_changes = False
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # 1) 上游游戏数据
-    for url, filename in zip(DATA_URL, DATA_FILES):
+    for filename in DATA_FILES:
         output_file = os.path.join(OUTPUT_DIR, filename)
-        print(f"-> 抓取 {filename}：{url}")
-        new_data = fetch_data(url)
+        print(f"-> 抓取 {filename}")
+        try:
+            new_data = fetch_first_available(filename)
+        except Exception as e:  # noqa: BLE001
+            print(f"   [x] {filename} 抓取失败，跳过该文件：{e}")
+            continue
+
         existing_data = load_deployed_json(filename)
+
+        # —— 禁止降级：绝不用更旧的数据覆盖线上 ——
+        if is_downgrade(new_data, existing_data):
+            print(
+                f"   [!] 拒绝写入：抓到的是旧版本"
+                f"（新 {version_stamp_of(new_data)} < 线上 {version_stamp_of(existing_data)}）"
+            )
+            continue
 
         if existing_data is None:
             print(f"   [OK] 首次写入 {output_file}")
             has_changes = True
         elif get_file_hash(new_data) != get_file_hash(existing_data):
-            print(f"   [OK] 数据有更新（新 time={new_data.get('time')} / 旧 time={existing_data.get('time')}）")
+            print(
+                f"   [OK] 数据有更新"
+                f"（新 {version_stamp_of(new_data) or 'n/a'} / 旧 {version_stamp_of(existing_data) or 'n/a'}）"
+            )
             has_changes = True
         else:
             print("   = 数据无变化")
 
-        # 无论是否有变化都写入暂存目录，保证部署时 gh-pages:data/ 内容完整
+        # 无论是否有变化都写入暂存目录，保证部署时 gh-pages:data/ 内容完整。
+        # 注意：market_history.json 由高频采样 workflow 独占维护，本脚本不碰它。
         save_as_json(new_data, output_file)
 
-    # 2) 市场历史采样（失败不影响其它数据更新）
-    try:
-        print(f"-> 抓取官方市场快照归档历史：{MARKETPLACE_URL}")
-        marketplace = fetch_data(MARKETPLACE_URL)
-        if update_market_history(marketplace):
-            has_changes = True
-    except Exception as e:
-        print(f"   [!] 市场历史更新失败（不影响其它数据）：{type(e).__name__}: {e}")
-
-    # 3) 有变化才部署
     if has_changes:
         deploy_to_gh_pages()
     else:
@@ -274,3 +306,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

@@ -23,10 +23,12 @@ export interface MarketVolumeItem {
   volume: number
   /** 估算成交额 = 当前价 × 成交量（无价时 0） */
   turnover: number
-  /** 涨跌百分比（相对时间窗基准价）；null 表示该条目无历史基准 */
+  /** 涨跌百分比（相对时间窗基准）；null 表示该条目无历史基准 */
   changePct?: number | null
-  /** 涨跌基准价 */
+  /** 涨跌基准值（口径由页面选择：价格 / 左挂单 / 右收购 / 成交量） */
   changeBase?: number | null
+  /** 成交量速率（件/小时，窗口内增量均值）；null 表示无基准或跨了 UTC 归零点 */
+  volumeRate?: number | null
 }
 
 /** 聚合全部市场条目（含价格档展开）。读失败/未加载时返回空数组。 */
@@ -57,7 +59,8 @@ export function getMarketVolumeList(): MarketVolumeItem[] {
         bid: p.bid ?? -1,
         price,
         volume,
-        turnover: price > 0 && volume > 0 ? price * volume : 0
+        turnover: price > 0 && volume > 0 ? price * volume : 0,
+        volumeRate: null
       })
     }
   }

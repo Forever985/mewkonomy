@@ -215,3 +215,73 @@ AIGC:
 ### 功能D：卷轴排查结论
 - 迷宫玩法在当前 data.json（gameVersion v1.20250818.0）中不存在（无 maze/labyrinth/dungeon 相关物品）。
 - 唯一「卷轴」为 Bishop's Scroll（resource, lv95），用于制作 Bishop's Codex 法典（crafting lv94 / 104），二者本就有市场价、已在利润计算中。
+## 十二、线上数据流水线修复：市场历史从「8 天没数据」到 20 分钟一采（2026-09-20）
+
+### 12.1 问题：线上市场历史实际是停摆的
+
+排查线上 Pages 站点的数据供给时发现：
+
+| 检查项 | 实测 |
+| --- | --- |
+| `update-data.yml` 运行记录 | 每 1~2 小时跑一次，**最近 10 次全部 failure** |
+| 失败步骤 | 每次都是 `Fetch and deploy data` |
+| 线上 `market_history.json` | **只有 1 个采样点，停在 09-14 12:06**（已 6 天无更新） |
+| 后果 | 市场监控页的「涨跌」列几乎恒为 `--` |
+
+**根因（本地复现实测）**：脚本配置的两个上游源都已不可用——
+
+| 源 | 实测 |
+| --- | --- |
+| `silent1b/MWIData/init_client_info.json` | 可达但 **290 秒**；且仓库**最后提交 2025-08-19**，版本停在 `v1.20250818.0` |
+| `holychikenz/MWIApi/milkyapi.json` | **5 分钟超时**；内容仅 69KB，**完全不含 `itemDetailMap`/`gameVersion`** |
+
+脚本原为 `HTTP_TIMEOUT=30` + 4 次重试 + `zip(DATA_URL, DATA_FILES)`，轮到 MWIApi 必然耗尽失败。
+
+**更危险的隐患**：线上 `data.json` 是 `v1.20260309.0`（948 物品、含迷宫），而唯一「可达」的 MWIData 是 **`v1.20250818.0`（旧 7 个月）**。原策略「哈希不同就覆盖」意味着**一旦抓取成功就会用旧数据反向覆盖线上新数据**。
+
+### 12.2 修复
+
+**A. 拆解耦合 + 高频采样（核心）**
+
+原先历史采样与游戏数据抓取在**同一个 job** 里，data.json 源一挂，历史采样一起停摆。现在拆成两条 workflow：
+
+| workflow | 频率 | 脚本 | 依赖 |
+| --- | --- | --- | --- |
+| `market-history.yml` | **每 20 分钟** | `scripts/sample_market_history.py` | **仅**官方 `marketplace.json`（约 0.4s，稳定） |
+| `update-data.yml` | **每天 1 次** | `scripts/fetch_game_data.py` | 上游 data.json / market.json |
+
+**B. 采样内容与窗口升级**
+
+- 窗口：26 小时 → **7 天**（`HISTORY_WINDOW_SEC = 7*24*3600`，上限 520 点 ≈ 每 20 分钟一个）
+- 采样点从 `[ask, price]` 扩为 **`[ask, bid, volume]`**；前端**同时兼容两种长度**（历史文件是滚动累积的）
+- 本地兜底上限 48 → 200 条，同样 7 天窗口
+
+**C. 两道护栏（防止反向破坏）**
+
+1. **禁止降级**：抓到 `versionTimestamp` 比线上更旧的数据 → 拒绝写入（已验证：能正确拦下 2025-08 的旧数据）
+2. **体积/结构校验**：`data.json` 必须含 `itemDetailMap`；`market.json` 正常只有几十 KB，若返回 3MB 级载荷则拒绝（上游仓库结构变化时会返回 data.json 内容）
+3. 采样脚本另加护栏：官方快照物品数为 0 时放弃本次采样，**绝不用空快照覆盖 7 天历史**
+
+**D. 前端涨跌口径可选**
+
+`getMarketChangeMap(list, windowHours, metric, now)` 支持四种口径：`price`（ask/bid 中点）/ `ask` / `bid` / `volume`。
+市场监控页新增「对比口径」下拉与「成交量/小时」列，时间窗扩到 `1/3/6/12/24/72/168` 小时。
+
+**特别注意 volume 的语义**：官方 `v` 是**当日累计成交量**（UTC 0 点归零），直接比绝对值只能反映「今天过了多久」。因此成交量口径比的是**增量速率**（`(当前累计 − 基准累计) / 间隔小时`），并把基准点的历史速率作为参照；跨 UTC 归零导致负增量时该项不出现（显示 `--`）。
+
+**E. 时间参数化（可测试性）**
+
+`getBaselineSample` / `getMarketChangeMap` / `getVolumeRate` / `recordLocalSample` 都接受显式 `now`。
+动机：这些函数原先内部读 `Date.now()`，而测试里 `vi.setSystemTime` 与模块级时序互相干扰，反复产生「期望值与实际值互不自洽」的假失败。显式 `now` 让时间逻辑可以确定性测试。
+（`tests/marketvolume-history.test.ts` 中原有一条依赖 mock 时钟的用例即因此删除，其语义由 `tests/marketvolume-history-format.test.ts` 用确定性样本完全覆盖。）
+
+### 12.3 仍未解决：游戏数据源
+
+**没有找到可用的 `data.json` 上游**。线上那份 4,063,375 字节的完整官方数据（48 个顶层键）来源不明，已核查：
+
+- `silent1b/MWIData`：停在 2025-08，且 `gameVersion = v1.20250818.0`
+- `holychikenz/MWIApi`：不含游戏数据
+- `Polokikiki/Milkonomy` fork：有 `v1.20260309.0`，但只有 **2,744,882 字节**（比完整版小 1.3MB，疑似裁剪版），**不能直接替代**
+- `raw.githubusercontent.com` 取 3MB 级文件要 270~290 秒或超时；`api.github.com` Contents API **对 >1MB 文件返回空 `content`**
+
+因此 `update-data.yml` 目前的状态是：**有护栏保护、不会破坏线上，但也抓不到新数据**。要真正恢复它的自动更新，需要先确认一个能提供完整版 data.json 的可靠源。

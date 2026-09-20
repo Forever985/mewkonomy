@@ -432,6 +432,11 @@ export default {
   "历史采样点": "History Points",
   "线上历史": "Cloud",
   "最近采样": "Last Sample",
+  "对比口径": "Compare By",
+  "当前价": "Current Price",
+  "速率": "Rate",
+  "覆盖": "Span",
+  "#无线上历史提示": "No cloud history loaded yet. The GitHub Actions sampler (every 20 minutes, 7-day window) publishes it; until it has run a few times, the change column stays \"--\". Local sampling only covers this browser.",
   "本地采样已是最新，无需重复记录": "Local sample is already up to date",
   "已记录历史采样点": "History sample recorded",
   // Docs

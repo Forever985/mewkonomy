@@ -48,7 +48,18 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 - **缓存**：Pinia store 的 `*Cache` 字段按 `marketData.timestamp` + 计算模式分桶存 localStorage；`fetchData/tryFetchData` 集中调 `clearAllCaches()`；`useXxxStoreOutside` 可组件外直连。
 - **计算器**：扁平 `src/calculator/*.ts`，基类 `Calculator` + `WorkflowCalculator` 聚合，`CLASS_MAP` 序列化。
 - **API**：各域 `src/common/apis/<domain>/index.ts`（game/price/player/favorite/leaderboard/manualchemy/chainbuilder/charmtransform/enhanposer/jungle/marketvolume）；通用检索在 `src/common/apis/utils.ts` `handleSearch`（banEquipment/banJewelry/banCombat/banLife、conditions 组合、等级/利润率/风险双头、steps 精确步数）。
-  - `marketvolume/history.ts`（市场历史采样）：`MarketPriceSample`（`{t, p:{hrid:{level:[ask,price]}}}`）；**双通道历史**——服务端 `public/data/market_history.json`（26h 滚动）＋ 本地 `localStorage` 兜底（key `mewkonomy-market-history`，节流 30min、上限 48 条）；`getMarketChangeMap` 以「时间窗起点前最近采样」为基准算涨跌，key=`hrid|level`。
+  - `marketvolume/history.ts`（市场历史采样）：`MarketPriceSample`（`{t, p:{hrid:{level:[ask,bid,volume]}}}`）；**双通道历史**——服务端 `public/data/market_history.json`（**7 天滚动**）＋ 本地 `localStorage` 兜底（key `mewkonomy-market-history`，节流 30min、上限 200 条）；`getMarketChangeMap(list, windowHours, metric, now)` 以「时间窗起点前最近采样」为基准，key=`hrid|level`。**两种采样长度都要兼容**（旧 `[ask,price]` / 新 `[ask,bid,volume]`），取值一律走内部 `valueAt()`，不要直接下标。`metric` 可选 `price`（ask/bid 中点）/`ask`/`bid`/`volume`；volume 是**当日累计成交量**，所以比的是**增量速率**，跨 UTC 归零（负增量）时该项不出现。时间相关函数都接受显式 `now` 参数，便于确定性测试。
+- **数据流水线（线上站点如何持续拿到数据）**：全靠 GitHub Actions 写 `gh-pages` 的 `data/`，**不需要本地挂机**：
+
+  | workflow | 频率 | 职责 |
+  | --- | --- | --- |
+  | `market-history.yml` → `scripts/sample_market_history.py` | **每 20 分钟** | 抓官方 `marketplace.json`，追加 `market_history.json` 采样点（7 天滚动、约 520 点）。只依赖官方端点（约 0.4s），**与游戏数据抓取完全解耦** |
+  | `update-data.yml` → `scripts/fetch_game_data.py` | **每天 1 次** | 抓上游 `data.json`/`market.json`，带**多源回退**与**禁止降级护栏** |
+
+  - **禁止降级护栏**：抓到 `versionTimestamp` 比线上更旧的 data.json 时直接拒绝写入。历史教训：上游 `silent1b/MWIData` 已停在 `v1.20250818.0`（2025-08 后未再更新），而线上是 `v1.20260309.0`，旧的「哈希不同就覆盖」策略会用**旧数据反向覆盖线上新数据**。
+  - **market.json 体积护栏**：该文件正常只有几十 KB，若某源返回 3MB 级载荷（上游仓库结构变化时会发生）直接拒绝。
+  - **raw 通道不可靠**：`raw.githubusercontent.com` 在本网络下取 3MB 级文件要 270~290 秒甚至超时；jsDelivr（`cdn.jsdelivr.net/gh/...`）约 25~35 秒、`api.github.com` 的 Contents API 更快，但**对 >1MB 文件返回空 content**（大文件用不了）。
+  - GitHub 定时任务在高峰期会**延迟甚至跳过**，所以采样策略是「高频 + 按时间戳去重」，而不是精确每 20 分钟。
 - **入口挂载门控与失败回退（game store）**：`main.ts` 等 `tryFetchData().then(router.isReady)` 才 `mount`。`tryFetchData` 用 **`success` 标志**（**勿用 `retryCount===0`，循环后恒 -1 为死代码**）；全部重试失败时若已有 `gameData`+`marketData` 则**回退使用缓存**，仅完全无数据才抛「强制宕机」；`fetchData` 的 `Promise.all` 带 **15s `AbortController` 超时**。
 
 ## 5. 已知待办与未完成项

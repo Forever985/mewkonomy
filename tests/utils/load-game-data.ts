@@ -18,6 +18,22 @@ import { resolve } from "node:path"
  */
 let loaded = false
 
+/**
+ * 把已抓好的数据注入 game store（**不**做模块重置）。
+ *
+ * 用于 `vi.resetModules()` 之后重新填充 store：resetModules 会丢弃 store 实例，
+ * 而 game API 的模块级 watch 在重新 import 时立刻需要 gameData，否则 initBigSetCache
+ * 会因 `getGameDataApi()` 为 null 而抛 "Cannot read properties of null (reading 'actionDetailMap')"。
+ */
+export async function seedGameData(gameData: unknown, marketData: unknown): Promise<void> {
+  const { useGameStoreOutside } = await import("@/pinia/stores/game")
+  const store = useGameStoreOutside()
+  store.gameData = gameData as any
+  store.marketData = marketData as any
+  // 等模块级 watch 完成只读快照重建
+  await new Promise(r => setTimeout(r, 0))
+}
+
 export async function loadTestGameData(): Promise<void> {
   if (loaded) {
     return
@@ -48,10 +64,5 @@ export async function loadTestGameData(): Promise<void> {
   localStorage.setItem("game-game-data", JSON.stringify(gameData))
   localStorage.setItem("game-market-data", JSON.stringify(marketData))
 
-  const { useGameStoreOutside } = await import("@/pinia/stores/game")
-  const store = useGameStoreOutside()
-  store.gameData = gameData
-  store.marketData = marketData
-  // 等模块级 watch 完成只读快照重建
-  await new Promise(r => setTimeout(r, 0))
+  await seedGameData(gameData, marketData)
 }

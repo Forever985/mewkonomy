@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import { getMarketVolumeList, getMarketCategoryOptions, getMarketVolumeSummary, type MarketVolumeItem } from "@/common/apis/marketvolume"
-import { recordLocalSample, loadMarketHistory, getMarketChangeMap, getLocalSampleCount, getLastSampleTime, hasRemoteHistory } from "@/common/apis/marketvolume/history"
+import { recordLocalSample, loadMarketHistory, getMarketChangeMap, getLocalSampleCount, getLastSampleTime, hasRemoteHistory, getHistorySpanHours, getRemoteSampleCount, getVolumeRate, type MarketChangeMetric } from "@/common/apis/marketvolume/history"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import * as Format from "@@/utils/format"
 import { useGameStoreOutside } from "@/pinia/stores/game"
@@ -26,8 +26,18 @@ const category = ref("")
 const onlyActive = ref(true)
 
 // 涨跌时间窗（小时）
-const WINDOW_OPTIONS = [1, 3, 6, 12, 24]
+const WINDOW_OPTIONS = [1, 3, 6, 12, 24, 72, 168]
 const windowHours = ref(6)
+// 涨跌口径：价格 / 左挂单 / 右收购 / 成交量（成交量比的是增量速率）
+const changeMetric = ref<MarketChangeMetric>("price")
+const metricOptions = computed(() => [
+  { value: "price", label: t("当前价") },
+  { value: "ask", label: t("左挂单") },
+  { value: "bid", label: t("右收购") },
+  { value: "volume", label: `${t("成交量")}(${t("速率")})` }
+])
+/** 涨跌列表头用的口径名 */
+const metricLabel = computed(() => metricOptions.value.find(m => m.value === changeMetric.value)?.label ?? t("当前价"))
 // 涨跌方向筛选
 const changeDir = ref<"all" | "up" | "down" | "flat">("all")
 // 服务端历史加载完成标记（触发涨跌重算）
@@ -54,13 +64,14 @@ function handleSampleNow() {
   }
 }
 
-// 涨跌：当前价 vs 时间窗基准价
-const changeMap = computed(() => getMarketChangeMap(all.value, windowHours.value))
+// 涨跌：当前值 vs 时间窗基准（口径可选，成交量走增量速率）
+const changeMap = computed(() => getMarketChangeMap(all.value, windowHours.value, changeMetric.value))
 const changeApplied = computed(() =>
   all.value.map((i) => {
     const c = changeMap.value.get(`${i.hrid}|${i.level}`)
     i.changePct = c?.pct ?? null
     i.changeBase = c?.base ?? null
+    i.volumeRate = getVolumeRate(i, windowHours.value)
     return i
   })
 )
@@ -69,6 +80,15 @@ const localCount = computed(() => getLocalSampleCount())
 const lastSampleTime = computed(() => {
   const t = getLastSampleTime()
   return t ? new Date(t * 1000).toLocaleString() : "--"
+})
+// 依赖 historyReady：服务端历史是异步加载的，加载完成后这两个值要跟着刷新
+const remoteCount = computed(() => {
+  void historyReady.value
+  return getRemoteSampleCount()
+})
+const historySpanHours = computed(() => {
+  void historyReady.value
+  return getHistorySpanHours()
 })
 
 const changeStat = computed(() => {
@@ -90,7 +110,7 @@ const changeStat = computed(() => {
   return { up, down, flat }
 })
 
-const NUMERIC_SORT_KEYS = ["volume", "turnover", "price", "ask", "bid", "itemLevel", "changePct"] as const
+const NUMERIC_SORT_KEYS = ["volume", "turnover", "price", "ask", "bid", "itemLevel", "changePct", "volumeRate"] as const
 type NumericSortKey = (typeof NUMERIC_SORT_KEYS)[number]
 const sortKey = ref<NumericSortKey>("volume")
 const sortOrder = ref<"descending" | "ascending">("descending")
@@ -229,6 +249,10 @@ function fmtTime(value: number) {
           <el-radio-group v-model="windowHours" size="small">
             <el-radio-button v-for="w in WINDOW_OPTIONS" :key="w" :value="w">{{ w }}{{ t("小时") }}</el-radio-button>
           </el-radio-group>
+          <span class="text-sm text-gray-400">{{ t("对比口径") }}</span>
+          <el-select v-model="changeMetric" size="small" style="width: 150px">
+            <el-option v-for="m in metricOptions" :key="m.value" :label="m.label" :value="m.value" />
+          </el-select>
           <el-select v-model="changeDir" size="small" style="width: 110px">
             <el-option :label="t('全部涨跌')" value="all" />
             <el-option :label="t('上涨')" value="up" />
@@ -243,9 +267,13 @@ function fmtTime(value: number) {
           <div class="flex-1" />
           <el-button size="small" :loading="sampling" @click="handleSampleNow">{{ t("立即采样") }}</el-button>
           <span class="text-xs text-gray-400">
-            {{ t("历史采样点") }}：{{ localCount }}<template v-if="hasRemoteHistory()"> + {{ t("线上历史") }}</template>
+            {{ t("历史采样点") }}：{{ localCount }}<template v-if="hasRemoteHistory()"> + {{ t("线上历史") }} {{ remoteCount }}</template>
+            · {{ t("覆盖") }} {{ historySpanHours.toFixed(1) }}{{ t("小时") }}
             · {{ t("最近采样") }}：{{ lastSampleTime }}
           </span>
+        </div>
+        <div v-if="!hasRemoteHistory()" class="text-xs text-gray-400 mt-1">
+          {{ t("#无线上历史提示") }}
         </div>
       </template>
 
@@ -270,7 +298,7 @@ function fmtTime(value: number) {
         <el-table-column prop="price" :label="t('价格')" align="right" min-width="100" sortable="custom">
           <template #default="{ row }">{{ row.price > 0 ? Format.number(row.price, 0) : "--" }}</template>
         </el-table-column>
-        <el-table-column prop="changePct" :label="t('涨跌')" align="right" min-width="110" sortable="custom">
+        <el-table-column prop="changePct" :label="`${t('涨跌')}(${t(metricLabel)})`" align="right" min-width="130" sortable="custom">
           <template #default="{ row }">
             <span v-if="row.changePct == null" class="text-gray-400">--</span>
             <span v-else :class="row.changePct > 0 ? 'up' : row.changePct < 0 ? 'down' : 'flat'">
@@ -287,6 +315,12 @@ function fmtTime(value: number) {
         <el-table-column prop="volume" :label="t('成交量')" align="right" min-width="110" sortable="custom">
           <template #default="{ row }">
             <span :class="row.volume > 0 ? 'success' : 'text-gray-400'">{{ fmtTime(row.volume) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="volumeRate" :label="`${t('成交量')}/${t('小时')}`" align="right" min-width="120" sortable="custom">
+          <template #default="{ row }">
+            <span v-if="row.volumeRate == null" class="text-gray-400">--</span>
+            <span v-else>{{ Format.number(row.volumeRate, 0) }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="turnover" :label="t('成交额')" align="right" min-width="120" sortable="custom">
