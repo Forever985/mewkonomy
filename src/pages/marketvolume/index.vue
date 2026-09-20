@@ -240,7 +240,7 @@ function fmtTime(value: number) {
         <div class="flex flex-wrap items-center gap-2">
           <el-input v-model="keyword" :placeholder="t('搜索物品')" clearable style="width: 220px" />
           <el-select v-model="category" :placeholder="t('分类')" clearable filterable style="width: 160px">
-            <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+            <el-option v-for="c in categoryOptions" :key="c" :label="t(c)" :value="c" />
           </el-select>
           <el-switch v-model="onlyActive" :active-text="t('只看有成交')" />
         </div>
@@ -291,7 +291,7 @@ function fmtTime(value: number) {
         </el-table-column>
         <el-table-column prop="category" :label="t('分类')" min-width="100">
           <template #default="{ row }">
-            <el-tag size="small" type="info">{{ row.category }}</el-tag>
+            <el-tag size="small" type="info">{{ t(row.category) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="itemLevel" :label="t('等级')" align="center" min-width="70" sortable="custom" />

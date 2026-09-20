@@ -507,4 +507,15 @@ export default {
   "溢价率说明": "A safety margin on the cost side (%). You will not always buy materials at the best listed price, so this inflates the whole batch cost proportionally: 5 means total cost is computed at 105%, making the profit estimate more conservative. Note it applies to total cost and is unrelated to the market tax below.",
   "成品售价说明": "Sale price per piece after enhancing to the target level. Leave empty to use the current market buy order (bid). Income is computed as price x 98% x pieces, where the 2% is the game's fixed market fee.",
   "成交税率说明": "The game's fixed market transaction tax, which players cannot change: 2% is deducted on every sale whatever the listing price. It is shown for reference only; income is always counted at 98% of the price.",
+  // Market monitor category filter (keys are categoryHrid slugs, e.g. equipment)
+  "ability_book": "Ability Book",
+  "currency": "Currency",
+  "drink": "Drink",
+  "dungeon_key": "Dungeon Key",
+  "equipment": "Equipment",
+  "food": "Food",
+  "labyrinth": "Labyrinth",
+  "loot": "Loot",
+  "resource": "Resource",
+  "scroll": "Scroll",
 }
