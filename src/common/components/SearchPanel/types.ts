@@ -109,6 +109,8 @@ export interface ExcludesField extends FieldBase {
 export interface CheckboxField extends FieldBase {
   type: "checkbox"
   key: string
+  /** 只读展示（如 jungle/pickout 的「最佳制作方案」，原模板即 disabled） */
+  disabled?: boolean
   /**
    * 额外的变更回调（在组件 emit("change") 之后调用）。
    * 用于像 junglest/inherit 的 noEscape 这种「切换后除了重新检索、还要清计算模式缓存」的特例。

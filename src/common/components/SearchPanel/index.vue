@@ -271,9 +271,10 @@ function removeExclude(index: number) {
         <el-form-item v-else-if="field.type === 'checkbox'">
           <el-checkbox
             v-model="(modelValue[field.key] as any)"
+            :disabled="field.disabled"
             @change="emit('change'); field.onChange?.()"
           >
-            {{ t(field.label) }}
+            {{ fieldLabel(field) }}
           </el-checkbox>
         </el-form-item>
 
