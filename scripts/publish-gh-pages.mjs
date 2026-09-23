@@ -222,6 +222,16 @@ function main() {
       throw new Error(`[中止] 暂存区包含受保护目录的删除：\n${stagedDel.join("\n")}`)
     }
 
+    // 必须在 add 之后再看一次「是否真的有待提交内容」。
+    // 上面的 status 是 add 之前的：Windows 上 core.autocrlf 会让 checkou 出来的文本
+    // 与 dist 的 LF 版本逐行不同，于是 status 报一堆「已修改」，
+    // 而 add 规范化后其实与 HEAD 完全一致 —— 此时 commit 会以
+    // "nothing to commit" 退出码 1 失败，把一次「本来就无需发布」误报成部署失败。
+    if (!staged.trim()) {
+      log("线上与构建产物一致（差异仅为行尾规范化），无需发布")
+      return
+    }
+
     const stamp = new Date().toISOString().replace("T", " ").slice(0, 19)
     run("git", ["commit", "-m", `deploy: ${stamp}`], { cwd: work })
     log("推送 ...")
