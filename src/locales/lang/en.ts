@@ -521,14 +521,26 @@ export default {
   // 补全：利润排行条件行新增「按行限定要求等级区间」的说明
   "每行可分别限定该生产的要求等级区间": "Each row can set its own required-level range, since different productions often accept different ranges (e.g. keep both \"Smithing 50-80\" and \"Tailoring 20-60\"). Leave it empty to ignore levels for that row. It works alongside the global \"Required Level\" above — both are applied.",
   // 补全：市场监控各项口径的悬停说明（成交量是当日累计、速率受采样间隔影响）
-  "市场监控口径说明": "Data comes from the official market snapshot. Volume is the **same-day cumulative** total (it resets at 00:00 UTC), so it is not a real-time measure of activity — right after midnight every number restarts from a small value. For \"how hot is this right now\" use the \"Volume/hour\" column, which compares two snapshots. Snapshots only update about once an hour, so the shorter the window you pick, the longer the interval actually used (see the column header).",
-  "成交量口径说明": "Same-day cumulative volume (the official `v` field), resetting at 00:00 UTC. It answers \"how much has traded since midnight\", not \"how fast right now\". Numbers being tiny just after 00:00 UTC is expected.",
+  "市场监控口径说明": "Data comes from the official market snapshot. The official volume is a **same-day cumulative** total (it resets at 00:00 UTC); showing that directly means every item restarts from a tiny number right after midnight and values are not comparable across the day. So the volume columns here use a **rolling window volume** instead: increments between consecutive samples in our own archive are summed up, which never resets and stays comparable. Price change still uses the baseline sample at the selected window.",
   "成交量速率口径说明": "Volume increment between two snapshots divided by the actual elapsed hours — a measure of recent activity that is immune to the UTC reset. Note snapshots update about hourly: if the selected window is shorter than the sampling gap, the calculation falls back to an earlier baseline and the rate is an average over that longer interval (the actual median interval is shown above the table).",
-  "成交额口径说明": "Estimated as same-day cumulative volume x current price — not real turnover. Trades during the day happen at different prices but are all valued at the current price here, and the cumulative volume resets at 00:00 UTC, so this is a \"today so far\" figure too.",
   "成交量速率区间提示": "The selected window is {1} h, but snapshots are sparse, so the rate is actually estimated over about {0} h — read that column with this interval in mind.",
+  // 滚动成交量（时间窗内成交量）
+  "时间窗内成交量": "Volume in window",
+  "时间窗内": "in window",
+  "今日累计": "today's cumulative",
+  "近": "last",
+  "滚动成交量说明": "Sums the **volume increments between consecutive samples** inside the selected window, so it is immune to the UTC reset and comparable at any time of day. The header shows the **actual interval used** (= now − baseline sample), which may differ from the selected window: longer when samples are sparse, shorter when the archive does not cover the window. The stretch crossing 00:00 UTC can only be counted after midnight, so coverage may be below 100% (a banner above the table says so). It answers \"how many units traded in that stretch\".",
+  "滚动成交额说明": "Volume in window x current price, also a rolling figure (immune to the UTC reset). It is not real turnover: trades in the interval happened at different prices but are all valued at the current price here.",
+  "滚动成交量覆盖率提示": "About {0}% of the rolling volume is measured exactly (actual interval about {1} h): the part crossing 00:00 UTC cannot be recovered because the official counter is zeroed at midnight. Denser sampling loses less.",
+  // 物品等级 / 强化等级（市场按强化等级分档报价）
+  // 注：「物品等级」的英文翻译已在文件上方（第 249 行附近）存在，这里不再重复定义
+  "物品等级说明": "The item's own level (recommended level). Every enhancement tier of the same piece of equipment shares this value.",
+  "强化等级": "Enhance level",
+  "未强化": "Unenhanced (+0)",
+  "强化等级说明": "The official market quotes prices **per enhancement level**: 0 means unenhanced, N means +N. Every quoted tier of the same item is a separate row here, with its own price and volume — e.g. Holy Chisel shows up as 11 rows (+0/+2/+3/+4/+5/+6/+7/+8/+10/+11/+12). Multi-select here to keep only the tiers you care about.",
   // 补全：成交活跃 Top10 的排序口径说明
   "成交活跃 Top10": "Most Active Top 10",
   "按成交量速率排序": "ranked by volume/hour (immune to the UTC reset)",
   "按当日累计成交量排序": "ranked by same-day cumulative volume (fallback before history loads)",
-  "监控各物品市场成交量与成交额，按当日累计成交量排行": "Monitor per-item market volume and turnover. Volume is same-day cumulative (resets at 00:00 UTC), not real-time activity",
+  "监控各物品市场成交量与成交额，成交量按时间窗滚动统计": "Monitor per-item market volume and turnover. Volume is rolled over the selected window (immune to the UTC reset); equipment is split by enhancement level",
 }

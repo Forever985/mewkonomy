@@ -94,13 +94,19 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 - 检索类 API 使用 `usePagination` 组合式做分页，页码/大小状态可持久化到 localStorage。
 - **页面级辅助模块可内聚在域目录下**：如 `marketvolume/history.ts` 维护「市场历史采样」——`MarketPriceSample`（`{t, p:{hrid:{level:[ask,bid,volume]}}}`；**旧样本只有 `[ask,price]` 两个元素，两种长度都要兼容**，取值必须走内部 `valueAt()` / `priceOf()`，不要直接下标）、`recordLocalSample`（localStorage 兜底，节流 30min、上限 200 条、7 天滚动窗口）、`loadMarketHistory`（拉取服务端归档 `gh-pages:data/market_history.json`，页面按 `<BASE_URL>data/market_history.json` 请求）、`getMarketChangeMap(list, windowHours, metric, now)`（基准 = 时间窗起点前最近采样，key=`hrid|level`，无基准 / 当前值无效时该项不出现）。`metric` 可选 `price`（ask/bid **中点**）/`ask`/`bid`/`volume`；`volume` 是官方**当日累计成交量**（UTC 0 点归零），比的是**增量速率**而非绝对值。
 
-  **市场历史模块的三条硬约束（都踩过坑，改动前先读）**：
+  **市场历史模块的硬约束（都踩过坑，改动前先读）**：
 
   1. **时间基准统一为「快照时间戳」**：`t` 一律取 `defaultNow()`（= 官方 `marketData.timestamp`，取不到才回落墙钟）。早期 `recordLocalSample` 写墙钟，导致同一份快照在本地样本与线上归档里是两个时刻，增量区间的分母直接失真；**「成交量/小时」的分母也不能用 `Date.now()`**，否则页面开着不动数字自己往下漂。
   2. **同一 `t` 只保留一条**：`recordLocalSample` 在写入前比对上一条（相同则返回 `false`，`force` 也不例外，这样「立即采样」能诚实提示「已是最新」）；`getMarketHistory()` 合并归档与本地时再按 `t` 去重一次（本地优先）。重复点会让「上一点」变成同一时刻，把区间分母算成 0。
   3. **`getMarketHistory()` 结果带缓存**（页面每行都要算速率，原实现每次重建 Map + 排序是 O(n log n)）。样本只在 `recordLocalSample` / `loadMarketHistory` 变化，**新增写入点必须同步置空 `mergedCache`**，否则页面读到旧历史。
 
   跨 UTC 归零点判断统一走 `volumeDeltaBetween(startT, startVol, endT, endVol)`：**同日**取真实增量（为负判无效），**跨日**只能用 `endVol`（自今日 0 点起的累计）并把计时起点改到 0 点；直接把昨天的累计当今天增量会算出虚高速率。UI 侧 `getVolumeRateDetail` 额外返回实际区间小时数与是否跨日，用于在采样稀疏时提示「这个速率不是按你选的时间窗算的」。
+
+  4. **成交量展示用「时间窗内滚动成交量」，不是官方当日累计量**：官方 `v` 每天 UTC 0 点归零，直接展示会让刚过零点的所有物品都变成小数字、跨时刻不可比。`getRollingVolumeDetail(item, windowHours, now)` 在自有归档上把相邻采样点的增量滚动累加，返回 `{volume, hours, knownHours, coverage, crossings}`；`hours` 是**实际**统计区间（列头用的就是它，而不是所选窗口），`coverage < 1` 表示跨了归零点、0 点前那段无法还原（页面用 `el-alert` 提示）。价格涨跌**不**走这条路径（必须严格按窗口取基准），`findVolumeAnchor` 只服务成交量类指标。
+
+  **采样频率的真相（决定了上面的精度上限）**：官方 `marketplace.json` 每 60s 轮询一次（`main.ts`），而官方快照是**整点小时粒度**；GitHub Actions 的 `schedule` 是 best-effort 的 —— 本仓库实测声明 60min、实际相邻间隔 143~466min（中位 307，全部 success，是触发器被延迟而不是脚本失败）。所以**每小时采样只能靠浏览器**：`startMarketAutoSampling()`（在 `main.ts` 调用一次）监听 `marketData.timestamp` 变化，快照一前进就落一个本地采样点，不受 Actions 延迟影响。本地上限 200 条 ≥ 7 天 × 24 点 = 168，够用。
+
+  **市场档位 `level` 是强化等级，不是物品等级**：官方结构是 `marketData[hrid][level]`，`level ∈ 0..20` 表示 +N（比如 `/items/holy_chisel` 有 0/2/3/4/5/6/7/8/10/11/12 共 11 档），而 `itemLevel` 是物品自身的推荐等级（神圣凿子恒为 80）。同一件装备每个有报价的档位都是列表里的**独立一行**，显示后缀一律走 `enhanceLevelSuffix(level)`（`+N`，0 级为空）—— 曾经有一处错写成 `Lv{{ itemLevel }}`，导致 11 个档位全部渲染成同一个「神圣凿子 Lv80」，无法区分。
 
 ### 2.4 Pinia store 与 timestamp 缓存（重点）
 

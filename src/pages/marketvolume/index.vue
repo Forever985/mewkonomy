@@ -1,6 +1,6 @@
 <script lang="ts" setup>
-import { getMarketVolumeList, getMarketCategoryOptions, getMarketVolumeSummary, sortMarketVolumeRows, MARKET_VOLUME_SORT_KEYS, type MarketVolumeItem, type MarketVolumeSortKey } from "@/common/apis/marketvolume"
-import { recordLocalSample, loadMarketHistory, getMarketChangeMap, getLocalSampleCount, getLastSampleTime, hasRemoteHistory, getHistorySpanHours, getRemoteSampleCount, getVolumeRateDetail, type MarketChangeMetric } from "@/common/apis/marketvolume/history"
+import { getMarketVolumeList, getMarketCategoryOptions, getMarketVolumeSummary, sortMarketVolumeRows, enhanceLevelSuffix, MARKET_VOLUME_SORT_KEYS, type MarketVolumeItem, type MarketVolumeSortKey } from "@/common/apis/marketvolume"
+import { recordLocalSample, loadMarketHistory, getMarketChangeMap, getLocalSampleCount, getLastSampleTime, hasRemoteHistory, getHistorySpanHours, getRemoteSampleCount, getVolumeRateDetail, getRollingVolumeDetail, type MarketChangeMetric } from "@/common/apis/marketvolume/history"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import * as Format from "@@/utils/format"
 import { QuestionFilled } from "@element-plus/icons-vue"
@@ -18,13 +18,25 @@ const all = computed(() => {
   return getMarketVolumeList()
 })
 
-const summary = computed(() => getMarketVolumeSummary(all.value))
 const categoryOptions = computed(() => getMarketCategoryOptions(all.value))
 
 const keyword = ref("")
 const category = ref("")
 // 默认只看有成交：避免 3000+ 条无成交量记录淹没热门物品
 const onlyActive = ref(true)
+/**
+ * 强化等级筛选（官方市场档位 level，0~20）。
+ *
+ * 装备在官方市场里是**按强化等级分档报价**的，一件装备最多能展开出十几个档位
+ * （holy_chisel 有 0/2/3/4/5/6/7/8/10/11/12 共 11 档），所以需要能按档位筛选，
+ * 否则「神圣凿子」会在列表里出现十几次。空数组 = 不限。
+ */
+const enhanceLevels = ref<string[]>([])
+const enhanceLevelOptions = computed(() => {
+  const set = new Set<string>()
+  all.value.forEach((i) => set.add(i.level))
+  return Array.from(set).sort((a, b) => Number(a) - Number(b))
+})
 
 // 涨跌时间窗（小时）
 const WINDOW_OPTIONS = [1, 3, 6, 12, 24, 72, 168]
@@ -78,6 +90,13 @@ const changeApplied = computed(() =>
     i.volumeRate = d?.rate ?? null
     i.volumeRateHours = d?.hours ?? null
     i.volumeRateCrossDay = d?.sameDay === false
+    // 时间窗内滚动成交量：把归档上相邻采样点的增量滚起来，因此不受 UTC 归零影响，
+    // 表格里的「成交量」列展示的是它（官方当日累计量在列头悬停里作为补充说明）。
+    const r = getRollingVolumeDetail(i, windowHours.value)
+    i.volumeRolling = r?.volume ?? null
+    i.volumeRollingHours = r?.hours ?? null
+    i.volumeRollingCoverage = r?.coverage ?? null
+    i.turnoverRolling = r && i.price > 0 ? r.volume * i.price : null
     return i
   })
 )
@@ -91,6 +110,45 @@ const rateIntervalHint = computed(() => {
   const median = hours[Math.floor(hours.length / 2)]
   return { median, window: windowHours.value, mismatch: median > windowHours.value * 1.5 }
 })
+/**
+ * 滚动成交量的覆盖率提示。
+ * 跨 UTC 归零点的那一段只能统计到 0 点之后，采样越疏丢得越多，
+ * 所以这里给出「整列里最低的覆盖率」，低于 100% 时提示原因。
+ */
+const rollingCoverageHint = computed(() => {
+  const rows = changeApplied.value.filter((i) => i.volumeRollingCoverage != null)
+  if (!rows.length) {
+    return null
+  }
+  const min = Math.min(...rows.map((i) => i.volumeRollingCoverage!))
+  const hours = rows.map((i) => i.volumeRollingHours!).filter((h) => h != null)
+  const span = hours.length ? Math.max(...hours) : windowHours.value
+  return { min, span, window: windowHours.value, lossy: min < 0.999 }
+})
+/**
+ * 「时间窗内成交量」列头。
+ *
+ * 用**实际区间**而不是所选时间窗来写列头：两者可能不一致（采样稀疏时实际区间更长；
+ * 历史覆盖不足时更短），把它写进列头，数字才不会看起来像「按所选窗口算的」。
+ */
+const rollingHeaderLabel = computed(() => {
+  const span = rollingCoverageHint.value?.span
+  if (span == null) {
+    return t("时间窗内成交量")
+  }
+  return `${t("近")} ${span.toFixed(1)} ${t("小时")}${t("成交量")}`
+})
+/** 历史是否已经能支撑滚动成交量（否则汇总与筛选退回官方当日累计口径） */
+const rollingReady = computed(() => changeApplied.value.some((i) => i.volumeRolling != null))
+/**
+ * 汇总统计。
+ * 放在 changeApplied / rollingReady 之后定义（而不是文件顶部）：
+ * computed 的取值是惰性的，写前面也能跑，但一旦有人在 setup 阶段就读它就会踩
+ * 「block-scoped variable used before declaration」的 TDZ —— 这里已经因此踩过两次坑。
+ */
+const summary = computed(() =>
+  getMarketVolumeSummary(changeApplied.value, rollingReady.value ? "volumeRolling" : "volume")
+)
 
 const localCount = computed(() => getLocalSampleCount())
 const lastSampleTime = computed(() => {
@@ -133,7 +191,7 @@ const changeStat = computed(() => {
  * 点表头会派发 `sort-change`，白名单若不认这个 prop，之前的实现会把排序重置成
  * 「成交量降序」——表头箭头变了、数据却没按名称排，看起来就像点了没反应。
  */
-const sortKey = ref<MarketVolumeSortKey>("volume")
+const sortKey = ref<MarketVolumeSortKey>("volumeRolling")
 const sortOrder = ref<"descending" | "ascending">("descending")
 
 function handleSortChange({ prop, order }: { prop: string, order: string | null }) {
@@ -142,7 +200,7 @@ function handleSortChange({ prop, order }: { prop: string, order: string | null 
     sortOrder.value = order as typeof sortOrder.value
     return
   }
-  sortKey.value = "volume"
+  sortKey.value = "volumeRolling"
   sortOrder.value = "descending"
 }
 
@@ -155,8 +213,14 @@ const filtered = computed(() => {
   if (category.value) {
     r = r.filter((i) => i.category === category.value)
   }
+  if (enhanceLevels.value.length) {
+    r = r.filter((i) => enhanceLevels.value.includes(i.level))
+  }
   if (onlyActive.value) {
-    r = r.filter((i) => i.volume > 0)
+    // 「有成交」= 今日有累计量，**或**时间窗内有成交。
+    // 取并集而不是只看滚动量：窗口选小（默认 6 小时）时只看滚动量会把「今天早些
+    // 时候成交过、但最近几小时安静」的物品整批藏掉，默认列表会莫名变短。
+    r = r.filter((i) => i.volume > 0 || (i.volumeRolling ?? 0) > 0)
   }
   if (changeDir.value === "up") {
     r = r.filter((i) => i.changePct != null && i.changePct > 0)
@@ -223,7 +287,7 @@ function fmtCount(value: number) {
       <template #header>
         <div class="flex items-center gap-2">
           <span>{{ t("市场监控") }}</span>
-          <span class="text-sm text-gray-400">{{ t("监控各物品市场成交量与成交额，按当日累计成交量排行") }}</span>
+          <span class="text-sm text-gray-400">{{ t("监控各物品市场成交量与成交额，成交量按时间窗滚动统计") }}</span>
           <el-tooltip placement="top" effect="light" :show-after="120">
             <template #content>
               <div class="max-w-380px leading-5">
@@ -250,6 +314,19 @@ function fmtCount(value: number) {
         </template>
       </el-alert>
 
+      <!-- 滚动成交量的覆盖率提示：跨 UTC 归零点的那段统计不全 -->
+      <el-alert
+        v-if="rollingCoverageHint && rollingCoverageHint.lossy"
+        type="info"
+        :closable="false"
+        show-icon
+        class="mb-2"
+      >
+        <template #title>
+          {{ t("滚动成交量覆盖率提示", [(rollingCoverageHint.min * 100).toFixed(0), rollingCoverageHint.span.toFixed(1)]) }}
+        </template>
+      </el-alert>
+
       <!-- 摘要 -->
       <el-row :gutter="12">
         <el-col :span="6">
@@ -260,7 +337,10 @@ function fmtCount(value: number) {
         </el-col>
         <el-col :span="6">
           <div class="stat-card">
-            <div class="stat-label">{{ t("有成交") }}</div>
+            <div class="stat-label">
+              {{ t("有成交") }}
+              <span class="text-gray-400 font-normal">· {{ rollingReady ? t("时间窗内") : t("今日累计") }}</span>
+            </div>
             <div class="stat-value success">{{ fmtCount(summary.active) }}</div>
           </div>
         </el-col>
@@ -268,7 +348,11 @@ function fmtCount(value: number) {
           <div class="stat-card">
             <div class="stat-label">{{ t("成交量最高") }}</div>
             <div class="stat-value text-sm" v-if="summary.topVolume">
-              {{ t(summary.topVolume.name) }}<span class="text-gray-400"> · {{ fmtCount(summary.topVolume.volume) }}</span>
+              {{ t(summary.topVolume.name) }}<span
+                v-if="enhanceLevelSuffix(summary.topVolume.level)"
+                class="text-gray-400"
+              > {{ enhanceLevelSuffix(summary.topVolume.level) }}</span>
+              <span class="text-gray-400"> · {{ fmtCount(summary.topVolume.volumeRolling ?? summary.topVolume.volume) }}</span>
             </div>
             <div class="stat-value" v-else>--</div>
           </div>
@@ -293,7 +377,7 @@ function fmtCount(value: number) {
           <div v-for="(i, idx) in top10" :key="i.hrid + i.level" class="top10-item" :class="{ 'top3': idx < 3 }">
             <ItemIcon :hrid="i.hrid" :width="22" :height="22" />
             <span class="top10-rank">{{ idx + 1 }}</span>
-            <span class="top10-name">{{ t(i.name) }}<span v-if="i.level !== '0'" class="text-gray-400"> Lv{{ i.itemLevel }}</span></span>
+            <span class="top10-name">{{ t(i.name) }}<span v-if="enhanceLevelSuffix(i.level)" class="text-gray-400"> {{ enhanceLevelSuffix(i.level) }}</span></span>
             <!-- 按速率排序时展示速率，否则展示累计量，与排序口径保持一致 -->
             <span class="top10-vol">
               {{ top10ByRate && i.volumeRate != null ? `${Format.number(i.volumeRate, 0)}/h` : fmtCount(i.volume) }}
@@ -312,6 +396,25 @@ function fmtCount(value: number) {
           <el-select v-model="category" :placeholder="t('分类')" clearable filterable style="width: 160px">
             <el-option v-for="c in categoryOptions" :key="c" :label="t(c)" :value="c" />
           </el-select>
+          <el-select
+            v-model="enhanceLevels"
+            :placeholder="t('强化等级')"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            clearable
+            style="width: 200px"
+          >
+            <el-option v-for="lv in enhanceLevelOptions" :key="lv" :label="lv === '0' ? t('未强化') : `+${lv}`" :value="lv" />
+          </el-select>
+          <el-tooltip placement="top" effect="light" :show-after="120">
+            <template #content>
+              <div class="max-w-380px leading-5">{{ t('强化等级说明') }}</div>
+            </template>
+            <el-icon class="cursor-help color-gray-400">
+              <QuestionFilled />
+            </el-icon>
+          </el-tooltip>
           <el-switch v-model="onlyActive" :active-text="t('只看有成交')" />
         </div>
         <div class="flex flex-wrap items-center gap-2 mt-2">
@@ -347,16 +450,23 @@ function fmtCount(value: number) {
         </div>
       </template>
 
-      <el-table :data="list" size="small" :default-sort="{ prop: 'volume', order: 'descending' }" @sort-change="handleSortChange">
+      <el-table :data="list" size="small" :default-sort="{ prop: 'volumeRolling', order: 'descending' }" @sort-change="handleSortChange">
         <el-table-column width="44">
           <template #default="{ row }">
             <ItemIcon :hrid="row.hrid" />
           </template>
         </el-table-column>
-        <el-table-column :label="t('物品')" min-width="150" sortable="custom" prop="name">
+        <el-table-column :label="t('物品')" min-width="170" sortable="custom" prop="name">
           <template #default="{ row }">
             <span>{{ t(row.name) }}</span>
-            <span v-if="row.level !== '0'" class="text-gray-400 text-xs"> Lv{{ row.itemLevel }}</span>
+            <!-- 市场档位 level 是**强化等级**（官方 0~20），不是物品等级：
+                 这里必须用 level，且用全站统一的 "+N" 写法。
+                 原实现显示的是 itemLevel（例如神圣凿子恒为 80），于是同一件装备的
+                 11 个强化档（holy_chisel 有 0/2/3/4/5/6/7/8/10/11/12）全部渲染成
+                 一模一样的「神圣凿子 Lv80」，既看不出是强化档，也互相无法区分。 -->
+            <el-tag v-if="enhanceLevelSuffix(row.level)" size="small" type="warning" effect="plain" class="ml-1">
+              {{ enhanceLevelSuffix(row.level) }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="category" :label="t('分类')" min-width="100">
@@ -364,7 +474,21 @@ function fmtCount(value: number) {
             <el-tag size="small" type="info">{{ t(row.category) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="itemLevel" :label="t('等级')" align="center" min-width="70" sortable="custom" />
+        <el-table-column prop="itemLevel" :label="t('物品等级')" align="center" min-width="80" sortable="custom">
+          <template #header>
+            <div class="flex items-center justify-center gap-1">
+              <span>{{ t('物品等级') }}</span>
+              <el-tooltip placement="top" effect="light" :show-after="120">
+                <template #content>
+                  <div class="max-w-380px leading-5">{{ t('物品等级说明') }}</div>
+                </template>
+                <el-icon class="cursor-help color-gray-400">
+                  <QuestionFilled />
+                </el-icon>
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="price" :label="t('价格')" align="right" min-width="100" sortable="custom">
           <template #default="{ row }">{{ row.price > 0 ? Format.number(row.price, 0) : "--" }}</template>
         </el-table-column>
@@ -382,13 +506,13 @@ function fmtCount(value: number) {
         <el-table-column prop="bid" :label="t('买价')" align="right" min-width="100" sortable="custom">
           <template #default="{ row }">{{ row.bid > 0 ? Format.number(row.bid, 0) : "--" }}</template>
         </el-table-column>
-        <el-table-column prop="volume" :label="t('成交量')" align="right" min-width="110" sortable="custom">
+        <el-table-column prop="volumeRolling" :label="rollingHeaderLabel" align="right" min-width="150" sortable="custom">
           <template #header>
             <div class="flex items-center justify-end gap-1">
-              <span>{{ t('成交量') }}</span>
+              <span>{{ rollingHeaderLabel }}</span>
               <el-tooltip placement="top" effect="light" :show-after="120">
                 <template #content>
-                  <div class="max-w-380px leading-5">{{ t('成交量口径说明') }}</div>
+                  <div class="max-w-380px leading-5">{{ t('滚动成交量说明') }}</div>
                 </template>
                 <el-icon class="cursor-help color-gray-400">
                   <QuestionFilled />
@@ -397,7 +521,8 @@ function fmtCount(value: number) {
             </div>
           </template>
           <template #default="{ row }">
-            <span :class="row.volume > 0 ? 'success' : 'text-gray-400'">{{ fmtCount(row.volume) }}</span>
+            <span v-if="row.volumeRolling == null" class="text-gray-400">--</span>
+            <span v-else :class="row.volumeRolling > 0 ? 'success' : 'text-gray-400'">{{ fmtCount(row.volumeRolling) }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="volumeRate" :label="`${t('成交量')}/${t('小时')}`" align="right" min-width="120" sortable="custom">
@@ -419,13 +544,13 @@ function fmtCount(value: number) {
             <span v-else>{{ Format.number(row.volumeRate, 0) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="turnover" :label="t('成交额')" align="right" min-width="120" sortable="custom">
+        <el-table-column prop="turnoverRolling" :label="`${t('成交额')}(${t('时间窗内')})`" align="right" min-width="140" sortable="custom">
           <template #header>
             <div class="flex items-center justify-end gap-1">
-              <span>{{ t('成交额') }}</span>
+              <span>{{ t('成交额') }}({{ t('时间窗内') }})</span>
               <el-tooltip placement="top" effect="light" :show-after="120">
                 <template #content>
-                  <div class="max-w-380px leading-5">{{ t('成交额口径说明') }}</div>
+                  <div class="max-w-380px leading-5">{{ t('滚动成交额说明') }}</div>
                 </template>
                 <el-icon class="cursor-help color-gray-400">
                   <QuestionFilled />
@@ -433,7 +558,10 @@ function fmtCount(value: number) {
               </el-tooltip>
             </div>
           </template>
-          <template #default="{ row }">{{ row.turnover > 0 ? Format.number(row.turnover, 0) : "--" }}</template>
+          <template #default="{ row }">
+            <span v-if="row.turnoverRolling == null" class="text-gray-400">--</span>
+            <span v-else>{{ row.turnoverRolling > 0 ? Format.number(row.turnoverRolling, 0) : "--" }}</span>
+          </template>
         </el-table-column>
       </el-table>
       <div class="mt-2 flex justify-end">

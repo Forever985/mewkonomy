@@ -1,4 +1,5 @@
 import { getMarketDataApi } from "@/common/apis/game"
+import { watch } from "vue"
 import type { MarketVolumeItem } from "./index"
 
 /**
@@ -6,11 +7,16 @@ import type { MarketVolumeItem } from "./index"
  *
  * 涨跌需要「时间窗起点」的历史数据作基准，而官方 marketplace.json 只提供当前快照，
  * 因此本模块维护两条历史采样通道（格式统一为 MarketPriceSample，可合并计算）：
- * 1. 服务端归档：GitHub Actions 每 20 分钟拉取官方 marketplace.json 追加到
+ * 1. 服务端归档：GitHub Actions 定时拉取官方 marketplace.json 追加到
  *    public/data/market_history.json（**滚动保留最近 7 天**），前端 fetch 使用。
  *    见 .github/workflows/market-history.yml + scripts/sample_market_history.py
- * 2. 本地兜底：每次打开本页/手动采样时把当前快照写入 localStorage
- *    （节流 30 分钟、上限 200 条、同样 7 天窗口），覆盖本地开发/无服务端归档的场景。
+ *    ⚠️ Actions 的 schedule 是 best-effort 的：本仓库声明每小时一次，实测相邻
+ *    间隔 143~466 分钟（中位 307），全部运行都 success —— 是**触发器被延迟**，
+ *    不是脚本失败。所以不能只依赖它。
+ * 2. 本地兜底 + **真正的每小时采样**：页面直连官方 marketplace.json（main.ts 里
+ *    每 60s 轮询），快照每次前进（官方是整点小时粒度）就记一个点。
+ *    这条通道只要页面开着就精确到小时，不受 Actions 延迟影响，见
+ *    `startMarketAutoSampling`。localStorage 上限 200 条 ≥ 7 天 × 24 点 = 168。
  *
  * 采样点结构（**两种长度都要兼容**）：
  *   { t: epoch秒, p: { hrid: { level: [ask, price] } } }            ← 早期版本只存两个
@@ -18,7 +24,8 @@ import type { MarketVolumeItem } from "./index"
  * 因此读取一律走 valueAt() / priceOf()，不要直接下标。
  *
  * volume 语义提醒：官方 `v` 是**当日累计成交量**（每天 UTC 0 点归零），
- * 所以成交量对比要看「增量 / 速率」，不能直接比绝对值。
+ * 所以成交量对比要看「增量 / 速率」，不能直接比绝对值；界面上的「时间窗内成交量」
+ * 用 `getRollingVolumeDetail` 把增量滚动累加起来，因而没有归零问题。
  */
 
 /** 单个价格档的原始三元组：旧格式为 [ask, price]，新格式为 [ask, bid, volume] */
@@ -51,7 +58,11 @@ const HISTORY_FILE_URL = `${import.meta.env.BASE_URL}data/market_history.json`
 const LOCAL_KEY = "mewkonomy-market-history"
 /** 本地兜底采样节流间隔 */
 const LOCAL_INTERVAL_SEC = 30 * 60
-/** 本地兜底保留条数上限（7 天 / 30 分钟 ≈ 336，取 200 控制 localStorage 体积） */
+/**
+ * 本地兜底保留条数上限。
+ * 上限按「7 天 × 每小时 1 点 = 168」再留余量取 200：官方快照是整点小时粒度，
+ * 页面自动采样（见 startMarketAutoSampling）最多产出 168 个点，不会触顶。
+ */
 const LOCAL_MAX_SAMPLES = 200
 /** 历史保留窗口：与服务端一致，7 天 */
 const HISTORY_WINDOW_SEC = 7 * 24 * 3600
@@ -170,6 +181,36 @@ export async function loadMarketHistory(): Promise<void> {
   } catch {
     // 本地开发/离线时无服务端历史，忽略
   }
+}
+
+let autoSamplingStarted = false
+
+/**
+ * 开启「快照前进就记一个点」的自动采样。在 `main.ts` 里调用一次。
+ *
+ * 这是唯一能真正做到**每小时一个采样点**的路径：
+ *   - GitHub Actions 的 `schedule` 是 best-effort 的（本仓库实测声明 60min、
+ *     实际中位 307min），服务端归档因此平均 5 小时才有一个点；
+ *   - 而 `main.ts` 每 60s 直接轮询官方 marketplace.json，官方快照本身是
+ *     **整点小时粒度**，所以只要页面开着，快照一出现就会在 1 分钟内落盘。
+ *
+ * 只依赖 `marketData.timestamp` 变化触发：`recordLocalSample` 本身会按时间戳去重，
+ * 所以重复触发（多标签页/反复往返路由）不会写出重复点，也不会重复写盘。
+ */
+export function startMarketAutoSampling(): void {
+  if (autoSamplingStarted) {
+    return
+  }
+  autoSamplingStarted = true
+  watch(
+    () => getMarketDataApi()?.timestamp,
+    (ts) => {
+      if (ts) {
+        recordLocalSample()
+      }
+    },
+    { immediate: true }
+  )
 }
 
 /**
@@ -363,6 +404,29 @@ export function getBaselineSample(windowHours: number, now = defaultNow()): Mark
 }
 
 /**
+ * 成交量类指标（速率 / 滚动成交量）的锚点。
+ *
+ * 优先取「窗口起点之前最近的采样点」（= `getBaselineSample`，严格窗口语义）；
+ * 若历史覆盖不足（最老的点比窗口起点还新，例如归档只有 76 小时却选了 168 小时窗），
+ * 退回**最老的点**：宁可给出一个「实际区间比所选窗口短」的数（区间长度由返回值
+ * 里的 `hours` 如实带上），也不要让整列变成 `--`。
+ *
+ * 注意：锚点与物品无关，所有行走的是同一个点，所以列内仍然可比。
+ * 价格涨跌不走这里（它必须严格按窗口取基准，否则「涨跌」会变成另一个时间段的涨跌）。
+ */
+function findVolumeAnchor(
+  windowHours: number,
+  now: number
+): { sample: MarketPriceSample, withinWindow: boolean } | null {
+  const strict = getBaselineSample(windowHours, now)
+  if (strict) {
+    return { sample: strict, withinWindow: true }
+  }
+  const oldest = getMarketHistory().find((s) => s.t < now)
+  return oldest ? { sample: oldest, withinWindow: false } : null
+}
+
+/**
  * 计算指定时间窗内的涨跌。
  *
  * 返回 key=`hrid|level` → MarketChange。无足够历史或基准值缺失时该项不出现（UI 显示 `--`）。
@@ -467,15 +531,15 @@ export function getVolumeRateDetail(
   windowHours: number,
   now = defaultNow()
 ): VolumeRateDetail | null {
-  const baseSample = getBaselineSample(windowHours, now)
-  if (!baseSample) {
+  const anchor = findVolumeAnchor(windowHours, now)
+  if (!anchor) {
     return null
   }
-  const base = valueAt(baseSample, item.hrid, item.level, 2)
+  const base = valueAt(anchor.sample, item.hrid, item.level, 2)
   if (base == null || base < 0) {
     return null
   }
-  const span = volumeDeltaBetween(baseSample.t, base, now, item.volume)
+  const span = volumeDeltaBetween(anchor.sample.t, base, now, item.volume)
   if (!span) {
     return null
   }
@@ -485,7 +549,7 @@ export function getVolumeRateDetail(
     sameDay: span.sameDay,
     baseVolume: base,
     currentVolume: item.volume,
-    baseT: baseSample.t
+    baseT: anchor.sample.t
   }
 }
 
@@ -505,4 +569,141 @@ export function getVolumeRate(
   now = defaultNow()
 ): number | null {
   return getVolumeRateDetail(item, windowHours, now)?.rate ?? null
+}
+
+/** 时间窗内**滚动成交量**及其可信度 */
+export interface RollingVolumeDetail {
+  /** 窗口内成交量（滚动累加，不受 UTC 归零影响） */
+  volume: number
+  /**
+   * 实际统计区间（小时）= `now - 基准点时间`。
+   * 基准点取「窗口起点之前最近的一个采样点」，所以它 ≥ 所选窗口；
+   * 但**与物品无关**，所有行用的是同一个基准点，因此行与行之间仍然可比。
+   */
+  hours: number
+  /** 其中「增量可精确得知」的小时数（跨 UTC 归零点的那一段只能算到 0 点之后） */
+  knownHours: number
+  /** 覆盖率 = knownHours / hours（1 表示整段区间都是精确增量） */
+  coverage: number
+  /** 区间内跨过的 UTC 归零点个数（>0 时区间首尾各有一段无法还原） */
+  crossings: number
+}
+
+/**
+ * 时间窗内**滚动成交量**。
+ *
+ * 为什么需要它：官方 `v` 是当日累计量，每天 UTC 0 点归零，于是「刚过零点所有物品
+ * 都只剩很小的数字」，跨时刻完全不可比。这里改为在自有采样归档上把**相邻采样点的
+ * 增量滚动累加**，得到一个不归零、可比的窗口成交量。
+ *
+ * 累加规则（与 `volumeDeltaBetween` 同一套判断）：
+ * - **同一 UTC 日**：增量 = `vol(end) − vol(start)`，精确，整段计入 `knownHours`；
+ *   若为负（同日累计不该减少）判为异常，该段不计入。
+ * - **跨 UTC 日**：0 点前的累计已被归零、无法还原，只能拿到 `vol(end)`（自今日 0 点
+ *   起的累计），所以只把「0 点之后的小时数」计入 `knownHours`，并把 `crossings` +1。
+ *   这正是采样越密越准的原因：点足够密时，丢失的「0 点前那一小段」可以忽略。
+ *
+ * 返回 null 的情形：没有基准点、基准点缺 volume、实际区间不为正。
+ */
+export function getRollingVolumeDetail(
+  item: MarketVolumeItem,
+  windowHours: number,
+  now = defaultNow()
+): RollingVolumeDetail | null {
+  const anchor = findVolumeAnchor(windowHours, now)
+  if (!anchor) {
+    return null
+  }
+  const hours = (now - anchor.sample.t) / 3600
+  if (hours <= 0) {
+    return null
+  }
+  const history = getMarketHistory()
+  // 用时间找锚点在序列中的下标，而不是 indexOf(anchor.sample)：
+  // 锚点来自 getBaselineSample/findVolumeAnchor，若两者之间历史被写过（缓存失效重建），
+  // 对象引用就对不上了，indexOf 会返回 -1 并从序列开头累加，把窗口算错。
+  let startIdx = -1
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].t <= anchor.sample.t) {
+      startIdx = i
+      break
+    }
+  }
+  if (startIdx < 0) {
+    return null
+  }
+  let prevT = anchor.sample.t
+  let prevVol = valueAt(anchor.sample, item.hrid, item.level, 2)
+  if (prevVol == null || prevVol < 0) {
+    return null
+  }
+
+  let volume = 0
+  let knownHours = 0
+  let crossings = 0
+
+  /** 累加一段 `[fromT, vol(fromT)] → [toT, vol(toT)]`；`vol(toT)` 已确认有效 */
+  const addSegment = (toT: number, toVol: number) => {
+    if (prevVol == null || !(toT > prevT)) {
+      return
+    }
+    if (utcDayIndex(prevT) === utcDayIndex(toT)) {
+      const delta = toVol - prevVol
+      if (delta >= 0) {
+        volume += delta
+        knownHours += (toT - prevT) / 3600
+      }
+    } else {
+      // 跨归零点：只拿得到「自 toT 当天 0 点起」的累计
+      volume += toVol
+      knownHours += (toT - utcDayIndex(toT) * SECONDS_PER_DAY) / 3600
+      crossings++
+    }
+  }
+
+  for (let i = startIdx + 1; i < history.length; i++) {
+    const s = history[i]
+    if (s.t > now) {
+      break
+    }
+    const vol = valueAt(s, item.hrid, item.level, 2)
+    if (vol == null || vol < 0) {
+      // 该点没有 volume（旧格式样本）：断开链条，从这一点重新起算
+      prevT = s.t
+      prevVol = null
+      continue
+    }
+    if (prevVol == null) {
+      prevT = s.t
+      prevVol = vol
+      continue
+    }
+    addSegment(s.t, vol)
+    prevT = s.t
+    prevVol = vol
+  }
+
+  // 最后一个采样点到「现在」这一段：当前快照就是 now 时刻的量
+  if (prevVol != null && now > prevT && item.volume >= 0) {
+    addSegment(now, item.volume)
+  }
+
+  return {
+    volume,
+    hours,
+    knownHours,
+    coverage: Math.max(0, Math.min(1, knownHours / hours)),
+    crossings
+  }
+}
+
+/**
+ * 时间窗内滚动成交量（件）。语义与 `getRollingVolumeDetail` 相同，只取数值。
+ */
+export function getRollingVolume(
+  item: MarketVolumeItem,
+  windowHours: number,
+  now = defaultNow()
+): number | null {
+  return getRollingVolumeDetail(item, windowHours, now)?.volume ?? null
 }

@@ -51,9 +51,13 @@ describe("sortMarketVolumeRows", () => {
   })
 
   it("数值列降序/升序", () => {
-    const list = [row("a", { volume: 10 }), row("b", { volume: 300 }), row("c", { volume: 50 })]
-    expect(sortMarketVolumeRows(list, "volume", "descending").map((i) => i.volume)).toEqual([300, 50, 10])
-    expect(sortMarketVolumeRows(list, "volume", "ascending").map((i) => i.volume)).toEqual([10, 50, 300])
+    const list = [
+      row("a", { volumeRolling: 10 }),
+      row("b", { volumeRolling: 300 }),
+      row("c", { volumeRolling: 50 })
+    ]
+    expect(sortMarketVolumeRows(list, "volumeRolling", "descending").map((i) => i.volumeRolling)).toEqual([300, 50, 10])
+    expect(sortMarketVolumeRows(list, "volumeRolling", "ascending").map((i) => i.volumeRolling)).toEqual([10, 50, 300])
   })
 
   it("无数据的行（null / undefined）无论升序降序都排在末尾", () => {
@@ -75,16 +79,27 @@ describe("sortMarketVolumeRows", () => {
   })
 
   it("不修改原数组", () => {
-    const list = [row("a", { volume: 1 }), row("b", { volume: 2 })]
-    sortMarketVolumeRows(list, "volume", "descending")
+    const list = [row("a", { volumeRolling: 1 }), row("b", { volumeRolling: 2 })]
+    sortMarketVolumeRows(list, "volumeRolling", "descending")
     expect(list.map((i) => i.name)).toEqual(["a", "b"])
   })
 
   it("白名单包含表格里标了 sortable 的每一列", () => {
-    // 页面上的 sortable="custom" 列：物品(name)/等级(itemLevel)/价格(price)/
-    // 涨跌(changePct)/卖价(ask)/买价(bid)/成交量(volume)/成交量每小时(volumeRate)/成交额(turnover)
+    // 页面上的 sortable="custom" 列：物品(name)/物品等级(itemLevel)/价格(price)/
+    // 涨跌(changePct)/卖价(ask)/买价(bid)/时间窗内成交量(volumeRolling)/
+    // 成交量每小时(volumeRate)/成交额-时间窗内(turnoverRolling)
     expect([...MARKET_VOLUME_SORT_KEYS].sort()).toEqual(
-      ["ask", "bid", "changePct", "itemLevel", "name", "price", "turnover", "volume", "volumeRate"]
+      [
+        "ask",
+        "bid",
+        "changePct",
+        "itemLevel",
+        "name",
+        "price",
+        "turnoverRolling",
+        "volumeRate",
+        "volumeRolling"
+      ]
     )
   })
 })

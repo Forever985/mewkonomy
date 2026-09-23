@@ -39,6 +39,19 @@ export interface MarketVolumeItem {
    * 该速率是否跨了 UTC 归零点（true 表示只统计了自上一天 0 点以来的累计量）。
    */
   volumeRateCrossDay?: boolean
+  /**
+   * **时间窗内滚动成交量**（页面按所选时间窗回填）。
+   *
+   * 与 `volume`（官方当日累计量、UTC 0 点归零）不同：它是把自有采样归档上相邻
+   * 采样点的增量滚动累加得到的，不归零、跨时刻可比。见 `getRollingVolumeDetail`。
+   */
+  volumeRolling?: number | null
+  /** 滚动成交量对应的**成交额**估算（滚动量 × 当前价） */
+  turnoverRolling?: number | null
+  /** 滚动成交量实际统计的小时数（= now - 基准点，恒 ≥ 所选窗口） */
+  volumeRollingHours?: number | null
+  /** 滚动成交量里「增量可精确得知」的比例（<1 表示区间跨了 UTC 归零点） */
+  volumeRollingCoverage?: number | null
 }
 
 /** 聚合全部市场条目（含价格档展开）。读失败/未加载时返回空数组。 */
@@ -85,16 +98,33 @@ export function getMarketCategoryOptions(list: MarketVolumeItem[]): string[] {
 }
 
 /**
- * 可排序列。
+ * 市场档位的显示后缀：`level` 是**强化等级**（官方 0~20），不是物品等级。
+ *
+ * 全站用 `+N` 表示强化等级（见 `ActionDetailCard.vue` 的 `+{{ row.level }}`），
+ * 0 级不加后缀。集中在这里是因为这个后缀在表格、Top10、汇总卡片三处都要用，
+ * 各写一遍正是之前那个 bug 的来源 —— 有一处错写成 `Lv{{ itemLevel }}`，
+ * 于是同一件装备的十几个强化档全部显示成同一个「神圣凿子 Lv80」。
+ */
+export function enhanceLevelSuffix(level: string | number): string {
+  const lv = String(level)
+  return !lv || lv === "0" ? "" : `+${lv}`
+}
+
+/**
+ * 可排序列 = 表格里标了 `sortable="custom"` 的每一列，不多不少。
  *
  * `name` 是文本列（按显示名比较），其余都是数值列。
  * `name` 必须在白名单里：表格给「物品」列标了 `sortable="custom"`，点表头会派发
  * `sort-change`；白名单若不认它，排序会被重置成默认列 —— 表头箭头变了、数据却没变。
+ *
+ * 注意这里**不含**官方的 `volume` / `turnover`：表格展示的是滚动口径
+ * （`volumeRolling` / `turnoverRolling`），没有对应的列就不该出现在白名单里，
+ * 否则「表头能点但没这列」会被误认为支持排序。
  */
 export const MARKET_VOLUME_SORT_KEYS = [
   "name",
-  "volume",
-  "turnover",
+  "volumeRolling",
+  "turnoverRolling",
   "price",
   "ask",
   "bid",
@@ -152,22 +182,40 @@ export interface MarketVolumeSummary {
   topVolumeSum: number
 }
 
-export function getMarketVolumeSummary(list: MarketVolumeItem[]): MarketVolumeSummary {
+/** 汇总口径：官方当日累计量，或时间窗内滚动量 */
+export type MarketVolumeMetric = "volume" | "volumeRolling"
+
+/**
+ * 汇总统计。
+ *
+ * `metric` 决定「有成交 / 成交量最高」按哪个口径算：
+ * 默认 `volume`（官方当日累计，可能因 UTC 归零而偏小）；
+ * 页面传 `volumeRolling` 以与表格里展示的滚动成交量保持一致。
+ * 该字段由页面回填，缺失时按 0 处理。
+ */
+export function getMarketVolumeSummary(
+  list: MarketVolumeItem[],
+  metric: MarketVolumeMetric = "volume"
+): MarketVolumeSummary {
+  const valueOf = (i: MarketVolumeItem) => (metric === "volumeRolling" ? i.volumeRolling ?? 0 : i.volume)
   let active = 0
   let topVolume: MarketVolumeItem | null = null
   let topTurnover: MarketVolumeItem | null = null
+  let topValue = 0
   for (const i of list) {
-    if (i.volume > 0) {
+    const v = valueOf(i)
+    if (v > 0) {
       active++
-      if (!topVolume || i.volume > topVolume.volume) {
+      if (!topVolume || v > topValue) {
         topVolume = i
+        topValue = v
       }
     }
     if (i.turnover > 0 && (!topTurnover || i.turnover > topTurnover.turnover)) {
       topTurnover = i
     }
   }
-  const sorted = [...list].sort((a, b) => b.volume - a.volume)
-  const topVolumeSum = sorted.slice(0, 10).reduce((s, i) => s + i.volume, 0)
+  const sorted = [...list].sort((a, b) => valueOf(b) - valueOf(a))
+  const topVolumeSum = sorted.slice(0, 10).reduce((s, i) => s + valueOf(i), 0)
   return { total: list.length, active, topVolume, topTurnover, topVolumeSum }
 }
