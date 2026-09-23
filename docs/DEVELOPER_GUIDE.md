@@ -42,7 +42,7 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 
 - **数据源**：`data.json`（静态游戏数据，**严禁改动**，含硬上限）+ `market.json`（市场快照 `{market:{名称:{ask,bid,vendor}}, time}`）。
 - **价格语义**：`PriceStatus.ASK`=左挂单（ask），`BID`=右收购（bid）。全局规则——**材料/成本用 ask，成品/收益用 bid**（个别页面可切换成品计价口径）。
-- **市场历史归档**：`data/market_history.json`（由 GitHub Actions 每小时采样、滚动 7 天）供市场监控页计算涨跌，详见 §4.1；页面另有 localStorage 本地兜底采样。
+- **市场历史归档**：`data/market_history_<UTC日>T<HH>.json`（由 GitHub Actions + 外部定时器每小时采样，UTC 6 小时分片、滚动 7 天 / 168 点）供市场监控页计算涨跌与时间窗内成交量，详见 §2.3.1 与 §4.1；页面另有 localStorage 本地兜底采样。
 
 ### 1.3 Vite 别名
 
@@ -92,7 +92,7 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 - 各域在 `src/common/apis/<domain>/index.ts` 聚合，页面只 import 该入口。
 - `src/common/apis/utils.ts` 提供通用检索 `handleSearch`（支持 `banEquipment` / `banJewelry` / `banCombat` / `banLife`、`conditions` 组合条件、等级/利润率/风险双头、`steps` 精确步数等）。
 - 检索类 API 使用 `usePagination` 组合式做分页，页码/大小状态可持久化到 localStorage。
-- **页面级辅助模块可内聚在域目录下**：如 `marketvolume/history.ts` 维护「市场历史采样」——`MarketPriceSample`（`{t, p:{hrid:{level:[ask,bid,volume]}}}`；**旧样本只有 `[ask,price]` 两个元素，两种长度都要兼容**，取值必须走内部 `valueAt()` / `priceOf()`，不要直接下标）、`recordLocalSample`（localStorage 兜底，节流 30min、上限 200 条、7 天滚动窗口）、`loadMarketHistory`（拉取服务端归档 `gh-pages:data/market_history.json`，页面按 `<BASE_URL>data/market_history.json` 请求）、`getMarketChangeMap(list, windowHours, metric, now)`（基准 = 时间窗起点前最近采样，key=`hrid|level`，无基准 / 当前值无效时该项不出现）。`metric` 可选 `price`（ask/bid **中点**）/`ask`/`bid`/`volume`；`volume` 是官方**当日累计成交量**（UTC 0 点归零），比的是**增量速率**而非绝对值。
+- **页面级辅助模块可内聚在域目录下**：如 `marketvolume/history.ts` 维护「市场历史采样」——`MarketPriceSample`（`{t, p:{hrid:{level:[ask,bid,volume]}}}`；**旧样本只有 `[ask,price]` 两个元素，两种长度都要兼容**，取值必须走内部 `valueAt()` / `priceOf()`，不要直接下标）、`recordLocalSample`（localStorage 兜底，节流 30min、上限 200 条、7 天滚动窗口）、`loadMarketHistory(windowHours)`（按所选时间窗**按需拉取**服务端分片 `gh-pages:data/market_history_<UTC日>T<HH>.json`，见 §2.3.1；一片都没取到时回退读 v1 单文件 `market_history.json`）、`getMarketChangeMap(list, windowHours, metric, now)`（基准 = 时间窗起点前最近采样，key=`hrid|level`，无基准 / 当前值无效时该项不出现）。`metric` 可选 `price`（ask/bid **中点**）/`ask`/`bid`/`volume`；`volume` 是官方**当日累计成交量**（UTC 0 点归零），比的是**增量速率**而非绝对值。
 
   **市场历史模块的硬约束（都踩过坑，改动前先读）**：
 
@@ -105,6 +105,45 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
   4. **成交量展示用「时间窗内滚动成交量」，不是官方当日累计量**：官方 `v` 每天 UTC 0 点归零，直接展示会让刚过零点的所有物品都变成小数字、跨时刻不可比。`getRollingVolumeDetail(item, windowHours, now)` 在自有归档上把相邻采样点的增量滚动累加，返回 `{volume, hours, knownHours, coverage, crossings}`；`hours` 是**实际**统计区间（列头用的就是它，而不是所选窗口），`coverage < 1` 表示跨了归零点、0 点前那段无法还原（页面用 `el-alert` 提示）。价格涨跌**不**走这条路径（必须严格按窗口取基准），`findVolumeAnchor` 只服务成交量类指标。
 
   **采样频率的真相（决定了上面的精度上限）**：官方 `marketplace.json` 每 60s 轮询一次（`main.ts`），而官方快照是**整点小时粒度**；GitHub Actions 的 `schedule` 是 best-effort 的 —— 本仓库实测声明 60min、实际相邻间隔 143~466min（中位 307，全部 success，是触发器被延迟而不是脚本失败）。所以**每小时采样只能靠浏览器**：`startMarketAutoSampling()`（在 `main.ts` 调用一次）监听 `marketData.timestamp` 变化，快照一前进就落一个本地采样点，不受 Actions 延迟影响。本地上限 200 条 ≥ 7 天 × 24 点 = 168，够用。
+
+### 2.3.1 服务端归档：分片格式 v2 与外部定时触发
+
+服务端归档（`gh-pages:data/market_history_<UTC日>T<HH>.json`）解决的是**多设备共享**：浏览器本地采样只覆盖当前这一台设备。
+
+**为什么分片 + 字典编码**：官方快照 872 件物品 × 平均 3.4 个强化档 ≈ **2992 个条目/点**。沿用朴素结构（`{hrid:{level:[ask,bid,volume]}}`）实测是 **90.6 KB/点**，7 天 168 点就是 **14.5 MiB** —— 而市场监控页每次打开都要下载并解析，正是「数据量太大卡顿」的来源。改进后：
+
+| 方案 | 每点 | 168 点合计 | 页面实际取用 |
+|---|---|---|---|
+| 朴素结构（v1 单文件） | 90.6 KB | 14.5 MiB | 整份 |
+| **v2 字典 + 变长行** | **65.3 KB**（72%） | 10.4 MiB | — |
+| **v2 + UTC 6 小时分片** | — | 10.4 MiB（28~30 片） | **只取窗口覆盖到的 1~2 片**（≈125 KB/片 gzip） |
+
+差分编码（只写变化项）实测只能到 35 KB/点（36.8% 的报价每小时都在变），收益不如分片，故未采用。
+
+**格式（`v:2`，Python `encode_shard` ↔ TS `decodeShard` 成对）**：
+
+```json
+{"v":2,"d":["/items/apple", …],"s":[[t,[[i,l,a],[i,l,a,b],[i,l,a,b,v]],…]]}
+```
+
+行是**变长**的，靠长度区分（缺省分别表示 -1/-1/0）：`[i,l,a]` 只有左挂单、`[i,l,a,b]` 有报价无成交、`[i,l,-1,b]` 只有右收购、`[i,l,a,b,v]` 齐全。`i` 是 hrid 在 `d` 里的下标，`l` 是**强化等级**（0~20）。全空白条目不写；字典里可能有未被引用的项，解码只按行取值，无害。
+
+> ⚠️ 改这个格式必须**同时**改 Python 与 TS 两侧，并重跑 `python scripts/dev/gen_shard_fixture.py` 更新 `tests/fixtures/market-history-shard.json` —— `tests/marketvolume-shard.test.ts` 用「Python 编码 → TS 解码」的 fixture 做跨语言断言，是防漂移的唯一护栏。
+
+**客户端的按需加载**：`loadMarketHistory(windowHours)` 用 `shardKeysForWindow()` 算出所需块键，只补拉缺失的片并缓存（切窗口只拉差量）。取片范围 = 窗口起点所在块再往前一块（基准点可能落在前一块）。**一片都没取到时**才回退读 v1 单文件 `market_history.json`（迁移期的安全网，之后可择机从 gh-pages 删掉）。v1 文件现在**既不再更新也不删除**。
+
+**真正做到每小时：外部触发器**。Actions 自带的 `schedule` 实测只有约 5 小时一次，所以用 **cron-job.org 每小时打 `workflow_dispatch`**，workflow 里的 cron 降级为兜底。配置：
+
+1. 建 **fine-grained PAT**：只勾这一个仓库，权限只需 **Actions: Read and write**（其余全不勾），设一个过期时间。
+2. cron-job.org 新建任务：
+   - URL：`https://api.github.com/repos/Forever985/mewkonomy/actions/workflows/market-history.yml/dispatches`
+   - Method：`POST`，Schedule：`0 * * * *`（每小时整点；快照整点生成，脚本按 timestamp 去重，早跑晚跑都落到同一个点）
+   - Header：`Accept: application/vnd.github+json`、`Authorization: Bearer <PAT>`、`Content-Type: application/json`
+   - Body：`{"ref":"main"}`
+   - 开启失败通知（邮箱），这样触发器挂了能立刻知道。
+3. 验证：Actions 页面应出现 `workflow_dispatch` 触发的运行记录；若返回 `401/403` 就是 PAT 权限或过期问题。
+
+**GitHub 侧的成本与限制**（实测/查证）：公开仓库 Actions 分钟数免费无限；每小时一次 ≈ 720 次/月 × 约 25 秒，私有仓库也仅约 300 分钟/月（免费额度 2000）。cron 最小粒度 5 分钟；公开仓库的定时工作流在仓库 60 天无活动后会被停用，但本工作流自己会提交，算作活动。往自己的仓库提交数据、用外部定时器调 `workflow_dispatch` 都是正常用法。
 
   **市场档位 `level` 是强化等级，不是物品等级**：官方结构是 `marketData[hrid][level]`，`level ∈ 0..20` 表示 +N（比如 `/items/holy_chisel` 有 0/2/3/4/5/6/7/8/10/11/12 共 11 档），而 `itemLevel` 是物品自身的推荐等级（神圣凿子恒为 80）。同一件装备每个有报价的档位都是列表里的**独立一行**，显示后缀一律走 `enhanceLevelSuffix(level)`（`+N`，0 级为空）—— 曾经有一处错写成 `Lv{{ itemLevel }}`，导致 11 个档位全部渲染成同一个「神圣凿子 Lv80」，无法区分。
 
@@ -253,7 +292,7 @@ const panelFields: PanelField[] = [ /* 声明字段 */ ]
 
 | workflow | 频率 | 脚本 | 职责与产出 |
 | --- | --- | --- | --- |
-| `market-history.yml`（Market History Sampling） | 每小时第 5 分钟（`cron: "5 * * * *"`）+ 手动 `workflow_dispatch`；`concurrency: market-history-sampling` 保证不并发 | `scripts/sample_market_history.py` | 抓官方 `https://www.milkywayidle.com/game_data/marketplace.json`（约 0.4s、极稳定），追加采样点到 `gh-pages:data/market_history.json`；滚动 7 天、上限 520 点 |
+| `market-history.yml`（Market History Sampling） | **外部定时器（cron-job.org）每小时打 `workflow_dispatch`**；`cron: "5 * * * *"` 仅作兜底；`concurrency: market-history-sampling` 保证不并发 | `scripts/sample_market_history.py` | 抓官方 `https://www.milkywayidle.com/game_data/marketplace.json`（约 0.4s、极稳定），写入 `gh-pages:data/market_history_<UTC日>T<HH>.json` 分片（UTC 6 小时一块，v2 字典编码）；滚动 7 天 / 168 点。配置见 §2.3.1 |
 | `update-data.yml`（Update Game Data） | 每天 UTC 00:20（`cron: "20 0 * * *"`）+ 手动 `workflow_dispatch` | `scripts/fetch_game_data.py` | 抓上游 `data.json` / `market.json`，只负责这两个文件 |
 
 - **为什么拆开**：历史采样与游戏数据抓取原先共用一个 job，`data.json` 上游一挂，历史采样一起停摆——线上曾因此**连续 8 天没有任何新采样点**。
@@ -262,9 +301,9 @@ const panelFields: PanelField[] = [ /* 声明字段 */ ]
   - 因此稳定产出约 **24 个采样点/天**；更频繁的运行会因时间戳相同被去重跳过（属预期行为，不是故障）。cron 仍取每小时第 5 分钟并保留手动触发，作为对 GitHub 调度延迟（实测 2~4 倍）的容错；
   - 7 天窗口下约 168 点，远低于 520 的上限，所以上限目前不会触发；
   - 这意味着「涨跌」基准点的最细分辨率是 1 小时：**1 小时时间窗常常找不到更早的基准点而显示 `--`**，属正常现象；3 小时及以上的窗口才有稳定意义。
-- **部署安全红线（必读）**：`gh-pages` 的 `data/` 是**多脚本共享目录**——`sample_market_history.py` **只拥有** `market_history.json`，`fetch_game_data.py` **只拥有** `data.json` / `market.json`。两脚本都只把自己的文件复制进 `gh-pages` 的全新克隆再提交，**绝不允许 `rmtree` + `copytree` 整个 `data/`**：早期采样脚本用 `public/data` 整目录替换线上目录，而 `main` 的 `public/data` 不含新抓的 `data.json`/`market.json`，导致**每次采样都会删掉线上 4MB 的 `data.json` 与 70KB 的 `market.json`**（commit `93f0107`）。两脚本另调用 `assert_no_unintended_deletions()`，`git status` 一旦出现本脚本不负责的删除就中止部署。
+- **部署安全红线（必读）**：`gh-pages` 的 `data/` 是**多脚本共享目录**——`sample_market_history.py` **只拥有** `market_history.json`（v1 遗留）与 `market_history_*.json`（v2 分片），`fetch_game_data.py` **只拥有** `data.json` / `market.json`。两脚本都只把自己的文件复制进 `gh-pages` 的全新克隆再提交，**绝不允许 `rmtree` + `copytree` 整个 `data/`**：早期采样脚本用 `public/data` 整目录替换线上目录，而 `main` 的 `public/data` 不含新抓的 `data.json`/`market.json`，导致**每次采样都会删掉线上 4MB 的 `data.json` 与 70KB 的 `market.json`**（commit `93f0107`）。两脚本另调用 `assert_no_unintended_deletions()`，`git status` 一旦出现本脚本不负责的删除就中止部署。分片版仍遵守这条：只写 / 只删 `market_history_*.json`，且删除目标（超出保留期的旧片）会显式加入 `owned_files` 白名单。
 - **CI 执行顺序**：先 `actions/checkout` 检出 `gh-pages`（线上数据落在 `./data/`，供脚本做增量比对），再 `git fetch origin main:main` + `git checkout main -- scripts/<file>` 取回脚本（脚本只在 `main` 上维护）。
-- **本地部署也必须守同一条红线**：`gh-pages` 的 `data/` 同样**不能被本地部署覆盖**。原先 `deploy.ps1` / `deploy-once.ps1` / `sync-fast.ps1` 都用 `npx gh-pages -d dist`，而该命令默认 `CLEAN=true`，会**先清空整条 gh-pages 分支**再上传 `dist`；`dist/data/` 只是仓库里 `public/data/` 的静态副本，于是每次本地部署都把 Actions 每 20 分钟采样的 `market_history.json` 覆盖回旧快照（实测 commit `a4192aa` 把 2 个采样点覆盖回 1 个）。`.github/workflows/deploy.yml` 早就用 `rm -rf dist/data` + `CLEAN: false` 规避，本地脚本此前漏了。
+- **本地部署也必须守同一条红线**：`gh-pages` 的 `data/` 同样**不能被本地部署覆盖**。原先 `deploy.ps1` / `deploy-once.ps1` / `sync-fast.ps1` 都用 `npx gh-pages -d dist`，而该命令默认 `CLEAN=true`，会**先清空整条 gh-pages 分支**再上传 `dist`；`dist/data/` 只是仓库里 `public/data/` 的静态副本，于是每次本地部署都把 Actions 采样的历史文件覆盖回旧快照（实测 commit `a4192aa` 把 2 个采样点覆盖回 1 个）。`.github/workflows/deploy.yml` 早就用 `rm -rf dist/data` + `CLEAN: false` 规避，本地脚本此前漏了。
   - 现统一改用自带发布器 **`scripts/publish-gh-pages.mjs`**：只同步「非 `data/`」文件，推送前断言受保护文件既未消失、也未改大小，并检查 `git status` / 暂存区里没有任何 `D data/...`，一旦发现立即中止。
   - 调试可用 `DRY_RUN=1 node scripts/publish-gh-pages.mjs --dir dist --repo <url>`。
 - **本地调试**：`DRY_RUN=1 python scripts/<script>.py` 只抓取 + 写本地，不推送。

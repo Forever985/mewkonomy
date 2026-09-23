@@ -41,6 +41,114 @@ export interface MarketPriceSample {
 /** 涨跌口径 */
 export type MarketChangeMetric = "price" | "ask" | "bid" | "volume"
 
+/**
+ * 服务端归档分片格式 v2（与 scripts/sample_market_history.py 的 `encode_shard` 成对）。
+ *
+ * 为什么分片 + 字典编码：官方快照 872 件物品 × 平均 3.4 个强化档 ≈ 每点 2992 个条目，
+ * 朴素结构（`{hrid:{level:[ask,bid,volume]}}`）是 **90.6 KB/点**，7 天 168 点就是
+ * 14.5 MiB —— 而本页每次打开都要下载并解析它。改为「hrid 字典 + 变长行」后实测
+ * **65.3 KB/点（72%）**；再按 UTC 6 小时分片，页面只取所选时间窗覆盖到的分片，
+ * 默认 6 小时窗只下载 1~2 片（≈125 KB gzip/片），而不是整个 7 天。
+ *
+ * 行（row）是**变长**的，靠长度区分（缺省分别表示 -1 / -1 / 0）：
+ *   [i,l,a]     → 只有左挂单        [i,l,a,b]   → 有买卖报价、当日无成交
+ *   [i,l,-1,b]  → 只有右收购        [i,l,a,b,v] → 三者齐全
+ * `i` 是 hrid 在 `d` 里的下标，`l` 是**强化等级**（0~20，不是物品等级）。
+ * 完全空白的条目不会被写入；字典里可能有未被任何行引用的条目（编码时先登记后判空），
+ * 解码时只按行取值，因此无害。
+ */
+export interface MarketHistoryShard {
+  v: number
+  /** hrid 字典，整片只出现一次 */
+  d: string[]
+  /** [t, rows] */
+  s: [number, number[][]][]
+}
+
+/** 分片粒度（小时）：与采样脚本的 SHARD_HOURS 一致 */
+export const SHARD_HOURS = 6
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n)
+}
+
+/** epoch 秒 → 所属 UTC 6 小时块键，如 "2026-09-23T18"（必须与 Python 的 shard_key 一致） */
+export function shardKeyOf(t: number): string {
+  const d = new Date(t * 1000)
+  const hour = Math.floor(d.getUTCHours() / SHARD_HOURS) * SHARD_HOURS
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}T${pad2(hour)}`
+}
+
+/**
+ * 覆盖 `[now - windowHours, now]` 所需的全部块键（升序）。
+ *
+ * 多取一个块：基准点取自「窗口起点之前最近的一个采样点」，它可能落在窗口起点
+ * 所属块的前一块里。按块整取而不是按点，所以实际覆盖会比窗口略长。
+ */
+export function shardKeysForWindow(windowHours: number, now: number): string[] {
+  const step = SHARD_HOURS * 3600
+  const from = now - (windowHours + SHARD_HOURS) * 3600
+  const keys: string[] = []
+  // 从 from 所在块的开头开始，逐块推进到 now
+  const start = Math.floor(from / step) * step
+  for (let t = start; t <= now; t += step) {
+    const key = shardKeyOf(t)
+    if (keys[keys.length - 1] !== key) {
+      keys.push(key)
+    }
+  }
+  const lastKey = shardKeyOf(now)
+  if (keys[keys.length - 1] !== lastKey) {
+    keys.push(lastKey)
+  }
+  return keys
+}
+
+/**
+ * v2 紧凑结构 → `MarketPriceSample[]`。
+ *
+ * 未引用的字典项不会产出条目；行长度决定字段是否存在（见 `MarketHistoryShard` 注释）。
+ * 结构不合法时返回 null（调用方当作「这片没用」处理），绝不抛错影响整页。
+ */
+export function decodeShard(payload: unknown): MarketPriceSample[] | null {
+  if (!payload || typeof payload !== "object") {
+    return null
+  }
+  const shard = payload as MarketHistoryShard
+  if (shard.v !== 2 || !Array.isArray(shard.d) || !Array.isArray(shard.s)) {
+    return null
+  }
+  const dict = shard.d
+  const out: MarketPriceSample[] = []
+  for (const entry of shard.s) {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      continue
+    }
+    const t = Number(entry[0])
+    const rows = entry[1]
+    if (!Number.isFinite(t) || !Array.isArray(rows)) {
+      continue
+    }
+    const p: Record<string, Record<string, SampleLevel>> = {}
+    for (const row of rows) {
+      if (!Array.isArray(row) || row.length < 3) {
+        continue
+      }
+      const hrid = dict[row[0]]
+      if (typeof hrid !== "string") {
+        continue
+      }
+      const level = String(row[1])
+      const ask = row[2]
+      const bid = row.length > 3 ? row[3] : -1
+      const volume = row.length > 4 ? row[4] : 0
+      ;(p[hrid] ||= {})[level] = [ask, bid, volume]
+    }
+    out.push({ t, p })
+  }
+  return out
+}
+
 export interface MarketChange {
   /** 基准值（volume 口径下为基准采样点的累计成交量） */
   base: number
@@ -54,7 +162,9 @@ export interface MarketChange {
   deltaVolume?: number
 }
 
-const HISTORY_FILE_URL = `${import.meta.env.BASE_URL}data/market_history.json`
+const MARKET_HISTORY_DIR = `${import.meta.env.BASE_URL}data/`
+/** v1 单文件：只在「一片分片都没取到」时作为回退，避免迁移期页面变空白 */
+const LEGACY_HISTORY_FILE_URL = `${MARKET_HISTORY_DIR}market_history.json`
 const LOCAL_KEY = "mewkonomy-market-history"
 /** 本地兜底采样节流间隔 */
 const LOCAL_INTERVAL_SEC = 30 * 60
@@ -166,21 +276,87 @@ export function recordLocalSample(force = false, now = defaultNow()): boolean {
   return true
 }
 
-/** 加载服务端历史（market_history.json）。文件不存在/加载失败时静默降级为空。 */
-export async function loadMarketHistory(): Promise<void> {
-  try {
-    const res = await fetch(HISTORY_FILE_URL, { cache: "no-store" })
-    if (!res.ok) {
-      return
-    }
-    const data = (await res.json()) as MarketPriceSample[]
-    if (Array.isArray(data)) {
-      remoteSamples = data.filter((s) => typeof s.t === "number" && s.p)
-      mergedCache = null
-    }
-  } catch {
-    // 本地开发/离线时无服务端历史，忽略
+/** 已成功载入的分片（键 → 采样点），按需增量加载，避免重复下载 */
+const loadedShards = new Map<string, MarketPriceSample[]>()
+/** 已确认取不到的分片键（404 等），不再重试，避免每次切窗口都打一批空请求 */
+const missingShards = new Set<string>()
+/** 是否已尝试过 v1 单文件回退 */
+let legacyTried = false
+/** 是否至少成功载入过一片（用于决定要不要回退到 v1） */
+let anyShardLoaded = false
+
+function rebuildRemoteSamples(): void {
+  const all: MarketPriceSample[] = []
+  for (const samples of loadedShards.values()) {
+    all.push(...samples)
   }
+  all.sort((a, b) => a.t - b.t)
+  remoteSamples = all
+  mergedCache = null
+}
+
+/**
+ * 加载服务端历史分片，覆盖 `windowHours` 所需的时间范围。
+ *
+ * 只取**所需分片**而不是整份归档：7 天 168 点约 10.4 MiB，整份下载+解析正是
+ * 「市场监控卡」的来源。分片按 UTC 6 小时切，默认 6 小时窗只要 1~2 片（≈125 KB/片）。
+ * 已载入的分片会缓存，所以切窗口只会补差量。
+ *
+ * 回退：若一片都没取到（例如迁移期线上还没有分片），才去读 v1 单文件
+ * `market_history.json`，保证页面不会突然变空白。
+ *
+ * `windowHours` 省略时按 6 小时（与页面默认窗口一致）。
+ */
+export async function loadMarketHistory(windowHours = 6): Promise<void> {
+  const keys = shardKeysForWindow(windowHours, defaultNow())
+  const pending = keys.filter((k) => !loadedShards.has(k) && !missingShards.has(k))
+  if (pending.length) {
+    await Promise.all(
+      pending.map(async (key) => {
+        try {
+          const res = await fetch(`${MARKET_HISTORY_DIR}market_history_${key}.json`, { cache: "no-store" })
+          if (!res.ok) {
+            missingShards.add(key)
+            return
+          }
+          const samples = decodeShard(await res.json())
+          if (samples && samples.length) {
+            loadedShards.set(key, samples)
+            anyShardLoaded = true
+          } else {
+            missingShards.add(key)
+          }
+        } catch {
+          // 网络/解析失败：当作该片不可用，不影响其它片
+          missingShards.add(key)
+        }
+      })
+    )
+    if (anyShardLoaded) {
+      rebuildRemoteSamples()
+    }
+  }
+
+  if (!anyShardLoaded && !legacyTried) {
+    legacyTried = true
+    try {
+      const res = await fetch(LEGACY_HISTORY_FILE_URL, { cache: "no-store" })
+      if (res.ok) {
+        const data = (await res.json()) as MarketPriceSample[]
+        if (Array.isArray(data)) {
+          remoteSamples = data.filter((s) => typeof s.t === "number" && s.p)
+          mergedCache = null
+        }
+      }
+    } catch {
+      // 本地开发/离线时无服务端历史，忽略
+    }
+  }
+}
+
+/** 是否已成功加载分片归档（用于 UI 提示「正在加载历史」） */
+export function hasLoadedShards(): boolean {
+  return anyShardLoaded
 }
 
 let autoSamplingStarted = false

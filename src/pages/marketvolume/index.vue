@@ -55,12 +55,34 @@ const metricLabel = computed(() => metricOptions.value.find(m => m.value === cha
 const changeDir = ref<"all" | "up" | "down" | "flat">("all")
 // 服务端历史加载完成标记（触发涨跌重算）
 const historyReady = ref(false)
+/** 正在补拉分片（切换时间窗会按需拉更多片） */
+const historyLoading = ref(false)
 const sampling = ref(false)
+
+/**
+ * 按所选时间窗拉取服务端归档分片。
+ *
+ * 归档按 UTC 6 小时分片，这里只取窗口覆盖到的片（已载入的会缓存），
+ * 所以默认 6 小时窗只有 1~2 个请求；把时间窗调到 7 天才会补拉全部 30 片。
+ */
+async function refreshHistory() {
+  historyLoading.value = true
+  try {
+    await loadMarketHistory(windowHours.value)
+  } finally {
+    historyReady.value = true
+    historyLoading.value = false
+  }
+}
 
 onMounted(async () => {
   recordLocalSample()
-  await loadMarketHistory()
-  historyReady.value = true
+  await refreshHistory()
+})
+
+// 时间窗变了要补拉更长/更短范围的历史（已载入的片不会重复请求）
+watch(windowHours, () => {
+  void refreshHistory()
 })
 
 function handleSampleNow() {
@@ -443,6 +465,7 @@ function fmtCount(value: number) {
             {{ t("历史采样点") }}：{{ localCount }}<template v-if="hasRemoteHistory()"> + {{ t("线上历史") }} {{ remoteCount }}</template>
             · {{ t("覆盖") }} {{ historySpanHours.toFixed(1) }}{{ t("小时") }}
             · {{ t("最近采样") }}：{{ lastSampleTime }}
+            <template v-if="historyLoading"> · {{ t("正在加载历史分片…") }}</template>
           </span>
         </div>
         <div v-if="!hasRemoteHistory()" class="text-xs text-gray-400 mt-1">

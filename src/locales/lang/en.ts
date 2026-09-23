@@ -435,7 +435,9 @@ export default {
   "当前价": "Current Price",
   "速率": "Rate",
   "覆盖": "Span",
-  "无线上历史提示": "No cloud history loaded yet. The GitHub Actions sampler (every 20 minutes, 7-day window) publishes it; until it has run a few times, the change column stays \"--\". Local sampling only covers this browser.",
+  // 原先只有 en 定义了这个键，中文两种语言下会直接显示键名本身，这里补齐（en 同步改掉过期的「每 20 分钟」）
+  "无线上历史提示": "No cloud history shards loaded yet (data/market_history_*.json). The archive is sampled by GitHub Actions and updated hourly; the change and volume columns only get numbers once it has collected a few points. Until then this page uses only the local samples recorded by this browser (not shared across devices).",
+  "正在加载历史分片…": "Loading history shards…",
   "本地采样已是最新，无需重复记录": "Local sample is already up to date",
   "已记录历史采样点": "History sample recorded",
   // Docs

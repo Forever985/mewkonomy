@@ -1,6 +1,7 @@
 name: Market History Sampling
 
-# 定时抓取官方市场快照，追加到 data/market_history.json（滚动 7 天）。
+# 定时抓取官方市场快照，追加到 data/market_history_<UTC日>T<HH>.json 分片
+# （UTC 6 小时一块，滚动保留 7 天 / 168 个整点）。
 #
 # 为什么独立成一条 workflow：
 #   原先历史采样和「游戏数据抓取」绑在同一个 job 里，只要 data.json 的上游源挂掉，
@@ -8,25 +9,29 @@ name: Market History Sampling
 #   本 workflow 只依赖官方 marketplace.json —— 端点约 0.4s 响应、极稳定 ——
 #   与游戏数据抓取彻底解耦。
 #
-# 频率为什么是「每小时 5 分」而不是「每 20 分钟」（实测结论）：
+# 频率：为什么同时保留 cron 和 workflow_dispatch
 #   官方 marketplace.json 的顶层 timestamp 是**市场快照自身的生成时间**，实测它是
-#   **整点、每小时**才前进一次（连续 18 分钟观察同一个值：08:06:00Z 始终不变）。
-#   也就是说「市场历史」本身的分辨率就是 1 小时，跑得再密也不会多出采样点 ——
-#   同一快照会被脚本按时间戳去重跳过。
+#   **整点、每小时**才前进一次，所以「市场历史」的分辨率就是 1 小时。
+#   但 GitHub Actions 的 `schedule` 是 best-effort 的：本仓库实测声明 60 分钟一次，
+#   实际相邻间隔 143~466 分钟（中位 307），19 次运行全部 success ——
+#   是**触发器被延迟**，不是脚本失败。因此每小时这个精度不能只靠 cron。
 #
-#   与此同时，GitHub 对本仓库的定时任务是会明显延迟/拉长的：实测 update-data.yml
-#   声明每小时一次时，实际相邻间隔为 111~278 分钟（约 2~4.6 小时）。
-#   所以这里刻意「跑得比需要的频繁一点」作为容错：只要在某个整点后落地一次就能
-#   拿到该小时的采样点，被延迟或跳过也不至于整天缺数据。分钟数取 5，留出快照刚生成
-#   就取、避免边界抖动。
+#   → 真正的每小时由**外部定时器按时打 workflow_dispatch** 保证
+#     （cron-job.org，配置步骤见 docs/DEVELOPER_GUIDE.md「服务端归档」）。
+#   → 下面的 cron 留作兜底：外部触发器哪天挂了，仍能拿到每几小时一个点。
+#   两条通道同时命中也不会写重复点：脚本按快照 timestamp 去重，且 concurrency 串行。
 #
 # 采样脚本自身还有两道护栏：快照 item 数为 0 时放弃本次（绝不用空快照覆盖 7 天历史）；
-# 时间戳与线上最后一点相同时跳过写入。
+# 时间戳与线上最后一点相同时跳过写入。分片只动 market_history_*.json，
+# 并用 assert_no_unintended_deletions 拒绝任何越权删除。
 
 on:
   schedule:
-    # 每小时的第 5 分钟（见上方说明：市场快照本身是 1 小时粒度）
+    # 每小时的第 5 分钟（兜底；主力是外部 workflow_dispatch）
     - cron: "5 * * * *"
+  # 外部定时器（cron-job.org）通过 GitHub REST API 触发这里：
+  #   POST /repos/{owner}/{repo}/actions/workflows/market-history.yml/dispatches
+  #   body: {"ref":"main"}     需要 fine-grained PAT 的 Actions: write 权限
   workflow_dispatch:
 
 # 同一时间只跑一个，避免两次运行同时推送 gh-pages 互相冲突
