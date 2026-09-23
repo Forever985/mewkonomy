@@ -9,7 +9,8 @@
 #         ② GitHub 直连（严格证书校验；hosts 劫持/自签场景下会失败，属预期）
 #         ③ 常见本地代理端口自动探测（7897 Clash / 10808 旧代理 / 7890 / 10809 / 1080 / 8118）
 #     2) 完整部署链路：pnpm build:public -> git commit --no-verify -> push main
-#                       -> npx gh-pages -d dist -b gh-pages
+#                       -> node scripts\publish-gh-pages.mjs（**不是** npx gh-pages，
+#                          后者 CLEAN=true 会清空整条分支、连线上 data/ 一起删掉）
 #  关键规避：
 #     - gh-pages 内部 git 会读取全局失效代理，用 GIT_CONFIG_GLOBAL 指向临时配置文件
 #       （空 http/https.proxy + sslVerify + credential.helper=wincred）覆盖，
