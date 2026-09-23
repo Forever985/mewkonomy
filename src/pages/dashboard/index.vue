@@ -72,12 +72,13 @@ if (ldSearchData.value.actionLevel != null && ldSearchData.value.minLevel == nul
 if (ldSearchData.value.profitRate != null && ldSearchData.value.minProfitRate == null) {
   ldSearchData.value.minProfitRate = ldSearchData.value.profitRate
 }
-// 组合条件只承载「步数 + 动作」；要求等级由本页顶层 minLevel/maxLevel 承担（由 leaderboard API 过滤），
-// 历史版本曾把等级塞进 conditions[i]，会导致「选了动作就搜不到」的静默失效，这里按层清理
-ldSearchData.value.conditions.forEach((c: any) => {
-  delete c.minLevel
-  delete c.maxLevel
-})
+// 组合条件支持「步数 + 动作 + 该行的要求等级区间」三者的任意组合。
+//
+// 历史上这里会**无条件删掉** conditions[i].minLevel/maxLevel，原因是当时界面没有对应的输入框，
+// 残留值会让筛选「静默失效」（选了动作却搜不到，且看不到原因）。现在条件行已经提供了可见的
+// 等级区间输入（见 mainPanelFields 的 levelRange），残留值会显示在输入框里、随时可清空，
+// 因此不再需要清理 —— 相反，按行限定要求等级正是本页需要的功能：
+// 例如第 1 行「锻造 50~80」、第 2 行「裁缝 20~60」，两者各自成立即可命中。
 // 收尾的通用清理（name 归一、conditions/excludes 补数组、profitRate 归一）统一走共用实现
 normalizeSearchData(ldSearchData.value)
 
@@ -92,7 +93,12 @@ const mainPanelFields: PanelField[] = [
     projectOptions,
     stepsCount: 10,
     stepsWidth: 110,
-    stepLabel: n => `${n}${t("步")}`
+    stepLabel: n => `${n}${t("步")}`,
+    // 每行可单独限定「该生产的要求等级区间」：不同生产能接受的等级区间往往不同
+    // （例如锻造 50~80、裁缝 20~60 同时要），留空即该行不限等级。
+    // 下面还有一个全局「要求等级」，两者是并列条件。
+    levelRange: { min: 0, max: 120, placeholderMin: "0", placeholderMax: "120" },
+    hint: "每行可分别限定该生产的要求等级区间"
   },
   {
     type: "range",

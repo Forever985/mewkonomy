@@ -518,4 +518,6 @@ export default {
   "loot": "Loot",
   "resource": "Resource",
   "scroll": "Scroll",
+  // 补全：利润排行条件行新增「按行限定要求等级区间」的说明
+  "每行可分别限定该生产的要求等级区间": "Each row can set its own required-level range, since different productions often accept different ranges (e.g. keep both \"Smithing 50-80\" and \"Tailoring 20-60\"). Leave it empty to ignore levels for that row. It works alongside the global \"Required Level\" above — both are applied.",
 }

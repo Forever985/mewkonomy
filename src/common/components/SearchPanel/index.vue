@@ -135,7 +135,30 @@ defineExpose({ sortPriorityRef })
                 />
               </el-select>
 
-              <!-- 等级区间型（enhanceexp） -->
+              <!-- 动作列：给了 projectOptions 就渲染（可与下面的等级区间同时出现） -->
+              <el-select
+                v-if="field.projectOptions"
+                v-model="cond.project"
+                :placeholder="t(field.projectPlaceholder || '动作不限')"
+                clearable
+                :style="{ width: `${field.projectWidth || 130}px` }"
+                @change="emit('change')"
+              >
+                <el-option
+                  v-for="p in resolveOptions(field.projectOptions)"
+                  :key="p.value"
+                  :label="p.label"
+                  :value="p.value"
+                />
+              </el-select>
+
+              <!--
+                等级区间列：给了 levelRange 就渲染。
+                与动作列**互相独立**（都可选、可同时出现），因此这里用 v-if 而不是 v-else-if：
+                - enhanceexp / enhanposer：只有等级区间（条件 = 目标强化等级 + 区间）
+                - jungle 系列：只有动作列（条件 = 步数 + 动作）
+                - dashboard 利润排行：两者都要（条件 = 步数 + 动作 + 该生产的要求等级区间）
+              -->
               <template v-if="field.levelRange">
                 <el-input-number
                   v-model="cond.minLevel"
@@ -159,23 +182,6 @@ defineExpose({ sortPriorityRef })
                   @change="emit('change')"
                 />
               </template>
-
-              <!-- 动作型（levelRange 型没有动作列，projectOptions 缺省时也不渲染） -->
-              <el-select
-                v-else-if="field.projectOptions"
-                v-model="cond.project"
-                :placeholder="t(field.projectPlaceholder || '动作不限')"
-                clearable
-                :style="{ width: `${field.projectWidth || 130}px` }"
-                @change="emit('change')"
-              >
-                <el-option
-                  v-for="p in resolveOptions(field.projectOptions)"
-                  :key="p.value"
-                  :label="p.label"
-                  :value="p.value"
-                />
-              </el-select>
 
               <el-button
                 v-if="(modelValue.conditions || []).length > (field.minRows ?? 1)"
