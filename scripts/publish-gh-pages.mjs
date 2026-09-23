@@ -38,6 +38,15 @@ const DRY_RUN = process.env.DRY_RUN === "1"
 
 /** 线上由 Actions 维护、本地部署绝不能动的目录（相对仓库根） */
 const PROTECTED = ["data"]
+/**
+ * 旧构建产物（hash 资源）的保留时长（秒）。
+ *
+ * 为什么要留：GitHub Pages 的 `index.html` 有约 10 分钟的 CDN 缓存，而本项目用的是
+ * hash 文件名（assets/index-XXXX.js）。若部署时立刻把上一版的资源删掉，这段时间里
+ * 缓存中的 index.html 仍指向旧 hash → 用户看到 404 / 白屏。
+ * 实测踩过两次，所以旧产物保留 24 小时再清理（远大于缓存时间，又不会无限堆积）。
+ */
+const KEEP_OLD_SECONDS = 24 * 3600
 
 function log(msg) {
   console.log(`  ${msg}`)
@@ -49,6 +58,58 @@ function run(cmd, cmdArgs, opts = {}) {
 }
 function runCapture(cmd, cmdArgs, opts = {}) {
   return execFileSync(cmd, cmdArgs, { encoding: "utf8", ...opts })
+}
+
+/** dist 里所有文件的相对路径集合（用于判断线上哪些文件本次不再产出） */
+function collectDistFiles(distDir) {
+  const files = new Set()
+  const stack = [distDir]
+  while (stack.length) {
+    const dir = stack.pop()
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (dir === distDir && PROTECTED.includes(entry.name)) continue
+        stack.push(abs)
+      } else {
+        files.add(path.relative(distDir, abs).split(path.sep).join("/"))
+      }
+    }
+  }
+  return files
+}
+
+/**
+ * 删除线上「本次不再产出」的文件，但**保留最近 KEEP_OLD_SECONDS 内提交过的**。
+ *
+ * 旧产物不能立刻删：见 KEEP_OLD_SECONDS 的说明（index.html 的 CDN 缓存期）。
+ * 不整目录 rm 还有第二个好处：删除是逐个文件显式进行的，不会误伤 data/。
+ */
+function pruneStaleFiles(work, distFiles) {
+  const tracked = runCapture("git", ["ls-files"], { cwd: work })
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const nowSec = Date.now() / 1000
+  const removed = []
+  const kept = []
+  for (const rel of tracked) {
+    if (PROTECTED.some((p) => rel === p || rel.startsWith(`${p}/`))) continue
+    if (distFiles.has(rel)) continue
+    const stamp = Number(
+      runCapture("git", ["log", "-1", "--format=%ct", "--", rel], { cwd: work }).trim() || 0
+    )
+    if (stamp && nowSec - stamp < KEEP_OLD_SECONDS) {
+      kept.push(rel)
+      continue
+    }
+    fs.rmSync(path.join(work, rel), { force: true })
+    removed.push(rel)
+  }
+  if (kept.length) {
+    log(`保留 ${kept.length} 个 24 小时内的旧产物（避免 CDN 缓存的 index.html 指向已删除的 hash 资源）`)
+  }
+  return { removed, kept }
 }
 
 function main() {
@@ -78,12 +139,12 @@ function main() {
     }
     log(`线上 ${PROTECTED.join(", ")}/ 现有 ${protectedBefore.size} 个文件（将原样保留）`)
 
-    // 1) 清掉除受保护目录以外的所有内容，保证不会残留旧 hash 资源
-    for (const entry of fs.readdirSync(work)) {
-      if (entry === ".git") continue
-      if (PROTECTED.includes(entry)) continue
-      fs.rmSync(path.join(work, entry), { recursive: true, force: true })
-    }
+    // 1) 删掉本次不再产出、且已过保留期的旧文件。
+    //    不用「整目录 rm」：那样会把上一版的 hash 资源立刻删掉，而 CDN 里的
+    //    index.html 还有约 10 分钟缓存，会导致白屏/404（实测踩过两次）。
+    const distFiles = collectDistFiles(DIST_DIR)
+    const { removed, kept } = pruneStaleFiles(work, distFiles)
+    log(`清理过期产物 ${removed.length} 个${kept.length ? `，保留 ${kept.length} 个新近产物` : ""}`)
 
     // 2) 从 dist 拷贝，同样跳过受保护目录
     let copied = 0
