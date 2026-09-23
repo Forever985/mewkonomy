@@ -20,8 +20,14 @@ export interface RequestData {
   maxProfitRate?: number
   /** 查询参数：利润率%（兼容旧调用方，已弃用，请用 minProfitRate/maxProfitRate） */
   profitRate?: number
-  /** 查询参数：排除装备 */
+  /** 查询参数：排除装备（**不含首饰**，首饰由 banJewelry 单独控制；两者互相独立可组合） */
   banEquipment?: boolean
+  /** 查询参数：排除首饰（项链/戒指/耳环） */
+  banJewelry?: boolean
+  /** 查询参数：排除战斗装备（剔除 combat / both 类） */
+  banCombat?: boolean
+  /** 查询参数：排除生活装备（剔除 life / both 类） */
+  banLife?: boolean
   /** 查询参数：精确步数（如 3 = 只看 3 步方案，排除 2/4 步） */
   steps?: number
   /** 查询参数：风险系数下限 */

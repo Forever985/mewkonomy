@@ -2,6 +2,7 @@ import type { RequestData } from "../leaderboard/type"
 import type Calculator from "@/calculator"
 import { calculatorConstructable, getCalculatorInstance, getStorageCalculatorItem } from "@/calculator/utils"
 import { useFavoriteStoreOutside } from "@/pinia/stores/favorite"
+import { isJewelry } from "@/common/utils/game"
 /** 查 */
 export async function getFavoriteDataApi(params: RequestData) {
   await new Promise(resolve => setTimeout(resolve, 300))
@@ -17,7 +18,10 @@ export async function getFavoriteDataApi(params: RequestData) {
   names.length && (profitList = profitList.filter(item => names.some(n => item.result.name.toLowerCase().includes(String(n).toLowerCase()))))
   params.project && (profitList = profitList.filter(item => item.project === params.project))
   params.profitRate && (profitList = profitList.filter(item => item.result.profitRate >= params.profitRate! / 100))
-  params.banEquipment && (profitList = profitList.filter(item => !item.isEquipment))
+  // 与 handleSearch 保持同一语义：排除装备时**保留首饰**（首饰由 banJewelry 单独控制），
+  // 避免两条检索路径对「排除装备」的理解再次分叉。
+  params.banEquipment && (profitList = profitList.filter(item => !item.isEquipment || isJewelry(item.item)))
+  params.banJewelry && (profitList = profitList.filter(item => !isJewelry(item.item)))
   // 分页
   return { list: profitList.slice((params.currentPage - 1) * params.size, params.currentPage * params.size), total: profitList.length }
 }

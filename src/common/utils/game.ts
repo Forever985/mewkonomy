@@ -16,6 +16,24 @@ export function getEquipmentTypeOf(item: ItemDetail): Equipment {
   return item.equipmentDetail?.type?.split("/").pop() as Equipment
 }
 
+/** 首饰部位：项链 / 戒指 / 耳环 */
+export const JEWELRY_EQUIPMENT_TYPES = ["neck", "ring", "earrings"] as const
+
+/**
+ * 是否为首饰（项链/戒指/耳环）。
+ *
+ * 单独抽出来是因为「排除装备」与「排除首饰」必须是**互相独立**的两个开关：
+ * 搜索过滤里 banEquipment 只处理非首饰装备，首饰交给 banJewelry。
+ * 若两处各自手写部位判断，很容易再次退化成包含关系（历史上就是这样，
+ * 导致勾了「排除装备」后「排除首饰」彻底失效）。
+ */
+export function isJewelry(item?: ItemDetail): boolean {
+  if (!item) {
+    return false
+  }
+  return (JEWELRY_EQUIPMENT_TYPES as readonly string[]).includes(getEquipmentTypeOf(item) as string)
+}
+
 export type EquipmentClass = "combat" | "life" | "both" | "none"
 
 /**
