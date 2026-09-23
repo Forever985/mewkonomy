@@ -29,6 +29,16 @@ export interface MarketVolumeItem {
   changeBase?: number | null
   /** 成交量速率（件/小时，窗口内增量均值）；null 表示无基准或跨了 UTC 归零点 */
   volumeRate?: number | null
+  /**
+   * 成交量速率**实际**使用的小时数。
+   * 快照按小时采集，选「1 小时」窗口时最近基准点常在数小时之前，
+   * UI 用它提示「这个速率并不是按 1 小时算出来的」。
+   */
+  volumeRateHours?: number | null
+  /**
+   * 该速率是否跨了 UTC 归零点（true 表示只统计了自上一天 0 点以来的累计量）。
+   */
+  volumeRateCrossDay?: boolean
 }
 
 /** 聚合全部市场条目（含价格档展开）。读失败/未加载时返回空数组。 */
@@ -72,6 +82,61 @@ export function getMarketCategoryOptions(list: MarketVolumeItem[]): string[] {
   const set = new Set<string>()
   list.forEach((i) => i.category && set.add(i.category))
   return Array.from(set).sort()
+}
+
+/**
+ * 可排序列。
+ *
+ * `name` 是文本列（按显示名比较），其余都是数值列。
+ * `name` 必须在白名单里：表格给「物品」列标了 `sortable="custom"`，点表头会派发
+ * `sort-change`；白名单若不认它，排序会被重置成默认列 —— 表头箭头变了、数据却没变。
+ */
+export const MARKET_VOLUME_SORT_KEYS = [
+  "name",
+  "volume",
+  "turnover",
+  "price",
+  "ask",
+  "bid",
+  "itemLevel",
+  "changePct",
+  "volumeRate"
+] as const
+export type MarketVolumeSortKey = (typeof MARKET_VOLUME_SORT_KEYS)[number]
+
+function numericValueOf(i: MarketVolumeItem, key: Exclude<MarketVolumeSortKey, "name">): number {
+  const v = (i as unknown as Record<string, unknown>)[key]
+  // `null`/`undefined` 表示「无数据」（涨跌缺基准、速率缺历史），
+  // 而 Number(null) 是 0，会跟真的 0 混在一起，所以显式转成 NaN 统一沉底。
+  return v == null ? Number.NaN : Number(v)
+}
+
+/**
+ * 按列排序（返回新数组，不改原数组）。
+ *
+ * `nameOf` 让调用方决定用哪个名字比较（页面传 `t` 以按界面语言排序，测试可省略）。
+ * 无数据的行不分升降序一律排在末尾，否则升序时一屏 `--` 会顶在最前面。
+ */
+export function sortMarketVolumeRows(
+  list: MarketVolumeItem[],
+  key: MarketVolumeSortKey,
+  order: "descending" | "ascending",
+  nameOf: (name: string) => string = (n) => n
+): MarketVolumeItem[] {
+  const dir = order === "ascending" ? 1 : -1
+  return [...list].sort((a, b) => {
+    if (key === "name") {
+      return nameOf(a.name).localeCompare(nameOf(b.name)) * dir
+    }
+    const av = numericValueOf(a, key)
+    const bv = numericValueOf(b, key)
+    const aNaN = Number.isNaN(av)
+    const bNaN = Number.isNaN(bv)
+    if (aNaN || bNaN) {
+      return aNaN && bNaN ? 0 : aNaN ? 1 : -1
+    }
+    return (av - bv) * dir
+  })
 }
 
 export interface MarketVolumeSummary {

@@ -94,6 +94,14 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 - 检索类 API 使用 `usePagination` 组合式做分页，页码/大小状态可持久化到 localStorage。
 - **页面级辅助模块可内聚在域目录下**：如 `marketvolume/history.ts` 维护「市场历史采样」——`MarketPriceSample`（`{t, p:{hrid:{level:[ask,bid,volume]}}}`；**旧样本只有 `[ask,price]` 两个元素，两种长度都要兼容**，取值必须走内部 `valueAt()` / `priceOf()`，不要直接下标）、`recordLocalSample`（localStorage 兜底，节流 30min、上限 200 条、7 天滚动窗口）、`loadMarketHistory`（拉取服务端归档 `gh-pages:data/market_history.json`，页面按 `<BASE_URL>data/market_history.json` 请求）、`getMarketChangeMap(list, windowHours, metric, now)`（基准 = 时间窗起点前最近采样，key=`hrid|level`，无基准 / 当前值无效时该项不出现）。`metric` 可选 `price`（ask/bid **中点**）/`ask`/`bid`/`volume`；`volume` 是官方**当日累计成交量**（UTC 0 点归零），比的是**增量速率**而非绝对值。
 
+  **市场历史模块的三条硬约束（都踩过坑，改动前先读）**：
+
+  1. **时间基准统一为「快照时间戳」**：`t` 一律取 `defaultNow()`（= 官方 `marketData.timestamp`，取不到才回落墙钟）。早期 `recordLocalSample` 写墙钟，导致同一份快照在本地样本与线上归档里是两个时刻，增量区间的分母直接失真；**「成交量/小时」的分母也不能用 `Date.now()`**，否则页面开着不动数字自己往下漂。
+  2. **同一 `t` 只保留一条**：`recordLocalSample` 在写入前比对上一条（相同则返回 `false`，`force` 也不例外，这样「立即采样」能诚实提示「已是最新」）；`getMarketHistory()` 合并归档与本地时再按 `t` 去重一次（本地优先）。重复点会让「上一点」变成同一时刻，把区间分母算成 0。
+  3. **`getMarketHistory()` 结果带缓存**（页面每行都要算速率，原实现每次重建 Map + 排序是 O(n log n)）。样本只在 `recordLocalSample` / `loadMarketHistory` 变化，**新增写入点必须同步置空 `mergedCache`**，否则页面读到旧历史。
+
+  跨 UTC 归零点判断统一走 `volumeDeltaBetween(startT, startVol, endT, endVol)`：**同日**取真实增量（为负判无效），**跨日**只能用 `endVol`（自今日 0 点起的累计）并把计时起点改到 0 点；直接把昨天的累计当今天增量会算出虚高速率。UI 侧 `getVolumeRateDetail` 额外返回实际区间小时数与是否跨日，用于在采样稀疏时提示「这个速率不是按你选的时间窗算的」。
+
 ### 2.4 Pinia store 与 timestamp 缓存（重点）
 
 - 数据 store（`game` 等）负责拉取 `data.json` / `market.json`，并做 **localStorage 缓存**。

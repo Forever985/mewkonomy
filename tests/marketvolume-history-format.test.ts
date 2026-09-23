@@ -119,18 +119,23 @@ describe("marketvolume history 新旧格式与口径", () => {
     expect(mod.getMarketChangeMap([item()], 3, "price", NOW).has("/items/apple|0")).toBe(true)
   })
 
-  it("本地采样写入的是三元素新格式", async () => {
+  it("本地采样写入的是三元素新格式，且以快照时间戳落盘", async () => {
     const mod = await loadModule()
+    // 快照时间戳必须接近真实时钟：pruneLocal 按墙钟裁掉 7 天前的样本
+    const snapTs = Math.floor(Date.now() / 1000) - 60
     const { useGameStoreOutside } = await import("@/pinia/stores/game")
     useGameStoreOutside().marketData = {
-      timestamp: 1,
+      timestamp: snapTs,
       marketData: { "/items/apple": { 0: { ask: 10, bid: 9, price: 10, volume: 7 } } }
     } as any
     await new Promise(r => setTimeout(r, 0))
     expect(mod.recordLocalSample(true)).toBe(true)
     const stored = JSON.parse(localStorage.getItem("mewkonomy-market-history") || "[]")
-    // 注意：本地采样会追加到已存在的 SAMPLES 之后
+    // 注意：本地采样会追加到已存在的 SAMPLES 之后（1970 年的夹具样本已被 pruneLocal 裁掉）
     const last = stored[stored.length - 1]
+    expect(last).toBeTruthy()
+    // 落盘时间取**快照时间戳**而非墙钟，否则本地样本与服务端归档不在同一时间轴
+    expect(last.t).toBe(snapTs)
     expect(last.p["/items/apple"]["0"]).toEqual([10, 9, 7])
   })
 })

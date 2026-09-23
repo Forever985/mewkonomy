@@ -36,19 +36,51 @@ describe("marketvolume history 涨跌计算验证", () => {
     mod = await import("@/common/apis/marketvolume/history")
   })
 
-  it("本地采样把当前市场快照写入历史（节流生效）", () => {
+  it("本地采样把当前市场快照写入历史（快照时间戳语义 + 节流）", () => {
+    // 本地采样以**快照时间戳**落盘，而 pruneLocal 按墙钟保留 7 天窗口，
+    // 所以夹具时间戳必须落在真实时钟附近，不能用 0 或 1。
+    const base = Math.floor(Date.now() / 1000) - 3600
+    vi.mocked(getMarketDataApi).mockReturnValue({ ...BASE_MARKET, timestamp: base })
     expect(mod.getLocalSampleCount()).toBe(0)
     expect(mod.recordLocalSample()).toBe(true)
     expect(mod.getLocalSampleCount()).toBe(1)
     // 30 分钟内重复采样被节流
     expect(mod.recordLocalSample()).toBe(false)
-    // 强制采样跳过节流
-    expect(mod.recordLocalSample(true)).toBe(true)
+    // force 只跳过节流；快照时间戳没前进就仍然不写（重复点只会产生噪声）
+    expect(mod.recordLocalSample(true)).toBe(false)
+    expect(mod.getLocalSampleCount()).toBe(1)
+    // 快照前进 1 小时后可正常新增
+    vi.mocked(getMarketDataApi).mockReturnValue({ ...BASE_MARKET, timestamp: base + 3600 })
+    expect(mod.recordLocalSample()).toBe(true)
     const history = mod.getMarketHistory()
     expect(history.length).toBe(2)
+    expect(history[0].t).toBe(base)
+    expect(history[1].t).toBe(base + 3600)
     // 采样结构为三元素新格式：[ask, bid, volume]
     expect(history[0].p["/items/apple"]["0"]).toEqual([100, 90, 1200])
     expect(history[0].p["/items/sword"]["0"]).toEqual([5000, 4800, 3])
+  })
+
+  it("服务端归档与本地采样同时间戳合并为一条，且加载后缓存失效", async () => {
+    const base = Math.floor(Date.now() / 1000) - 3600
+    vi.mocked(getMarketDataApi).mockReturnValue({ ...BASE_MARKET, timestamp: base })
+    expect(mod.recordLocalSample()).toBe(true)
+    expect(mod.getMarketHistory().length).toBe(1) // 同时建立了合并缓存
+    // 服务端归档：其中一条与本地采样撞时间戳（值不同，合并后应保留本地那条）
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => [
+        { t: base - 7200, p: { "/items/apple": { "0": [1, 2, 3] } } },
+        { t: base, p: { "/items/apple": { "0": [999, 999, 999] } } }
+      ]
+    })))
+    await mod.loadMarketHistory()
+    vi.unstubAllGlobals()
+    const history = mod.getMarketHistory()
+    // 缓存必须因 loadMarketHistory 失效，否则这里仍是加载前的那 1 条
+    expect(history.length).toBe(2)
+    expect(history[0].t).toBe(base - 7200)
+    expect(history[1].p["/items/apple"]["0"]).toEqual([100, 90, 1200])
   })
 
   it("无历史时 changeMap 为空", () => {

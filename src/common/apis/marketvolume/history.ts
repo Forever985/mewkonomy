@@ -60,6 +60,8 @@ const storage: Storage | null = typeof localStorage !== "undefined" ? localStora
 
 let remoteSamples: MarketPriceSample[] | null = null
 let localSamples: MarketPriceSample[] = readLocal()
+/** `getMarketHistory()` 的合并结果缓存，样本变化时置空 */
+let mergedCache: MarketPriceSample[] | null = null
 
 /** 越过这个点数就该考虑清理，避免 localStorage 长期膨胀 */
 export function getHistoryWindowHours(): number {
@@ -107,15 +109,28 @@ function pruneLocal() {
 }
 
 /**
- * 把当前市场快照追加为本地采样点（节流）。
- * `force` 跳过节流；`now` 可显式指定时间（便于测试与回填）。返回是否新增。
+ * 把当前市场快照追加为本地采样点（节流）。返回是否新增。
+ *
+ * `now` 默认取**市场快照自身的时间戳**（见 `defaultNow`），而不是墙钟。
+ * 这点很关键：服务端归档写入的 `t` 是快照时间，本地采样若用墙钟，
+ * 两者就处在**不同时间轴**上（同一份快照会被记成两个不同时刻），
+ * 混在一起会让增量区间失真。快照取不到时间戳时才回落到墙钟。
+ *
+ * `force` 只跳过节流（对应界面上的「立即采样」）；若快照时间戳与上一条相同，
+ * 仍然不写入并返回 `false`。
  */
-export function recordLocalSample(force = false, now = Math.floor(Date.now() / 1000)): boolean {
+export function recordLocalSample(force = false, now = defaultNow()): boolean {
   const market = getMarketDataApi()?.marketData
   if (!market) {
     return false
   }
   const last = localSamples[localSamples.length - 1]
+  // 同一份快照不重复记录（`force` 也不例外）：时间戳没前进就说明数据没变，
+  // 再写一条只是噪声，还会让后续按 `t` 去重时被丢弃。
+  // 这也让「立即采样」能给出诚实的反馈——没新增就提示“已是最新”。
+  if (last && last.t === now) {
+    return false
+  }
   if (!force && last && now - last.t < LOCAL_INTERVAL_SEC) {
     return false
   }
@@ -136,6 +151,7 @@ export function recordLocalSample(force = false, now = Math.floor(Date.now() / 1
   localSamples.push({ t: now, p })
   pruneLocal()
   writeLocal(localSamples)
+  mergedCache = null
   return true
 }
 
@@ -149,17 +165,37 @@ export async function loadMarketHistory(): Promise<void> {
     const data = (await res.json()) as MarketPriceSample[]
     if (Array.isArray(data)) {
       remoteSamples = data.filter((s) => typeof s.t === "number" && s.p)
+      mergedCache = null
     }
   } catch {
     // 本地开发/离线时无服务端历史，忽略
   }
 }
 
-/** 合并后的历史序列（服务端 + 本地，按时间升序）。 */
+/**
+ * 合并后的历史序列（服务端归档 + 本地兜底，按时间升序，同一时间戳去重）。
+ *
+ * 去重的必要性：本地采样点会与服务端归档点重合 —— 例如归档里已经有某次快照，
+ * 用户随后打开页面又记了一条本地采样。同一 `t` 的重复点会让「上一点」变成同一时刻，
+ * 从而把增量区间的分母算成 0（或让基准点选择错位）。同一时间戳只保留最后一个
+ * （本地采样在拼接时排在归档之后）。
+ *
+ * 结果带缓存：页面每行都要算速率，而本函数每次重建 Map + 排序是 O(n log n)。
+ * 样本只在 `loadMarketHistory` / `recordLocalSample` 时变化，由那两处失效缓存。
+ */
 export function getMarketHistory(): MarketPriceSample[] {
-  const merged = [...(remoteSamples ?? []), ...localSamples]
-  merged.sort((a, b) => a.t - b.t)
-  return merged
+  if (mergedCache) {
+    return mergedCache
+  }
+  const byTime = new Map<number, MarketPriceSample>()
+  for (const s of remoteSamples ?? []) {
+    byTime.set(s.t, s)
+  }
+  for (const s of localSamples) {
+    byTime.set(s.t, s)
+  }
+  mergedCache = [...byTime.values()].sort((a, b) => a.t - b.t)
+  return mergedCache
 }
 
 /** 本地采样点数量 */
@@ -403,20 +439,34 @@ export function getMarketChangeMap(
   return map
 }
 
+/** 成交量速率及其**实际**计算区间（UI 需要据此说明「这个数不是按你选的时间窗算的」） */
+export interface VolumeRateDetail {
+  /** 速率（件/小时） */
+  rate: number
+  /** 实际参与计算的小时数。采样点稀疏时它会明显大于所选时间窗 */
+  hours: number
+  /** 基准点是否与当前快照同为 UTC 日（false = 跨了归零点，只统计自 0 点起） */
+  sameDay: boolean
+  /** 基准点累计成交量 */
+  baseVolume: number
+  /** 当前累计成交量 */
+  currentVolume: number
+  /** 基准点时间（epoch 秒） */
+  baseT: number
+}
+
 /**
- * 成交量速率（件/小时）。
+ * 成交量速率详情。
  *
- * 官方 `volume` 是**当日累计成交量**，所以必须先按 UTC 日边界判断增量含义
- * （见 `volumeDeltaBetween`）：同日取真实增量，跨日退化为「自 0 点起的均值」。
- * 无基准、基准缺 volume、或同日增量为负（数据异常）时返回 null（UI 显示 `--`）。
- *
- * `now` 默认取市场快照时间戳，保证「同一份数据算出的速率稳定不漂移」。
+ * 为什么需要「详情」而不是只返回一个数：采样是**按小时快照**的（线上实测间隔中位数
+ * 约 5 小时），所以选「1 小时」窗口时，实际能拿到的最近基准点往往在几小时之前 ——
+ * 速率其实是按那段更长的区间平均出来的。只显示一个数字会让人误以为它是 1 小时的量。
  */
-export function getVolumeRate(
+export function getVolumeRateDetail(
   item: MarketVolumeItem,
   windowHours: number,
   now = defaultNow()
-): number | null {
+): VolumeRateDetail | null {
   const baseSample = getBaselineSample(windowHours, now)
   if (!baseSample) {
     return null
@@ -429,5 +479,30 @@ export function getVolumeRate(
   if (!span) {
     return null
   }
-  return span.delta / span.hours
+  return {
+    rate: span.delta / span.hours,
+    hours: span.hours,
+    sameDay: span.sameDay,
+    baseVolume: base,
+    currentVolume: item.volume,
+    baseT: baseSample.t
+  }
+}
+
+/**
+ * 成交量速率（件/小时）。
+ *
+ * 官方 `volume` 是**当日累计成交量**，所以必须先按 UTC 日边界判断增量含义
+ * （见 `volumeDeltaBetween`）：同日取真实增量，跨日退化为「自 0 点起的均值」。
+ * 无基准、基准缺 volume、或同日增量为负（数据异常）时返回 null（UI 显示 `--`）。
+ *
+ * `now` 默认取市场快照时间戳，保证「同一份数据算出的速率稳定不漂移」。
+ * 若还需要知道实际用了多长区间，用 `getVolumeRateDetail`。
+ */
+export function getVolumeRate(
+  item: MarketVolumeItem,
+  windowHours: number,
+  now = defaultNow()
+): number | null {
+  return getVolumeRateDetail(item, windowHours, now)?.rate ?? null
 }

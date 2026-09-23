@@ -520,4 +520,15 @@ export default {
   "scroll": "Scroll",
   // 补全：利润排行条件行新增「按行限定要求等级区间」的说明
   "每行可分别限定该生产的要求等级区间": "Each row can set its own required-level range, since different productions often accept different ranges (e.g. keep both \"Smithing 50-80\" and \"Tailoring 20-60\"). Leave it empty to ignore levels for that row. It works alongside the global \"Required Level\" above — both are applied.",
+  // 补全：市场监控各项口径的悬停说明（成交量是当日累计、速率受采样间隔影响）
+  "市场监控口径说明": "Data comes from the official market snapshot. Volume is the **same-day cumulative** total (it resets at 00:00 UTC), so it is not a real-time measure of activity — right after midnight every number restarts from a small value. For \"how hot is this right now\" use the \"Volume/hour\" column, which compares two snapshots. Snapshots only update about once an hour, so the shorter the window you pick, the longer the interval actually used (see the column header).",
+  "成交量口径说明": "Same-day cumulative volume (the official `v` field), resetting at 00:00 UTC. It answers \"how much has traded since midnight\", not \"how fast right now\". Numbers being tiny just after 00:00 UTC is expected.",
+  "成交量速率口径说明": "Volume increment between two snapshots divided by the actual elapsed hours — a measure of recent activity that is immune to the UTC reset. Note snapshots update about hourly: if the selected window is shorter than the sampling gap, the calculation falls back to an earlier baseline and the rate is an average over that longer interval (the actual median interval is shown above the table).",
+  "成交额口径说明": "Estimated as same-day cumulative volume x current price — not real turnover. Trades during the day happen at different prices but are all valued at the current price here, and the cumulative volume resets at 00:00 UTC, so this is a \"today so far\" figure too.",
+  "成交量速率区间提示": "The selected window is {1} h, but snapshots are sparse, so the rate is actually estimated over about {0} h — read that column with this interval in mind.",
+  // 补全：成交活跃 Top10 的排序口径说明
+  "成交活跃 Top10": "Most Active Top 10",
+  "按成交量速率排序": "ranked by volume/hour (immune to the UTC reset)",
+  "按当日累计成交量排序": "ranked by same-day cumulative volume (fallback before history loads)",
+  "监控各物品市场成交量与成交额，按当日累计成交量排行": "Monitor per-item market volume and turnover. Volume is same-day cumulative (resets at 00:00 UTC), not real-time activity",
 }
