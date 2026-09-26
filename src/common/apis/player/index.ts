@@ -372,6 +372,11 @@ export function getPlayerLevelOf(action: Action) {
  * 饮用后该动作的装备「要求等级」+flatBoost（默认 +5）。
  * 例如原本 80 级可制作/锻造/缝纫的装备，勾选工匠茶后需要 85 级才可制作。
  * 注意：这是对「装备要求等级门槛」的修正，不改变玩家自身等级。
+ *
+ * **不受暴饮（drinkConcentration）加成**：暴饮浓度放大的是饮品的**有益**增益
+ * （artisan / efficiency / wisdom 等），而「要求等级 +5」是工匠茶的代价，
+ * 喝下去就是固定 +5，与暴饮之囊无关。早期实现在这里也乘了 (1 + 浓度)，
+ * 于是带上暴饮之囊时会算成 +5.5，门槛被抬高。
  */
 export function getActionLevelBonusOf(action: Action) {
   let bonus = 0
@@ -380,7 +385,7 @@ export function getActionLevelBonusOf(action: Action) {
     const item = getItemDetailOf(teaHrid)
     item.consumableDetail?.buffs?.forEach((buff) => {
       if (buff.typeHrid === "/buff_types/action_level") {
-        bonus += buff.flatBoost * (1 + getDrinkConcentration())
+        bonus += buff.flatBoost
       }
     })
   }

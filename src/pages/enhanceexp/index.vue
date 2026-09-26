@@ -5,7 +5,7 @@ import PagerFooter from "@@/components/PagerFooter/index.vue"
 import SearchPanel from "@@/components/SearchPanel/index.vue"
 import type { PanelField } from "@@/components/SearchPanel/types"
 import { usePagination } from "@@/composables/usePagination"
-import { Plus, Search } from "@element-plus/icons-vue"
+import { Plus, QuestionFilled, Search } from "@element-plus/icons-vue"
 import { ElMessageBox, type Sort } from "element-plus"
 import { cloneDeep, debounce } from "lodash-es"
 import { getEnhanceExpDataApi } from "@/common/apis/enhanceexp"
@@ -180,10 +180,48 @@ function setPrice(row: Calculator) {
 const onPriceStatusChange = usePriceStatus("enhanceexp-price-status")
 const { t } = useI18n()
 /**
- * 说明文案：key 采用项目统一的 `#` 前缀（说明性词条）。
- * zh-cn 未收录时 vue-i18n 会回落显示 key 本身，这里去掉前导 `#`，保证中文界面文案干净。
+ * 本页说明文案。
+ *
+ * 原先直接当成一大段文字（约 190 字）铺在页面顶部，把 GameInfo 那一行挤得很难看 ——
+ * 现改为「标题 + 问号图标」的悬停提示，与市场监控等页面的做法一致。
+ * key 用项目统一的说明性词条；zh-cn 未收录时 vue-i18n 回落显示 key 本身。
  */
 const levelingTip = computed(() => t("强化练级说明"))
+
+/**
+ * 当前生效的「本页专用筛选」，用于在界面上显式列出。
+ *
+ * 为什么必须显式列出来：本页默认按「每次经验成本」**升序**，而赚钱方案的净成本为负、
+ * 本来就排在最前面 —— 于是勾上「仅看赚钱方案」之后，**第 1 页的内容可能一模一样**，
+ * 只有分页器右下角的总数变了，实测极易被误判成「勾了没生效」。
+ * 把生效条件与命中条数摆在表格上方，效果就一眼可见。
+ */
+const activeFilters = computed(() => {
+  const d = ldSearchData.value
+  const list: string[] = []
+  if (d.onlyProfitable) {
+    list.push(t("仅看赚钱方案"))
+  }
+  if (d.minExp != null && d.minExp !== "") {
+    list.push(`${t("最少经验")} ≥ ${Format.number(Number(d.minExp), 0)}`)
+  }
+  if (d.maxCostPerExp != null && d.maxCostPerExp !== "") {
+    list.push(`${t("每次经验成本")} ≤ ${Format.number(Number(d.maxCostPerExp), 0)}`)
+  }
+  if (d.banEquipment) {
+    list.push(t("排除装备"))
+  }
+  if (d.banJewelry) {
+    list.push(t("排除首饰"))
+  }
+  if (d.banCombat) {
+    list.push(t("排除战斗装备"))
+  }
+  if (d.banLife) {
+    list.push(t("排除生活装备"))
+  }
+  return list
+})
 </script>
 
 <template>
@@ -196,8 +234,16 @@ const levelingTip = computed(() => t("强化练级说明"))
 
       <PriceStatusSelect @change="onPriceStatusChange" />
 
-      <div>
-        {{ levelingTip }}
+      <div class="flex items-center gap-1">
+        <span class="text-sm">{{ t("强化练级") }}</span>
+        <el-tooltip placement="top" effect="light" :show-after="120">
+          <template #content>
+            <div class="max-w-420px leading-5">{{ levelingTip }}</div>
+          </template>
+          <el-icon class="cursor-help color-gray-400">
+            <QuestionFilled />
+          </el-icon>
+        </el-tooltip>
       </div>
     </div>
     <el-row :gutter="20" class="row">
@@ -213,6 +259,21 @@ const levelingTip = computed(() => t("强化练级说明"))
             />
           </template>
           <template #default>
+            <!-- 生效中的筛选 + 命中条数：本页默认排序已把赚钱方案排在最前，
+                 勾「仅看赚钱方案」后第 1 页可能完全没变，不显式说明就会被当成「没生效」 -->
+            <div v-if="activeFilters.length" class="active-filters">
+              <span class="active-filters-label">{{ t("已筛选") }}</span>
+              <el-tag
+                v-for="f in activeFilters"
+                :key="f"
+                size="small"
+                type="warning"
+                effect="plain"
+              >
+                {{ f }}
+              </el-tag>
+              <span class="active-filters-count">{{ t("命中 {0} 条", [paginationDataLD.total]) }}</span>
+            </div>
             <el-table :data="leaderboardData" v-loading="loadingLD" :row-class-name="rowClassName" @sort-change="handleSortLD">
               <el-table-column width="54" fixed="left">
                 <template #default="{ row }">
@@ -317,6 +378,22 @@ const levelingTip = computed(() => t("强化练级说明"))
 }
 .red {
   color: #f56c6c;
+}
+// 生效中的筛选提示条
+.active-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.active-filters-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.active-filters-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .success {
   color: #67c23a;

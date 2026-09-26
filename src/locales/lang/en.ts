@@ -339,6 +339,9 @@ export default {
   "纯消耗": "Pure Cost",
   "仅看赚钱方案": "Profitable Only",
   "最少经验": "Min EXP",
+  // 生效中的筛选提示条（本页默认排序已把赚钱方案排最前，必须显式说明筛选确实生效了）
+  "已筛选": "Filters:",
+  "命中 {0} 条": "{0} match(es)",
   "强化练级说明": "Level up by enhancing: plans are ranked by Cost per EXP (lower is better). Total EXP = attempts x EXP per enhance; Net Cost = total material cost - sale value of the enhanced gear. A negative net cost means the gear sells for more than the whole investment, so you gain EXP and profit at the same time; those plans are highlighted and listed first.",
 
   // 开源公告
