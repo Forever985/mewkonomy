@@ -867,26 +867,33 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 ### 26.1 交互形态（用户确认）
 
 - **位置**：每一行（每个项目）的最后，与「查看」并排
-- **行为**：纯路由跳转，**不带任何参数**
-- **覆盖**：11 个含强化功能的利润页（强化工具页本身除外）
+- **行为**：跳转到强化计算页，**并把当前行的装备带过去**（写 `enhancerStore.config.hrid`）
+- **覆盖**：11 个含强化功能的利润页（强化页本身除外）
 
-### 26.2 为什么**不传装备 hrid**
+### 26.2 这里曾经做错过一次（重要教训）
 
-用户原话：「跳转之后就是强化页的了，强化页的配置在利润网本身自己是提前设置好的。
-这点你求证一下，并非带过去，而是本身就是有的，是玩家每个预设写好的。」
+首次实现是**纯路由跳转、不带任何参数**，当时的理由是：
 
-**求证结果：用户完全正确。** `pinia/stores/enhancer.ts:91`：
+> 强化页的配置本来就持久化在 localStorage（`pinia/stores/enhancer.ts:91`），
+> 是玩家每个预设写好的。传参过去反而会覆盖它。
 
-```ts
-return JSON.parse(localStorage.getItem(`${KEY_PREFIX}config`) || "{}")
-```
+**这个推理是错的**，而且错在一个很典型的点上：
+它只证明了「**持久化存在**」，却没回答「**持久化的值是不是用户此刻想看的那一件**」。
 
-整套配置（`hrid` / `originLevel` / `enhanceLevel` / `escapeLevel` / `hourlyRate` / `taxRate`，
-见 `EnhancerConfig` 定义 `:73-81`）**本来就持久化在 localStorage**，
-是玩家自己调好的预设。传参过去反而会覆盖它。
+用户后来说得更直接：
 
-这与 `usePriceStatus` 是同一类思路：**用 store 隐式带状态，而不是往地址栏塞参数**
-（地址栏会暴露在分享链接与浏览器历史里）。
+> 「我要去强化，那么我点了之后，我要能在强化里面看到我要强化的这个东西。
+> 不然我点了干嘛，不还得我手动输入一遍？」
+
+⇒ 点的是**某一行**，期望看到的就是**那一件**。
+只跳不带 ⇒ 看到的是上次残留的装备 ⇒ 还得手动重选 ⇒ **这个按钮没有意义**。
+
+**修正后的做法**（见 §二十八）：只覆盖 `hrid`，其余配置保持玩家预设不变，
+既满足「看到这一件」，又不抹掉玩家调好的计算条件。
+
+⇒ **教训**：论证「要不要覆盖已持久化的状态」时，
+「状态已持久化」**不构成**「不该覆盖」的充分理由，还要问一句：
+**这个持久化的值，是用户此刻想要的吗？**
 
 ### 26.3 实现
 
@@ -907,7 +914,7 @@ function gotoEnhancer() {
 `enhanposer`、`enhanposer/enhanposest`、`enhanceexp`、`inherit`、`manualchemy`。
 
 图标用 `MagicStick`（强化页路由 `meta.elIcon` 用的就是它，chainbuilder 也在用）。
-链接带 tooltip 说明「只跳转、不会覆盖你的预设」。
+链接带 tooltip 说明「自动选中这一行的装备，计算条件沿用你的预设」。
 
 ### 26.4 验证
 
@@ -956,3 +963,72 @@ function gotoEnhancer() {
 （39 CRLF + 9 mixed），其余 296 个只是被列出、内容不变。
 按「最小变更」原则本次不执行 ⇒ 那 48 个继续以 CRLF/mixed 存索引。
 代价：别的平台 clone 会看到整文件行尾变化。**若要归一，单独提一个 commit 更清晰。**
+
+## 二十八、「去强化」带上当前行的装备（2026-10-03 修正）
+
+起因：用户反馈「『去强化』这个 icon 做的不错……只是没有带进去啊。
+我能理解吗，就是我要去强化，那么我点了之后，我要能在强化里面看到我要强化的这个东西。
+不然我点了干嘛，不还得我手动输入一遍？」
+
+⇒ 首次实现（`f0af1b2`）只做 `router.push({ name: "Enhancer" })`（**不传参**）是**错的**，
+错因见 §26.2。
+
+### 28.1 机制（全部实测确认）
+
+| 事实 | 位置 |
+| --- | --- |
+| `enhancerStore.hrid` 是 `config.hrid` 的 **getter**（同一个值） | `pinia/stores/enhancer.ts:67` |
+| 强化页挂载时读它并自动选中装备 | `pages/enhancer/index.vue:61-63`：`onMounted(() => { enhancerStore.hrid && onSelect(getItemDetailOf(enhancerStore.hrid)) })` |
+| 每行的 `row.hrid` 现成可用 | 模板里已在用：`jungle/index.vue:155` 的 `<ItemIcon :hrid="row.hrid" />` |
+| `Calculator` 实例的 `hrid` 来自构造参数第��项 | `src/calculator/index.ts:40-42` |
+
+⇒ **跳转前写 `config.hrid = row.hrid`，强化页挂载时自己就会选中那一件。**
+
+### 28.2 实现
+
+```ts
+// useLeaderboardPage（8 个页面共用）+ 3 个手写页各一份
+function gotoEnhancer(row: Calculator) {
+  if (row?.hrid) {
+    useEnhancerStoreOutside().config.hrid = row.hrid
+  }
+  router.push({ name: "Enhancer" })
+}
+```
+
+**新增 `useEnhancerStoreOutside()`**（`pinia/stores/enhancer.ts`）——
+composable / 路由跳转这类**组件 setup 之外**的场景拿不到当前 pinia 实例，
+必须显式传应用级 `pinia`。写法与既有的 `usePlayerStoreOutside` 一致。
+
+模板 12 处由 `@click="gotoEnhancer()"` 改为 `@click="gotoEnhancer(row)"`。
+
+### 28.3 为什么**只**覆盖 hrid，其余不动
+
+起始/目标等级、逃逸等级、时薪、税率、件数、期望成功次数
+都是玩家自己调好的**计算条件**，换了装备后沿用同一套才有可比性。
+全覆盖等于抹掉玩家的预设。
+
+持久化会同步落盘（`config` 有 `deep watch` → `saveConfig`），
+但这与「在强化页手动选装备」的结果完全一致 —— 都是「最后一次看的装备」，
+**刻意保持同步，不引入一次性状态**。
+
+### 28.4 验证（四层）
+
+| 层 | 结果 |
+| --- | --- |
+| `vue-tsc` | **0 报错** |
+| `vitest` | **37 文件 / 336 用例全绿** |
+| `vite build --mode public` | 成功；产物中 `config.hrid` 命中 6 个 chunk、新文案命中 1 个 |
+| dev server 编译 | 7 个相关模块全部 **HTTP 200** |
+| **运行时链路**（最关键） | 编译产物里逐段确认：<br>① `gotoEnhancer(row)` 里 `useEnhancerStoreOutside().config.hrid = row.hrid`<br>② store 产物里 `hrid` getter + `useEnhancerStoreOutside` 各 1 处<br>③ 强化页产物里 `onMounted(() => { enhancerStore.hrid && onSelect(...) }`<br>④ 模板 4 个抽验页均传 `row` |
+
+### 28.5 顺带修正的过时表述（9 处）
+
+首次实现把「不传参」的理由写进了 **3 处代码注释 + 6 处文档**
+（`AI_CONTEXT §20.6`、`PROJECT_CONTEXT §26.1/26.2/26.3`、tooltip 文案）。
+本轮全部改为「带 hrid」的正确描述；§26.2 保留**旧说法的引用**作为历史记录
+（那节本身就是记录这个错误的），并补上教训。
+
+tooltip 文案也改了：原来写「只跳转、不会覆盖你的预设」（与新行为相反），
+现为「自动选中**这一行**的装备。起始与目标等级、逃逸等级、时薪、税率等
+计算条件沿用你自己设的预设，不受影响」。

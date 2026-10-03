@@ -292,7 +292,7 @@ const {
                     <template #content>
                       <div class="max-w-320px leading-5">{{ t('去强化说明') }}</div>
                     </template>
-                    <el-link type="warning" :icon="MagicStick" @click="gotoEnhancer()">
+                    <el-link type="warning" :icon="MagicStick" @click="gotoEnhancer(row)">
                   {{ t('去强化') }}
                   </el-link>
                   </el-tooltip>

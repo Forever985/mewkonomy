@@ -1,4 +1,5 @@
 import { defineStore } from "pinia"
+import { pinia } from "@/pinia"
 import { getItemDetailOf } from "@/common/apis/game"
 
 export const useEnhancerStore = defineStore("enhancer", {
@@ -69,6 +70,16 @@ export const useEnhancerStore = defineStore("enhancer", {
     escapeLevel: state => state.config.escapeLevel
   }
 })
+
+/**
+ * 在**组件 setup 之外**使用本 store（路由跳转、composable 等场景）。
+ *
+ * 与 `usePlayerStoreOutside` 等同款写法：pinia 在组件外拿不到当前实例，
+ * 必须显式传入应用级 `pinia`。
+ */
+export function useEnhancerStoreOutside() {
+  return useEnhancerStore(pinia)
+}
 
 export interface EnhancerConfig {
   escapeLevel?: number

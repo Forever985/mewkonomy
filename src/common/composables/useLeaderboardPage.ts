@@ -8,6 +8,7 @@ import { normalizeSearchData } from "./useSearchPanel"
 import { usePriceStoreOutside } from "@/pinia/stores/price"
 import { useGameStoreOutside } from "@/pinia/stores/game"
 import { usePlayerStoreOutside } from "@/pinia/stores/player"
+import { useEnhancerStoreOutside } from "@/pinia/stores/enhancer"
 import { useRouter } from "vue-router"
 import { cloneDeep, debounce } from "lodash-es"
 import { ElMessageBox } from "element-plus"
@@ -194,21 +195,49 @@ export function useLeaderboardPage<T extends PanelSearchData>(options: UseLeader
     priceVisible.value = true
   }
 
-  // ── 跳到强化计算页 ─────────────────────────────────────────────────
+  // ── 跳到强化计算页（带上当前行的装备）──────────────────────────────
   /**
-   * 「到强化计算页查看」：每行最后一个入口。
+   * 「去强化」：跳到强化计算页，**并把当前行的装备带过去**。
    *
-   * ## 为什么**不传任何参数**
+   * ## 为什么必须带 hrid
    *
-   * 强化页的整套配置（装备 hrid / 起始等级 / 目标等级 / 逃逸等级 / 时薪 / 税率）
-   * 本来就持久化在 `pinia/stores/enhancer.ts` 的 `config` 里（`saveConfig` 写
-   * localStorage），**是玩家自己每个预设调好的**。所以这里只做路由跳转 ——
-   * 传参过去反而会覆盖掉人家精心设好的预设。
+   * 用户点的是**某一行**（某件装备的利润方案），期望在强化页看到的就是**那一件**。
+   * 只跳不带的��，玩家看到的是上次残留的装备，还得手动重选一遍 ——
+   * 那这个按钮就没有意义了。
    *
-   * 这与 `usePriceStatus` 是同一类思路：**用 store 隐式带状态，而不是往地址栏塞参数**
-   * （地址栏会暴露在分享链接与浏览器历史里）。
+   * ## 为什么用 store 而不是地址栏
+   *
+   * `enhancerStore.hrid` 是 `config.hrid` 的 getter（`stores/enhancer.ts:67`），
+   * 强化页 `onMounted` 会读它并自动选中：
+   *
+   * ```ts
+   * // pages/enhancer/index.vue:61-63
+   * onMounted(() => {
+   *   enhancerStore.hrid && onSelect(getItemDetailOf(enhancerStore.hrid))
+   * })
+   * ```
+   *
+   * ⇒ 跳转前写好 `config.hrid`，强化页挂载时自己就会选中。
+   * 状态走全局 store，**地址栏保持干净**（不暴露在分享链接与浏览器历史里），
+   * 这与 `usePriceStatus` 是同一思路。
+   *
+   * ## 为什么**只**覆盖 hrid，其余配置保持不动
+   *
+   * 起始/目标等级、逃逸等级、时薪、税率、件数、期望成功次数
+   * 都是玩家自己调好的**计算条件**，换了装备后沿用同一套条件才有可比性。
+   * 全覆盖等于把玩家的预设抹掉。
+   *
+   * ## 持久化会不会污染下一次
+   *
+   * 会（`config` 有 watch 落盘），但这与「在强化页手动选装备」的结果完全一致 ——
+   * 都是「最后一次看的装备」。刻意保持同步，不额外引入一次性状态。
+   *
+   * @param row 当前表格行（`Calculator`）。它的 `hrid` 就是该行物品的 hrid。
    */
-  function gotoEnhancer() {
+  function gotoEnhancer(row: Calculator) {
+    if (row?.hrid) {
+      useEnhancerStoreOutside().config.hrid = row.hrid
+    }
     router.push({ name: "Enhancer" })
   }
 

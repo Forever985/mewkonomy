@@ -28,6 +28,7 @@ import GameInfo from "./components/GameInfo.vue"
 import ManualPriceCard from "./components/ManualPriceCard.vue"
 import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 import { useRouter } from "vue-router"
+import { useEnhancerStoreOutside } from "@/pinia/stores/enhancer"
 
 // #region 查
 const favoriteStore = useFavoriteStore()
@@ -305,13 +306,28 @@ const router = useRouter()
 const onPriceStatusChange = usePriceStatus("dashboard-price-status")
 // 离开页面时重置
 /**
- * 跳到强化计算页。
+ * 「去强化」：跳到强化计算页，**并把当前行的装备带过去**。
  *
- * **不传任何参数**：强化页的配置（装备 / 起始与目标等级 / 逃逸等级 / 时薪 / 税率）
- * 本来就持久化在 `pinia/stores/enhancer.ts` 里，是玩家自己调好的预设，
- * 传参过去反而会覆盖它。
+ * 用户点的是某一行（某件装备的利润方案），期望在强化页看到的就是那一件 ——
+ * 只跳不带的话看到的还是上次残留的装备，还得手动重选，这个按钮就没意义了。
+ *
+ * `enhancerStore.hrid` 是 `config.hrid` 的 getter（`stores/enhancer.ts:67`），
+ * 强化页 `onMounted` 会读它并自动选中（`pages/enhancer/index.vue:61-63`）：
+ *
+ *     onMounted(() => {
+ *       enhancerStore.hrid && onSelect(getItemDetailOf(enhancerStore.hrid))
+ *     })
+ *
+ * ⇒ 跳转前写好 `config.hrid`，强化页挂载时自己就会选中。
+ * 状态走全局 store，**地址栏保持干净**。
+ *
+ * 只覆盖 hrid：起始/目标等级、逃逸等级、时薪、税率等**是玩家调好的计算条件**，
+ * 换了装备后沿用同一套条件才有可比性，全覆盖等于抹掉玩家的预设。
  */
-function gotoEnhancer() {
+function gotoEnhancer(row: Calculator) {
+  if (row?.hrid) {
+    useEnhancerStoreOutside().config.hrid = row.hrid
+  }
   router.push({ name: "Enhancer" })
 }
 
@@ -459,7 +475,7 @@ function gotoEnhancer() {
                     <template #content>
                       <div class="max-w-320px leading-5">{{ t('去强化说明') }}</div>
                     </template>
-                    <el-link type="warning" :icon="MagicStick" @click="gotoEnhancer()">
+                    <el-link type="warning" :icon="MagicStick" @click="gotoEnhancer(row)">
                   {{ t('去强化') }}
                   </el-link>
                   </el-tooltip>
@@ -551,7 +567,7 @@ function gotoEnhancer() {
                   <el-link type="primary" :icon="Search" @click="showDetail(row)">
                     {{ t('查看') }}
                   </el-link>
-                  <el-link type="warning" :icon="MagicStick" @click="gotoEnhancer()">
+                  <el-link type="warning" :icon="MagicStick" @click="gotoEnhancer(row)">
                   {{ t('去强化') }}
                   </el-link>
                 </template>
