@@ -113,6 +113,10 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
     - 零依赖的纯工具要单独成文件（如 `marketvolume/keys.ts`），需要它的 store / 纯函数模块**直接从该文件引**，不要走 barrel；
     - 测试里若要 **真数据**，顺序必须是「**先写 localStorage → 再建 store → 最后动态 import 数据层**」。静态 import 任何会拉到 game 的模块都会先于播种执行。
 12. **给 store 的状态赋值时不要用「展开 reactive 对象」构造新值**：`@/common/apis/game` 的模块级 watch 会做 `structuredClone(toRaw(store.marketData))`，而 `toRaw` **只解顶层**——`{ ...store.marketData }` 这类写法会把嵌套的 reactive 代理对象原样带进新值，于是直接抛 `DataCloneError: #<Object> could not be cloned`。要改市场数据请赋一个**全新字面量**（或先 `toRaw` 再逐层处理），别从 `store.xxx` 上展开。
+13. **本机 `git push` / `git fetch` 到 GitHub 会失败，不是仓库的问题**（2026-10-03 实测）：出口代理（`HTTP_PROXY=http://127.0.0.1:13923`）对 **`github.com` 返回 `CONNECT tunnel failed, response 502`**，而绕过代理直连是 `Failed to connect to github.com:443`（本机无直连出口）。同一代理对 **`api.github.com` 返回 200**、`codeload.github.com` 301 —— 即**按域名白名单放行**，`github.com` 不在名单里。
+    - 因此**不要反复重试 `git push`**，也不用怀疑凭据（`credential.helper=store`，`~/.git-credentials` 存在）。
+    - 提交照常在本地做；推送交给仓库根目录的 **`一键推送.bat`**（双击即可；会 flush DNS、列出待推提交、`git push`，失败时自动清空代理变量重试一次，并打印可操作的排查提示）。
+    - 附带发现：仓库里有一个**损坏的 git 对象** —— `assets/vue-8ikB7t_e.js` 的 blob（`git fsck` 报 `missing blob`，`git fetch` 收尾的 `geometric-repack` 会因此报错）。它是历史误提交的构建产物，已被删除出当前树；**旧提交仍引用它**，如需彻底修复得从远端重新取回该对象。
 
 ## 7. 常规工作流（AI 接手后）
 
