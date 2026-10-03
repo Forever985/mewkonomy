@@ -79,6 +79,32 @@ function fieldLabel(field: { label: string, labelPrefix?: string, labelSuffix?: 
   return `${field.labelPrefix ?? ""}${t(field.label)}${field.labelSuffix ?? ""}`
 }
 
+/**
+ * 该字段配了的术语说明，转成 `title` 属性可用的**纯文本**；没配则返回 undefined。
+ *
+ * ## 为什么用 `title` 而不是「问号 + el-tooltip」
+ *
+ * `el-form-item` 的 `label` prop 内部是字符串拼接，塞不进图标；要放图标就得改用
+ * `#label` 插槽。但实测那会**打断 Vue 对 `v-if / v-else-if` 链的判别式联合收窄**
+ * —— vue-tsc 随即报出一堆「field.fields / field.options 不存在」的假错误
+ * （HEAD 基线是 0 条）。所以这里选 `title`：
+ *   - HTML 原生属性，**不参与模板类型分析**，零风险；
+ *   - 悬停即现，不必点问号，也不用等 tooltip 的 show-after。
+ *
+ * 代价：`title` 只能纯文本，所以要把文案里的 `<br>` / `<strong>` 去掉。
+ * 表格列头那边不受影响 —— 那些用 `v-html` + `el-tooltip`，富文本照常渲染。
+ */
+function fieldTitleOf(field: PanelField): string | undefined {
+  if (!field.tip) {
+    return undefined
+  }
+  return t(field.tip)
+    .replace(/<br\s*\/?>/gi, " ⏎ ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+}
+
 /** 求出可选项数组（支持传函数，便于用页面里已有的 computed） */
 function resolveOptions(source: PanelProjectOptions | Array<{ label: string, value: string | number }> | (() => Array<{ label: string, value: string | number }> | string[])): any[] {
   const raw = typeof source === "function" ? source() : source
@@ -141,7 +167,7 @@ defineExpose({ sortPriorityRef })
     <template v-for="(field, fi) in fields" :key="fi">
       <template v-if="!field.when || field.when()">
         <!-- 物品名多选（可自由输入） -->
-        <el-form-item v-if="field.type === 'name'" prop="name" :label="fieldLabel(field)">
+        <el-form-item v-if="field.type === 'name'" prop="name" :label="fieldLabel(field)" :title="fieldTitleOf(field)">
           <el-select
             v-model="(modelValue[field.key] as any)"
             multiple
@@ -160,6 +186,7 @@ defineExpose({ sortPriorityRef })
         <el-form-item
           v-else-if="field.type === 'conditions'"
           :label="fieldLabel(field)"
+          :title="fieldTitleOf(field)"
           style="width:100%; margin-right:0;"
         >
           <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
@@ -252,6 +279,7 @@ defineExpose({ sortPriorityRef })
         <el-form-item
           v-else-if="field.type === 'excludes'"
           :label="fieldLabel(field)"
+          :title="fieldTitleOf(field)"
           style="width:100%; margin-right:0;"
         >
           <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
@@ -311,7 +339,7 @@ defineExpose({ sortPriorityRef })
           `minKey` / `maxKey` 两个平铺字段，所以 `handleSearch` 的旧读法、
           页面声明、以及已存在用户本地的旧条件都不受影响。
         -->
-        <el-form-item v-else-if="field.type === 'range'" :label="fieldLabel(field)">
+        <el-form-item v-else-if="field.type === 'range'" :label="fieldLabel(field)" :title="fieldTitleOf(field)">
           <RangeFilter
             :model-value="rangeOf(field)"
             label=""
@@ -338,7 +366,7 @@ defineExpose({ sortPriorityRef })
         </el-form-item>
 
         <!-- 下拉 -->
-        <el-form-item v-else-if="field.type === 'select'" :label="fieldLabel(field)">
+        <el-form-item v-else-if="field.type === 'select'" :label="fieldLabel(field)" :title="fieldTitleOf(field)">
           <el-select
             v-model="(modelValue[field.key] as any)"
             :style="{ width: `${field.width || 150}px` }"
@@ -354,7 +382,7 @@ defineExpose({ sortPriorityRef })
         </el-form-item>
 
         <!-- 排序优先级 -->
-        <el-form-item v-else-if="field.type === 'sort'" :label="fieldLabel(field)">
+        <el-form-item v-else-if="field.type === 'sort'" :label="fieldLabel(field)" :title="fieldTitleOf(field)">
           <SortPriority
             ref="sortPriorityRef"
             v-model="(modelValue[field.key] as any)"

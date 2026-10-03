@@ -91,6 +91,7 @@ const mainPanelFields: PanelField[] = [
   {
     type: "conditions",
     label: "条件",
+    tip: "条件说明",
     projectOptions,
     stepsCount: 10,
     stepsWidth: 110,
@@ -104,6 +105,7 @@ const mainPanelFields: PanelField[] = [
   {
     type: "range",
     label: "要求等级",
+    tip: "要求等级说明",
     minKey: "minLevel",
     maxKey: "maxLevel",
     min: 0,
@@ -114,6 +116,7 @@ const mainPanelFields: PanelField[] = [
   {
     type: "range",
     label: "利润率",
+    tip: "利润率说明",
     minKey: "minProfitRate",
     maxKey: "maxProfitRate",
     min: 0,
@@ -124,6 +127,7 @@ const mainPanelFields: PanelField[] = [
   {
     type: "range",
     label: "风险",
+    tip: "风险说明",
     minKey: "minRisk",
     maxKey: "maxRisk",
     min: 0,
@@ -133,6 +137,7 @@ const mainPanelFields: PanelField[] = [
   {
     type: "excludes",
     label: "排除",
+    tip: "排除说明",
     projectOptions,
     namePlaceholder: "排除的产品名",
     projectPlaceholder: "排除的生产动作，留空=该产品全部"

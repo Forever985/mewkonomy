@@ -69,6 +69,7 @@ const panelFields: PanelField[] = [
   {
     type: "conditions",
     label: "条件",
+    tip: "条件说明",
     projectOptions,
     stepsCount: 10,
     stepsWidth: 92,
@@ -79,6 +80,7 @@ const panelFields: PanelField[] = [
   {
     type: "range",
     label: "利润率",
+    tip: "利润率说明",
     minKey: "minProfitRate",
     maxKey: "maxProfitRate",
     min: 0,

@@ -76,6 +76,7 @@ const panelFields: PanelField[] = [
   {
     type: "conditions",
     label: "条件",
+    tip: "条件说明",
     projectOptions,
     stepsCount: 20,
     stepLabel: n => `${t("目标等级")} ${n}`
@@ -83,6 +84,7 @@ const panelFields: PanelField[] = [
   {
     type: "range",
     label: "目标等级从",
+    tip: "目标等级说明",
     minKey: "minLevel",
     maxKey: "maxLevel",
     min: 1,
@@ -98,6 +100,7 @@ const panelFields: PanelField[] = [
   {
     type: "range",
     label: "利润率",
+    tip: "利润率说明",
     minKey: "minProfitRate",
     maxKey: "maxProfitRate",
     min: 0,
@@ -108,6 +111,7 @@ const panelFields: PanelField[] = [
   {
     type: "excludes",
     label: "排除",
+    tip: "排除说明",
     projectOptions,
     namePlaceholder: "排除的产品名",
     projectPlaceholder: "排除的生产动作，留空=该产品全部"
@@ -189,11 +193,11 @@ const panelFields: PanelField[] = [
                 <template #header>
                   <div style="display: flex; justify-content: center; align-items: center; gap: 5px">
                     <div>{{ t('风险系数') }}</div>
-                    <el-tooltip placement="top" effect="light">
+                    <el-tooltip placement="top" effect="light" :show-after="120">
                       <template #content>
-                        {{ t('损耗 ÷ 利润') }}
+                        <div class="max-w-380px leading-5" v-html="t('风险系数说明')" />
                       </template>
-                      <el-icon>
+                      <el-icon class="cursor-help color-gray-400">
                         <Warning />
                       </el-icon>
                     </el-tooltip>

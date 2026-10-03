@@ -104,6 +104,7 @@ const panelFields: PanelField[] = [
   {
     type: "conditions",
     label: "只看目标等级",
+    tip: "只看目标等级说明",
     stepsCount: 20,
     stepLabel: n => `${t("目标等级")} ${n}`,
     levelRange: { min: 1, max: 20, placeholderMin: "1", placeholderMax: "20" }
@@ -111,6 +112,7 @@ const panelFields: PanelField[] = [
   {
     type: "range",
     label: "利润率",
+    tip: "利润率说明",
     minKey: "minProfitRate",
     maxKey: "maxProfitRate",
     min: 0,
@@ -121,6 +123,7 @@ const panelFields: PanelField[] = [
   {
     type: "range",
     label: "风险",
+    tip: "风险说明",
     minKey: "minRisk",
     maxKey: "maxRisk",
     min: 0,

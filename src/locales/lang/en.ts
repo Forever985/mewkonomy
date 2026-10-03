@@ -672,4 +672,6 @@ export default {
   "接近": "Near",
   "前 N": "Top N",
   "后 N": "Bottom N",
+  "风险系数说明": "Risk = equipment loss ÷ profit. The numerator is how much value the gear loses per hour when enhancement fails and the item steps down; the denominator is how much you earn per hour. It answers one question: is your earning speed keeping up with your gear's depreciation? <br>How to read: below 5 is green (safe), 5–7 uncoloured (elevated), above 7 is red (dangerous). Below 1 means you earn more than you lose, so the gear appreciates. 1 is break-even. <br>Note: it is near 0 for non-enhancement actions (gathering, crafting, alchemy) because no gear steps down there. The column is blank when profit is negative, where the ratio stops being meaningful.",
+  "损耗说明": "Loss / h is the hourly equipment depreciation. It is only significant for enhancement schemes, where it is estimated as the worst case: every attempt fails and the item falls all the way to the escape level. Read it as a stress test of the downside.",
 }

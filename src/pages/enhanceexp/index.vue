@@ -113,6 +113,7 @@ const panelFields: PanelField[] = [
   {
     type: "conditions",
     label: "只看目标等级",
+    tip: "只看目标等级说明",
     stepsCount: 20,
     stepLabel: n => `${t("目标等级")} ${n}`,
     levelRange: { min: 1, max: 20, placeholderMin: "1", placeholderMax: "20" },

@@ -57,6 +57,7 @@ const panelFields: PanelField[] = [
   {
     type: "conditions",
     label: "条件",
+    tip: "条件说明",
     projectOptions,
     stepsCount: 20,
     stepLabel: n => `${t("目标等级")} ${n}`
@@ -64,6 +65,7 @@ const panelFields: PanelField[] = [
   {
     type: "range",
     label: "目标等级从",
+    tip: "目标等级说明",
     minKey: "minLevel",
     maxKey: "maxLevel",
     min: 1,
@@ -77,6 +79,7 @@ const panelFields: PanelField[] = [
   {
     type: "range",
     label: "利润率",
+    tip: "利润率说明",
     minKey: "minProfitRate",
     maxKey: "maxProfitRate",
     unit: "%",
@@ -86,6 +89,7 @@ const panelFields: PanelField[] = [
   {
     type: "excludes",
     label: "排除",
+    tip: "排除说明",
     projectOptions,
     namePlaceholder: "排除的产品名",
     projectPlaceholder: "排除的生产动作，留空=该产品全部"
