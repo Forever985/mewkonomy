@@ -665,4 +665,7 @@ export default {
   "被兜底替代的价格会在物品旁标注来源，不会伪装成市场成交价。": "Prices replaced by a fallback are labelled with their source; they never masquerade as market trades.",
   "市价缺失时（左价/右价各 -1）按下面的顺序找替代价。左右两侧完全独立，想让哪一侧兜底就单独设哪一侧。": "When a side has no market price (both -1), substitutes are looked up in the order below. The two sides are fully independent - configure whichever side you want.",
   "该侧市场无价，借用了另一端的市价（方向相反，仅供参考）": "This side has no market price; the other side's price was borrowed (opposite direction, for reference only)",
+  "搜索语法说明": "Search tips: space = match all words, | = match any, quote for phrases. Prefix with 名称:/name:, 分类:/category:, 动作:/project:, hrid: to restrict the field. All three languages are searched at once.",
+  "结果计数": "{n} items",
+  "重置筛选": "Reset filters",
 }

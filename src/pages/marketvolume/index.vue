@@ -1,12 +1,14 @@
 <script lang="ts" setup>
-import { getMarketVolumeList, getMarketCategoryOptions, getMarketVolumeSummary, sortMarketVolumeRows, enhanceLevelSuffix, marketRowKeyOf, MARKET_VOLUME_SORT_KEYS, type MarketVolumeItem, type MarketVolumeSortKey } from "@/common/apis/marketvolume"
-import { MARKET_RANGE_FIELDS, applyRangeFilters, countActiveRanges, createEmptyRanges, rangeValueOf, type MarketRanges } from "@/common/apis/marketvolume/filters"
+import { getMarketVolumeList, getMarketCategoryOptions, getMarketVolumeSummary, enhanceLevelSuffix, marketRowKeyOf, MARKET_VOLUME_SORT_KEYS, type MarketVolumeItem, type MarketVolumeSortKey } from "@/common/apis/marketvolume"
+import { MARKET_RANGE_FIELDS, countActiveRanges, createEmptyRanges, type MarketRanges } from "@/common/apis/marketvolume/filters"
+import { applySort, buildTextQuery, compileQuery, type RangeQuery, type SortSpec } from "@/common/utils/query-engine"
+import { aliasSearchTextOf, buildAliasIndex } from "@/common/utils/multilang-search"
 import { ALERT_METRICS, alertKeyOf, createEmptyRule, evaluateAlerts, evaluateAlertsByRule, type AlertHit, type AlertMetric, type AlertRule } from "@/common/apis/marketvolume/alerts"
 import { recordLocalSample, loadMarketHistory, getMarketChangeMap, getLocalSampleCount, getLastSampleTime, hasRemoteHistory, getHistorySpanHours, getRemoteSampleCount, getVolumeRateDetail, getRollingVolumeDetail, type MarketChangeMetric } from "@/common/apis/marketvolume/history"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import RangeFilter from "@@/components/RangeFilter/index.vue"
 import * as Format from "@@/utils/format"
-import { QuestionFilled, Star, StarFilled } from "@element-plus/icons-vue"
+import { QuestionFilled, Search, Star, StarFilled } from "@element-plus/icons-vue"
 import { useAlertStore } from "@/pinia/stores/alert"
 import { useGameStoreOutside } from "@/pinia/stores/game"
 import { useMarketFavoriteStore } from "@/pinia/stores/marketfavorite"
@@ -281,46 +283,163 @@ function rowKeyOf(row: MarketVolumeItem) {
   return marketRowKeyOf(row.hrid, row.level)
 }
 
+/**
+ * 多语言别名索引：**每个唯一物品名只查一次**翻译表。
+ *
+ * 改造前只匹配 `t(i.name)`（当前语言那一个），于是切到英文界面后
+ * 输「地狱精华」搜不到任何东西。现在三套名一起匹配 ——
+ * 用户知道东西叫什么就能找到，与界面语言无关。
+ */
+const aliasIndex = computed(() => buildAliasIndex(all.value, (i: MarketVolumeItem) => i.name))
+
+/** 某条目用于文本匹配的串：原文 + 全部译名 */
+function searchTextOf(item: MarketVolumeItem): string {
+  return aliasSearchTextOf(aliasIndex.value.get(item.name))
+}
+
+/**
+ * 「有成交」= 今日有累计量，**或**时间窗内有成交。
+ *
+ * 取并集而不是只看滚动量：窗口选小（默认 6 小时）时只看滚动量会把「今天早些
+ * 时候成交过、但最近几小时安静」的物品整批藏掉，默认列表会莫名变短。
+ * 改造前这个判定在 `alerts.ts` 里还被复制了一份（一个取反），现统一走这里。
+ */
+function hasVolumeTurnover(item: MarketVolumeItem): boolean {
+  return item.volume > 0 || (item.volumeRolling ?? 0) > 0
+}
+
+/** 涨跌方向 → 区间条件。用区间表达，省掉三个平铺分支 */
+function changeDirToRange(dir: string): RangeQuery {
+  if (dir === "up") {
+    return { mode: "gte", min: Number.MIN_VALUE }
+  }
+  if (dir === "down") {
+    return { mode: "lte", min: -Number.MAX_VALUE }
+  }
+  if (dir === "flat") {
+    return { mode: "between", min: 0, max: 0 }
+  }
+  return { mode: "any" }
+}
+
+/**
+ * 筛选条件（声明式）。
+ *
+ * 改造前这里是 8 层链式 `.filter()`：每个条件各遍历一次全量（3000+ 行时
+ * 8 次 O(n) 数组分配），且条件散在函数体里、无法统一计数、无法统一重置。
+ * 现在编成一个谓词，按「文本 → 枚举 → 区间 → 自定义」的代价顺序短路求值，
+ * **只遍历一次**。
+ */
+const filterSpec = computed(() => {
+  const r = ranges.value
+  return {
+    text: buildTextQuery(keyword.value, "all", ["name", "hrid"]),
+    oneOf: {
+      category: category.value ? [category.value] : [],
+      level: enhanceLevels.value.length ? enhanceLevels.value : []
+    },
+    range: {
+      // 隐藏小成交量：口径与「成交量」列一致（滚动量优先、回退当日累计量），
+      // 否则会出现「屏幕上写着 0、却因为底层累计量非 0 而被留下」的自相矛盾。
+      volume: marketFilterStore.hideLowVolume
+        ? { mode: "gte" as const, min: marketFilterStore.minVolume }
+        : { mode: "any" as const },
+      changePct: r.changePct.mode !== "any" ? r.changePct : changeDirToRange(changeDir.value),
+      turnover: r.turnover,
+      volumeRate: r.volumeRate,
+      price: r.price
+    },
+    custom: [
+      ...(onlyActive.value ? [hasVolumeTurnover] : []),
+      ...(onlyFavorite.value
+        // 收藏粒度 = 行粒度（物品 + 市场档位），必须用同一个行 key 判断
+        ? [(i: MarketVolumeItem) => favoriteStore.has(i.hrid, i.level)]
+        : [])
+    ]
+  }
+})
+
+/**
+ * 排序规则。
+ *
+ * 改造前走 `sortMarketVolumeRows`（单键、无显式 tiebreaker），同值行的次序取决于
+ * `for...in` 遍历 marketData 的插入顺序 —— 换一批数据顺序就变，用户会以为
+ * 「表头一样但数据跳了」。这里用 `applySort`：唯一键做 tiebreaker，**同样输入必得同样输出**。
+ */
+const sortSpec = computed<SortSpec[]>(() => [{
+  prop: sortKey.value,
+  order: sortOrder.value,
+  value: (i: MarketVolumeItem) => {
+    switch (sortKey.value) {
+      case "name": return i.name
+      case "ask": return i.ask
+      case "bid": return i.bid
+      case "itemLevel": return i.itemLevel
+      default: return (i as any)[sortKey.value]
+    }
+  }
+}])
+
 const filtered = computed(() => {
-  let r = changeApplied.value
-  const kw = keyword.value.trim().toLowerCase()
-  if (kw) {
-    r = r.filter((i) => t(i.name).toLowerCase().includes(kw) || i.hrid.toLowerCase().includes(kw))
+  const spec = filterSpec.value
+  const query = compileQuery<MarketVolumeItem>(
+    spec as any,
+    // 字段取值器：name 走「原文 + 三语别名」，hrid 直接给
+    field => (i: MarketVolumeItem) => (field === "hrid" ? i.hrid : searchTextOf(i))
+  )
+  return applySort(changeApplied.value.filter(query.predicate), sortSpec.value, rowKeyOf)
+})
+
+/**
+ * 已生效的筛选条件数。
+ *
+ * 改造前只有 `activeRangeCount`（5 个区间条件）一个口径，且页面上没有
+ * 「重置全部」入口 —— 用户只能一项项手动关掉。
+ */
+const activeFilterCount = computed(() => {
+  let n = 0
+  if (keyword.value.trim()) {
+    n++
   }
   if (category.value) {
-    r = r.filter((i) => i.category === category.value)
+    n++
   }
   if (enhanceLevels.value.length) {
-    r = r.filter((i) => enhanceLevels.value.includes(i.level))
+    n++
   }
   if (onlyActive.value) {
-    // 「有成交」= 今日有累计量，**或**时间窗内有成交。
-    // 取并集而不是只看滚动量：窗口选小（默认 6 小时）时只看滚动量会把「今天早些
-    // 时候成交过、但最近几小时安静」的物品整批藏掉，默认列表会莫名变短。
-    r = r.filter((i) => i.volume > 0 || (i.volumeRolling ?? 0) > 0)
+    n++
   }
-  if (changeDir.value === "up") {
-    r = r.filter((i) => i.changePct != null && i.changePct > 0)
-  } else if (changeDir.value === "down") {
-    r = r.filter((i) => i.changePct != null && i.changePct < 0)
-  } else if (changeDir.value === "flat") {
-    r = r.filter((i) => i.changePct != null && i.changePct === 0)
+  if (changeDir.value !== "all" && ranges.value.changePct.mode === "any") {
+    n++
   }
   if (onlyFavorite.value) {
-    // 收藏粒度 = 行粒度（物品 + 市场档位），这里必须用同一个行 key 判断
-    r = r.filter((i) => favoriteStore.has(i.hrid, i.level))
+    n++
   }
-  // 持久设置：隐藏小成交量。取值口径与「成交量」列一致（时间窗内滚动量优先、回退当日累计量），
-  // 否则会出现「屏幕上写着 0、却因为底层累计量非 0 而被留下」这种自相矛盾。
   if (marketFilterStore.hideLowVolume) {
-    const min = marketFilterStore.minVolume
-    r = r.filter((i) => (rangeValueOf(i, "volume") ?? 0) >= min)
+    n++
   }
-  // 区间筛选放最后：前面的条件先缩小集合，再逐条比较数值
-  r = applyRangeFilters(r, ranges.value)
-  // 排序规则抽到 API 层（sortMarketVolumeRows），便于单测覆盖 NaN/空值沉底等边界
-  return sortMarketVolumeRows(r, sortKey.value, sortOrder.value, (n) => t(n))
+  return n + activeRangeCount.value
 })
+
+/**
+ * 一键重置**全部**筛选与排序（改造前只有「清空区间」，且 store 的 reset() 是死代码）。
+ *
+ * 注意不动 `marketFilterStore`（隐藏小成交量是长期生效的全局设置），
+ * 只重置这次会话里的临时条件。
+ */
+function resetAllFilters() {
+  keyword.value = ""
+  category.value = ""
+  enhanceLevels.value = []
+  onlyActive.value = false
+  changeDir.value = "all"
+  onlyFavorite.value = false
+  resetRanges()
+  sortKey.value = "volumeRolling"
+  sortOrder.value = "descending"
+  page.value = 1
+}
 
 // 分页：避免全量渲染 3000+ 行
 const page = ref(1)
@@ -686,7 +805,25 @@ function fmtCount(value: number) {
     <el-card class="mt-3">
       <template #header>
         <div class="flex flex-wrap items-center gap-2">
-          <el-input v-model="keyword" :placeholder="t('搜索物品')" clearable style="width: 220px" />
+          <el-input
+            v-model="keyword"
+            :placeholder="t('搜索物品')"
+            clearable
+            style="width: 260px"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <el-tooltip placement="top" effect="light" :show-after="150">
+            <template #content>
+              <div class="max-w-420px leading-5">{{ t("搜索语法说明") }}</div>
+            </template>
+            <el-icon class="cursor-help color-gray-400">
+              <QuestionFilled />
+            </el-icon>
+          </el-tooltip>
+          <span class="text-xs text-gray-400">{{ t("结果计数", { n: total }) }}</span>
           <el-select v-model="category" :placeholder="t('分类')" clearable filterable style="width: 160px">
             <el-option v-for="c in categoryOptions" :key="c" :label="t(c)" :value="c" />
           </el-select>
@@ -725,6 +862,16 @@ function fmtCount(value: number) {
             @click="rangePanelVisible = !rangePanelVisible"
           >
             {{ t("区间筛选") }}<template v-if="activeRangeCount"> ({{ activeRangeCount }})</template>
+          </el-button>
+          <!-- 一键重置全部：改造前只能逐项手动关掉，隐藏的筛选项（如涨跌方向）很容易被漏掉 -->
+          <el-button
+            v-if="activeFilterCount"
+            size="small"
+            type="warning"
+            plain
+            @click="resetAllFilters"
+          >
+            {{ t("重置筛选") }} ({{ activeFilterCount }})
           </el-button>
         </div>
         <div class="flex flex-wrap items-center gap-2 mt-2">

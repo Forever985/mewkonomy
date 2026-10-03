@@ -1,4 +1,6 @@
 import type Calculator from "@/calculator"
+import { buildTextQuery, compileQuery, normalizeTerm, toComparable } from "@/common/utils/query-engine"
+import { allNamesOf, aliasSearchTextOf } from "@/common/utils/multilang-search"
 import { getEquipmentClassOf, isCharm, isJewelry } from "../utils/game"
 
 /**
@@ -127,103 +129,172 @@ export function stepsOfProject(project: string): number {
 }
 
 export function handleSearch(profitList: Calculator[], params: any) {
-  // 多物品名称筛选：name 可为 string 或 string[]，命中任一即保留
+  // ── 改造说明 ──────────────────────────────────────────────────────────────
+  // 改造前这里是 15 个平铺的 `params.x && (list = list.filter(...))`：
+  //   - 每个条件各遍历一次全量。11 个检索页每次检索都是 N 遍 O(n)；
+  //   - 条件散在函数体里，无法统一计数、无法声明式复用、无法统一序列化；
+  //   - 文本归一化在调用方各写一遍，全项目有 5 份不一致的实现。
+  //
+  // 现在编成**一个**谓词（query-engine 的 compileQuery）：按代价从低到高短路求值、
+  // 只遍历一次；文本匹配由引擎统一归一化，调用方不必自己小写化。
+  //
+  // ⚠️ **语义必须与改造前逐条一致**（11 个页面共用）。已由
+  // `tests/handle-search-parity.test.ts` 锁定 34 个用例，其中包含两条
+  // 看起来「不理想」但必须保留的既有行为：
+  //   1. `name` 传数组时是 **OR**，不是 AND；
+  //   2. 单值 `params.profitRate` 用 `&&` 判定，**传 0 不生效**（falsy 短路），
+  //      而 `minProfitRate` 用 `!= null` 判定、传 0 生效 —— 两者并不对称，是现状。
+
+  /** 该方案的展示名（含三语别名，供文本检索用） */
+  function searchTextOf(cal: Calculator): string {
+    return aliasSearchTextOf(allNamesOf(cal.result.name))
+  }
+
+  // 多物品名称筛选：name 可为 string 或 string[]，命中任一即保留（OR）。
+  // 把多个名称用 `|` 交给引擎的「任一命中」模式，而不是循环 filter。
   const names = Array.isArray(params.name)
     ? params.name.filter(Boolean)
     : params.name
       ? [params.name]
       : []
-  if (names.length) {
-    profitList = profitList.filter((cal) => {
-      const name = cal.result.name.toLowerCase()
-      return names.some((n: string) => name.includes(String(n).toLowerCase()))
-    })
-  }
+  const nameQuery = names.length
+    ? buildTextQuery(names.map((n: string) => String(n)).join(" | "), "any", ["name"])
+    : undefined
 
-  // 单值动作筛选（兼容旧调用方：jungle/enhanposer 等）
-  // 用 includes 而非 match：params.project 是用户选中的项目名，可能含正则元字符，
-  // 且 match 是子串包含语义，includes 更贴切也更安全。
-  params.project && (profitList = profitList.filter(cal => cal.project.includes(params.project!)))
-
-  // 组合条件并行筛选：多行 (步数, 动作, 等级区间) 组合，命中任一组合即保留
-  // 如「5步锻造」+「3步缝纫」+「转化」可同时检索；等级限制也可作为组合条件之一
+  // 组合条件：多行 (步数, 动作, 等级区间)，**行内 AND、行间 OR**
   const conditions = Array.isArray(params.conditions)
     ? params.conditions.filter((c: any) => c && ((c.steps != null && c.steps !== "") || c.project || c.minLevel != null || c.maxLevel != null))
     : []
-  if (conditions.length) {
-    profitList = profitList.filter((cal) => {
-      const steps = stepsOfProject(cal.project)
-      return conditions.some((cond: any) => {
-        if (cond.steps != null && cond.steps !== "" && steps !== cond.steps) return false
-        if (cond.project && !cal.project.includes(cond.project)) return false
-        if (cond.minLevel != null && cal.actionLevel < cond.minLevel) return false
-        if (cond.maxLevel != null && cal.actionLevel > cond.maxLevel) return false
-        return true
-      })
-    })
-  }
 
-  // ── 排除装备 / 排除首饰 / 排除护符：三个开关**互相独立**，可任意组合 ──────────
-  // 关键：banEquipment 只负责「既不是首饰、也不是护符的那部分装备」，
-  // 首饰交给 banJewelry、护符交给 banCharm。
-  //
-  // 修正前是包含关系（banEquipment 一并剔除首饰），后果是：只要勾了「排除装备」，
-  // 「排除首饰」就变成空操作。而 利润排行(dashboard) 与 制作炼金(manualchemy) 的默认值
-  // 恰好是 banEquipment=true —— 于是这两页上勾「排除首饰」**永远看不到任何变化**，
-  // 表现为「排除首饰没用」。护符这次一并按同一原则摘出来（用户明确要求它可单独排除）。
-  //
-  // 现在的语义（保持「三个都勾 = 排除全部装备」与修正前勾「排除装备」的结果一致）：
-  //   排除装备          -> 只去掉护甲/武器/工具/披风/袋子等，保留项链/戒指/耳环/**护符**
-  //   排除首饰          -> 只去掉项链/戒指/耳环
-  //   排除护符          -> 只去掉护符（实测 102 件，占全部装备 19%）
-  //   三个都勾          -> 全部装备都被排除
-  params.banEquipment && (profitList = profitList.filter(cal => !cal.isEquipment || isJewelry(cal.item) || isCharm(cal.item)))
-  params.banJewelry && (profitList = profitList.filter(cal => !isJewelry(cal.item)))
-  params.banCharm && (profitList = profitList.filter(cal => !isCharm(cal.item)))
-  // 排除战斗装备：剔除 combat / both 类（依据 combatStats 派生分类）
-  params.banCombat && (profitList = profitList.filter(cal => {
-    const cls = getEquipmentClassOf(cal.item)
-    return cls !== "combat" && cls !== "both"
-  }))
-  // 排除生活装备：剔除 life / both 类（依据 noncombatStats 派生分类）
-  params.banLife && (profitList = profitList.filter(cal => {
-    const cls = getEquipmentClassOf(cal.item)
-    return cls !== "life" && cls !== "both"
-  }))
-
-  // 反向排除：excludes 为 { name?, project? }[] 组合，命中任一排除组合即剔除
-  // - 仅排除某种生产：{ project: "锻造" }
-  // - 仅排除某个产品：{ name: "奶酪" }
-  // - 排除某产品某生产模式 / 某生产模式中某产品：{ name: "奶酪", project: "锻造" }
+  // 反向排除：{ name?, project? }[]，命中任一排除组合即剔除
   const excludes = Array.isArray(params.excludes)
     ? params.excludes.filter((e: any) => e && (e.name || e.project))
     : []
-  if (excludes.length) {
-    profitList = profitList.filter((cal) => {
-      const name = cal.result.name.toLowerCase()
-      return !excludes.some((ex: any) => {
-        if (ex.name && !name.includes(String(ex.name).toLowerCase())) return false
-        if (ex.project && !cal.project.includes(ex.project)) return false
-        return true
-      })
-    })
+
+  // 利润率 / 风险：藏在 `cal.result` 里，而引擎的 range 走顶层字段，
+  // 所以用自定义谓词处理（range 只适合顶层数值字段）。
+  const rateMin1 = params.profitRate ? Number(params.profitRate) / 100 : undefined
+  const rateMin2 = params.minProfitRate != null ? params.minProfitRate / 100 : undefined
+  const rateMax = params.maxProfitRate != null ? params.maxProfitRate / 100 : undefined
+  const riskMin = params.minRisk != null ? params.minRisk : undefined
+  const riskMax = params.maxRisk != null ? params.maxRisk : undefined
+  const hasRate = rateMin1 !== undefined || rateMin2 !== undefined || rateMax !== undefined
+  const hasRisk = riskMin !== undefined || riskMax !== undefined
+
+  /** 利润率是否达标。两个下限同时给时取更严的（等价于改造前两次 filter 依次生效）。 */
+  function rateOk(cal: Calculator): boolean {
+    const v = toComparable(cal.result.profitRate)
+    if (v == null) {
+      return false
+    }
+    const lo = rateMin1 !== undefined && rateMin2 !== undefined
+      ? Math.max(rateMin1, rateMin2)
+      : (rateMin1 ?? rateMin2)
+    if (lo !== undefined && v < lo) {
+      return false
+    }
+    return rateMax === undefined || v <= rateMax
   }
 
-  // 精确步数筛选：只保留 N 步方案，排除 N-1 / N+1 步（兼容旧调用方）
-  params.steps && (profitList = profitList.filter((cal) => {
-    const steps = stepsOfProject(cal.project)
-    return steps === params.steps
-  }))
+  /** 风险是否达标 */
+  function riskOk(cal: Calculator): boolean {
+    const v = toComparable(cal.result.risk)
+    if (v == null) {
+      return false
+    }
+    if (riskMin !== undefined && v < riskMin) {
+      return false
+    }
+    return riskMax === undefined || v <= riskMax
+  }
 
-  // 利润率区间（%）单值兼容 + min/max 双头
-  params.profitRate && (profitList = profitList.filter(cal => cal.result.profitRate >= params.profitRate! / 100))
-  if (params.minProfitRate != null) profitList = profitList.filter(cal => cal.result.profitRate >= params.minProfitRate / 100)
-  if (params.maxProfitRate != null) profitList = profitList.filter(cal => cal.result.profitRate <= params.maxProfitRate / 100)
+  const query = compileQuery<Calculator>(
+    {
+      text: nameQuery,
+      custom: [
+        // 单值动作筛选（兼容旧调用方：jungle / enhanposer 等）。
+        // 用 includes 而非 match：params.project 是用户选中的项目名，可能含正则元字符，
+        // 且 match 是子串包含语义，includes 更贴切也更安全。
+        ...(params.project ? [(cal: Calculator) => cal.project.includes(params.project)] : []),
 
-  // 风险区间 min/max 双头
-  if (params.minRisk != null) profitList = profitList.filter(cal => cal.result.risk >= params.minRisk)
-  if (params.maxRisk != null) profitList = profitList.filter(cal => cal.result.risk <= params.maxRisk)
-  return profitList
+        // 精确步数筛选：只保留 N 步方案，排除 N-1 / N+1 步
+        ...(params.steps
+          ? [(cal: Calculator) => stepsOfProject(cal.project) === params.steps]
+          : []),
+
+        // 组合条件：行内 AND、行间 OR
+        ...(conditions.length
+          ? [(cal: Calculator) => {
+              const steps = stepsOfProject(cal.project)
+              return conditions.some((cond: any) => {
+                if (cond.steps != null && cond.steps !== "" && steps !== cond.steps) return false
+                if (cond.project && !cal.project.includes(cond.project)) return false
+                if (cond.minLevel != null && cal.actionLevel < cond.minLevel) return false
+                if (cond.maxLevel != null && cal.actionLevel > cond.maxLevel) return false
+                return true
+              })
+            }]
+          : []),
+
+        // 反向排除：
+        // - 仅排除某种生产：{ project: "锻造" }
+        // - 仅排除某个产品：{ name: "奶酪" }
+        // - 排除某产品某生产模式：{ name: "奶酪", project: "锻造" }
+        ...(excludes.length
+          ? [(cal: Calculator) => {
+              const name = searchTextOf(cal)
+              return !excludes.some((ex: any) => {
+                if (ex.name && !name.includes(normalizeTerm(String(ex.name)))) return false
+                if (ex.project && !cal.project.includes(ex.project)) return false
+                return true
+              })
+            }]
+          : []),
+
+        // ── 排除装备 / 排除首饰 / 排除护符：三个开关**互相独立**，可任意组合 ──
+        // 关键：banEquipment 只负责「既不是首饰、也不是护符的那部分装备」，
+        // 首饰交给 banJewelry、护符交给 banCharm。
+        //
+        // 修正前是包含关系（banEquipment 一并剔除首饰），后果是：只要勾了「排除装备」，
+        // 「排除首饰」就变成空操作。而 利润排行(dashboard) 与 制作炼金(manualchemy) 的默认值
+        // 恰好是 banEquipment=true —— 于是这两页上勾「排除首饰」**永远看不到任何变化**，
+        // 表现为「排除首饰没用」。
+        //
+        // 现在的语义（保持「三个都勾 = 排除全部装备」与修正前勾「排除装备」的结果一致）：
+        //   排除装备   -> 只去掉护甲/武器/工具/披风/袋子等，保留项链/戒指/耳环/**护符**
+        //   排除首饰   -> 只去掉项链/戒指/耳环
+        //   排除护符   -> 只去掉护符（实测 102 件，占全部装备 19%）
+        //   三个都勾   -> 全部装备都被排除
+        ...(params.banEquipment
+          ? [(cal: Calculator) => !cal.isEquipment || isJewelry(cal.item) || isCharm(cal.item)]
+          : []),
+        ...(params.banJewelry ? [(cal: Calculator) => !isJewelry(cal.item)] : []),
+        ...(params.banCharm ? [(cal: Calculator) => !isCharm(cal.item)] : []),
+
+        // 排除战斗装备：剔除 combat / both 类（依据 combatStats 派生分类）
+        ...(params.banCombat
+          ? [(cal: Calculator) => {
+              const cls = getEquipmentClassOf(cal.item)
+              return cls !== "combat" && cls !== "both"
+            }]
+          : []),
+
+        // 排除生活装备：剔除 life / both 类（依据 noncombatStats 派生分类）
+        ...(params.banLife
+          ? [(cal: Calculator) => {
+              const cls = getEquipmentClassOf(cal.item)
+              return cls !== "life" && cls !== "both"
+            }]
+          : []),
+
+        ...(hasRate ? [rateOk] : []),
+        ...(hasRisk ? [riskOk] : [])
+      ]
+    },
+    () => searchTextOf
+  )
+
+  return profitList.filter(query.predicate)
 }
 
 /**

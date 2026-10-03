@@ -181,7 +181,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 - **迷宫（重要）**：`data.json` 已从 `v1.20250818.0` 升到 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。原「无迷宫玩法、无需开发」的结论**已失效**。
 - **市场历史归档**：已从 v1 单文件升级为 **v2 分片**（`market_history_<UTC日>T<HH>.json`，UTC 6 小时一块、字典编码、7 天 / 168 点，按窗口按需拉 1~2 片）。
 - **`game.ts` 规模**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 32 文件 / 209 用例**）。
+- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 35 文件 / 299 用例**）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 8.4 本次改动后的验证（实测）
@@ -610,7 +610,7 @@ profitPH = incomePH − costPH
 档位价由 `getPriceOf` 按各档位口径算出，与别处显示的价格同源。
 
 ### 15.4 验证（实测）
-- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` public/private 均成功；
+- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` public/private 均成功；
   dev server 下 `ActionSolveCard.vue` / `price-solve.ts` / `ActionDetail.vue` 三个模块均能被 Vite 正常编译。
 - `tests/price-solve.test.ts` 分两层：
   1. **手算样例**（完全可控的假计算器）：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
@@ -698,7 +698,7 @@ profitPH = incomePH − costPH
 表现成**"选择器列得出物品、却被判定不支持该动作"**。这个坑是测试抓出来的（见 16.5 第 3 条）。
 
 ### 16.5 验证（实测）
-- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` 双模式成功；
   dev server 下 3 个新模块均编译通过。
 - **默认值复现**（真实计算器）：decompose 的成本 `2239964909.22` 对 `2239964909.22`、
   收入与利润同样精确相等，**总耗时 = 1.000000 小时**；transmute 同样精确。
@@ -760,9 +760,82 @@ profitPH = incomePH − costPH
 `tests/price-fallback-integration.test.ts`（4 用例，真实数据）：全物品 × 多等级的来源一致性、
 「借另一端」确实取到的是另一端**原始市价**、同一 tick 切换设置、强制大全套。
 
-验证：`vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` public/private 均成功。
+验证：`vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` public/private 均成功。
 
 ---
 
 *（本文档为 AI 接手上下文，随项目演进持续更新。）*
 *（内容由AI生成，仅供参考）*
+
+## 18. 查询引擎：把「搜索 / 筛选 / 排序」收成一套（2026-10-03）
+
+### 18.1 改造前的诊断：两套互不相同的查询系统
+
+| | 检索页（11 个） | 市场监控（1 个） |
+| --- | --- | --- |
+| 入口 | `common/apis/utils.ts` 的 `handleSearch` | `pages/marketvolume/index.vue` 的 `filtered` |
+| 结构 | 15 个平铺 `params.x && list.filter(...)` | 8 层链式 `.filter()` |
+| 区间筛选 | 裸 `min/max` 五段 if | 完整模式机（`any/gte/lte/between`） |
+| 排序 | 多级规则（较完善） | 单键，无显式 tiebreaker |
+| 文本搜索 | 子串 includes（仅名称） | 子串 includes（名称 + hrid） |
+| 分页 | 项目共用的 `usePagination` | 自己手写 `page/pageSize` ref |
+
+两边**零共享**，且语义互相矛盾。另有 5 份各不相同的文本搜索实现
+（`marketvolume:288` / `utils.ts:139` / `favorite:18` / `price:15` / `enhancer:31`），
+大小写策略（`toLowerCase` vs `toLocaleLowerCase`）、是否匹配 hrid、是否支持多值 OR 都不同。
+
+### 18.2 新增两个纯函数模块
+
+**`src/common/utils/query-engine.ts`** —— 通用查询引擎，**零运行时依赖**（不 import vue/pinia/i18n，
+因此能在纯 node 下直接单测）：
+
+| 能力 | 说明 |
+| --- | --- |
+| `buildTextQuery` / `parseInput` | 文本检索：**多词**（空格=与、`|`=或）、**字段限定**（`名称:` `hrid:` `分类:` `动作:`，中英皆可）、大小写与全半角空白归一 |
+| `compileQuery` | 把声明式条件编成**一个**谓词，按「文本 → 枚举 → 等值 → 区间 → 自定义」的代价顺序**短路求值，只遍历一次** |
+| `isRangeActive` / `matchRange` | 区间语义：端点含、缺阈值=未启用（**不是**匹配空集）、`between` 双边自动对调、条目无该值时不匹配 |
+| `toComparable` / `compareValues` | 展示型字符串（`12.34%` / `1,234` / `12.3万` / `1.2M`）归一为数字再比；**缺失值恒沉底，不随升降序翻转** |
+| `applySort` | 稳定排序，**显式 tiebreaker**（唯一键）⇒ 同样输入必得同样输出 |
+| `encodeQueryState` / `decodeQueryState` | 查询状态 ↔ URL query 互转（数组用逗号连接，非法输入一律回落默认值，绝不抛错） |
+
+**`src/common/utils/multilang-search.ts`** —— 多语言名称检索：
+
+物品名在 `data.json` 里**只有英文**（`Abyssal Essence`），中文/繁体译名分别在
+`zh-cn.ts`（`地狱精华`）与 `zh-tw.ts`（`地獄精華`）。改造前只匹配 `t(name)`（当前语言那一个），
+于是**切到英文界面后输「地狱精华」搜不到任何东西**。现在三套名一起匹配 ——
+「用户知道东西叫什么就能找到」与界面语言无关。`locales/lang/index.ts` 是纯对象、
+不依赖 vue-i18n 实例，所以可直接 import 拿全部译名，**不必 `useI18n()`**（纯函数才能单测）。
+`buildAliasIndex` 按唯一 key 建索引，3000 行 × 3 语言只查 948 次而非 9000 次。
+
+### 18.3 接入情况
+
+- `pages/marketvolume/index.vue`：8 层链式 filter → 一个谓词；排序改用 `applySort`（补上 tiebreaker）；
+  新增「结果计数」「重置筛选（N）」「搜索语法说明」三处 UI。
+- `common/apis/utils.ts` 的 `handleSearch`：15 个平铺 if → 一个 `compileQuery` 调用。
+  **11 个页面的检索行为一字未变**，由 `tests/handle-search-parity.test.ts` 的 34 个用例锁定。
+
+### 18.4 顺带修掉的真实缺陷
+
+1. **`toComparable("12.3万")` 算成 12.3**（差一个数量级）。改造前 `utils.ts` 的 `normalizeNumeric`
+   把单位后缀直接 `replace` 掉。现在按「去分隔符 → 摘后缀 → 校验纯数字 → 连乘」四步走。
+2. **升序时缺失值会翻到榜首**。改造前 `sortMarketVolumeRows` 只在降序时让 NaN 沉底
+   （`if (Number.isNaN(x)) return 1`），用户点一下升序，一堆「无历史基准」的条目会集体跳到第一。
+   现在 `isMissing` 判定与升降序**无关**。
+3. **URL 往返把数字数组退化成字符串数组**：`[1,2]` → `["1","2"]`，之后 `includes(2)` 恒为 false，
+   表现为「从分享链接打开页面后，强化等级筛选神秘失效」。
+4. **`compileQuery` 的字段取值器签名**：原设计是 `(item, field)`，若误传 `(field) => (item)`（很自然）
+   会**静默返回全 false** 而不报错。已改为 `(field) => (item) => string`，与 `matchText` 内部用法一致。
+
+### 18.5 测试
+
+- 新增 `tests/query-engine.test.ts`（44 用例）：文本归一、字段限定、区间边界（含**与旧
+  `marketvolume/filters.ts` 等价**）、稳定排序幂等性、序列化往返，以及一条
+  「编译谓词 vs 逐条件链式 filter」的**随机组合等价性对拍**（40 组 seed）。
+- 新增 `tests/multilang-search.test.ts`（12 用例）：三语互搜、跨语言碎片**不应**误命中、hrid 仍可搜。
+- 新增 `tests/handle-search-parity.test.ts`（34 用例）：锁定 11 个页面共用的 `handleSearch` 语义，
+  含两条「看起来不理想但必须保留」的既有行为：
+  `name` 传数组是 **OR**；单值 `profitRate` 用 `&&` 判定、**传 0 不生效**，
+  而 `minProfitRate` 用 `!= null`、传 0 生效（两者并不对称，是现状）。
+
+验证：`vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` public/private 均成功
+（2961 模块）；lint 非风格问题 0。

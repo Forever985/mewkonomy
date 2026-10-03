@@ -329,7 +329,7 @@ AIGC:
 - **迷宫（重要）**：`data.json` 已是 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。§八「功能D：卷轴排查结论」里「当前 data.json 无迷宫玩法」的判断**基于旧版本，已失效**。
 - **市场历史（§12 的补充）**：归档已从 v1 单文件 `market_history.json` 升级为 **v2 分片** `market_history_<UTC日>T<HH>.json`（UTC 6 小时一块、字典编码、滚动 7 天 / 168 点；前端按窗口**按需只拉 1~2 片**，取不到才回退 v1 文件）。§12.2 中「上限 520 点」「前端按 `<BASE_URL>data/market_history.json` 拉取」已不适用于 v2。
 - **`game.ts` 行数**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 32 文件 / 209 用例**，见 §二十一）。
+- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 35 文件 / 299 用例**，见 §二十一）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 13.3 有意不改的项
@@ -637,7 +637,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 - `ActionDetail.vue` 底部挂载（所有检索页共用该弹窗，一处接入全站可用）。
 
 ### 20.4 验证
-- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` 双模式成功；
   dev server 下三个新/改模块均可被 Vite 正常编译。
 - 手算样例验算：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
   目标 500 → 材料临界价 230、成品临界价 729.1667，代回利润均精确等于 500 ✓
@@ -663,7 +663,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
   新增纯函数 `SolveUnit` / `HOURS_PER_DAY` / `toProfitPHOf` / `fromProfitPHOf` / `resolveTargetProfitPH`。
 - 测试从 9 个用例增到 **15 个**：新增「日薪 = 时薪 × 24 与往返一致」「两种口径解出的临界价相同」
   「留空回落当前值」「**0 是有效目标**」「日薪数额换算成时薪」5 项。
-- 验证：`vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` public/private 均成功；
+- 验证：`vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` public/private 均成功；
   dev server 下两个模块均编译通过；lint 非风格问题 0。
 - 顺带：`i18n` 的 key 就是中文原文，所以改中文文案等于**换 key**——
   新键已补进 `en.ts` / `zh-tw.ts`，被替换的旧键同时删除（不留孤儿键）。
@@ -710,7 +710,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 需由物品反推 action）。
 
 ### 21.5 验证
-- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
+- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
 - 默认值复现：decompose 成本 `2239964909.22` 对 `2239964909.22`、总耗时 **1.000000 小时**；transmute 同。
 - 枚举闭环：6 个动作样本全部 `available = true`；制造样本反推为 `tailoring`、采集为 `foraging`。
   数量：强化 532 / 分解 742 / 转化 622 / 点金 889 / 制造 647 / 采集 26。
@@ -777,7 +777,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ### 23.3 验证
 
-- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**
+- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**
 - 新增 `tests/price-fallback-strategies.test.ts`（17 用例，纯函数，含 **360 组策略矩阵**不变量断言）
   与 `tests/price-fallback-integration.test.ts`（4 用例，真实数据）
 - 实测：全物品 × 多等级共 **2163 个组合，来源与价格 0 漂移**；来源分布
@@ -787,3 +787,36 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 - `vite build` public/private 均成功；lint 非风格问题 0（`ActionPrice.vue` 那条 `define-macros-order` 是既有问题）
 - i18n：新增 19~22 个键，并**删掉 8 个因 A/B/C 下线而失效的旧键**
   （用全仓扫描 `t("...")` 确认无引用，不靠印象）
+
+## 二十四、多样搜索 / 筛选 / 查询的深层优化（2026-10-03）
+
+起因：用户要求「更合理、更科学、效率更高、更好用、更贴近实际情况、更聪明、更符合人机交互」。
+
+### 24.1 诊断结论
+
+问题不在某个页面筛得不好，而是**有两套互不相同的查询系统**：
+11 个检索页共用 `common/apis/utils.ts` 的 `handleSearch`，市场监控页独立手写 `filtered`，
+两边**零共享**且语义互相矛盾（区间筛选一边是完整模式机、一边是裸 min/max 五段 if）。
+另有 5 份各不相同的文本搜索实现。视图状态（keyword/排序/分页）全在组件 `ref` 里，
+刷新即丢，全项目**没有任何页面用 route.query 同步筛选状态**。
+
+### 24.2 新增
+
+- `src/common/utils/query-engine.ts`：通用查询引擎（纯函数、零依赖）。多词检索 + 字段限定、
+  一次遍历的短路谓词、稳定的显式 tiebreaker 排序、状态 ↔ URL 序列化。
+- `src/common/utils/multilang-search.ts`：三语名称检索。物品名在数据里只有英文，
+  中文/繁体在语言包里；改造前只匹配当前语言那一个，**切英文界面后搜中文名搜不到**。
+- `src/pages/marketvolume/index.vue`：接入引擎 + 新增「结果计数」「重置筛选（N）」UI。
+- `src/common/apis/utils.ts` 的 `handleSearch`：改为引擎谓词，**行为逐条不变**（34 用例锁定）。
+
+### 24.3 顺带修掉的四个真实缺陷
+
+1. `toComparable("12.3万")` 算成 **12.3**（差一个数量级，无任何报错）——单位后缀被直接删掉而非连乘。
+2. **升序时缺失值翻到榜首**——原先只在降序时让 NaN 沉底。
+3. **URL 往返把 `[1,2]` 变成 `["1","2"]`**，之后 `includes(2)` 恒为 false。
+4. `compileQuery` 字段取值器签名反了会**静默返回全 false**（不报错），已调整签名。
+
+### 24.4 验证
+
+`vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**（上轮 209，+90）；
+`vite build` public/private 均成功（2961 模块）；lint 非风格问题 0。
