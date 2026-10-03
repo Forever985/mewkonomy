@@ -1,0 +1,53 @@
+# 统一行尾策略
+#
+# ## 为什么要这个文件
+#
+# 本机 `core.autocrlf=true`（Git for Windows 安装时的系统级默认）。没有 `.gitattributes` 时，
+# git 只能靠这个全局配置**无差别**地转换所有文本文件，于是：
+#
+# 1. **刷屏 warning**：`git add` 时逐个文件报 `LF will be replaced by CRLF`。
+#    一次 `超级一键部署` 刷出近百行，把真正重要的输出淹掉。
+# 2. **索引里存进 CRLF**：仓库里曾有 39 个文件以 CRLF 存进索引、9 个甚至**行尾混杂**
+#    （`jungle/index.vue` 是 394 行 CRLF + 1 行 LF）。
+#    CRLF 存索引会导致别的平台 clone 下来整文件全变，逐行 diff。
+# 3. **构建产物被转换**：`assets/*.js|css` 走 `git add` 也会被转，
+#    而文件名带内容 hash —— 转了之后对不上。
+#
+# ## 策略：索引里一律存 LF（跨平台安全），检出时按平台决定
+#
+# `text=auto eol=lf` 让 git 自己判断"这是文本文件吗"（二进制自动豁免），
+# 并保证**索引里存 LF**；工作区用 LF。
+#
+# ⚠️ 这个 `eol=lf` 会让 Windows 上的工作区也用 LF。
+# 对本项目的影响：编辑器（VS Code / WebStorm）默认能正确处理 LF，
+# `git diff` 也不再因为「工作区 CRLF vs 索引 LF」产生噪声 diff。
+# 历史上那些 `i/mixed` 的文件会被逐步归一。
+
+* text=auto eol=lf
+
+# ── 必须保持原样、绝不做行尾转换的东西 ──────────────────────────────
+# 构建产物：文件名带内容 hash，转换会让 hash 对不上
+/dist/**
+/public/data/**
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.ico
+*.woff
+*.woff2
+*.ttf
+*.eot
+*.mp3
+*.mp4
+*.pdf
+
+# 锁文件：逐行解析，转换会破坏一致性校验
+pnpm-lock.yaml
+
+# ── 明确是二进制的扩展名（双保险，防止 text=auto 误判）──────────────
+*.wasm
+*.zip
+*.gz
+*.7z

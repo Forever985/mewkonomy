@@ -127,6 +127,24 @@ function main() {
     log(`clone ${BRANCH} ...`)
     run("git", ["clone", "--branch", BRANCH, "--single-branch", REPO, work])
 
+    // ── 关掉行尾转换（只在这一次发布的临时仓库里生效）────────────────────
+    //
+    // 为什么需要：本机 `core.autocrlf=true`（Git for Windows 安装时的系统级默认），
+    // 而 gh-pages 上全是 `assets/*.js|css`、`index.html` 这类**构建产物**。
+    // autocrlf 会对它们做「LF ↔ CRLF」双向转换，于是 `git add -A` 时逐个报
+    // `warning: LF will be replaced by CRLF` —— 一次发布刷出近百行。
+    //
+    // 为什么可以直接关：
+    // - 构建产物是**精确字节**（文件名带内容 hash、行尾参与不影响语义但改了 hash 会对不上），
+    //   行尾转换对它只有坏处没有好处；
+    // - 用 `git -c` **只作用于本仓库**（`work/.git/config`），不动用户的全局配置；
+    // - 关掉后那句"差异仅为行尾规范化"的兜底判断也不再需要走（内容本来就该一致）。
+    //
+    // `safecrlf=false` 是配套的：它关闭「CRLF 与 LF 混用时报错」的检查，
+    // 只影响提示，不影响内容。
+    run("git", ["config", "core.autocrlf", "false"], { cwd: work })
+    run("git", ["config", "core.safecrlf", "false"], { cwd: work })
+
     // 记录受保护目录的原始状态，用于事后校验
     const protectedBefore = new Map()
     for (const p of PROTECTED) {
@@ -223,12 +241,16 @@ function main() {
     }
 
     // 必须在 add 之后再看一次「是否真的有待提交内容」。
-    // 上面的 status 是 add 之前的：Windows 上 core.autocrlf 会让 checkou 出来的文本
-    // 与 dist 的 LF 版本逐行不同，于是 status 报一堆「已修改」，
-    // 而 add 规范化后其实与 HEAD 完全一致 —— 此时 commit 会以
-    // "nothing to commit" 退出码 1 失败，把一次「本来就无需发布」误报成部署失败。
+    //
+    // 原因：上面的 status 是 add **之前**的快照。文本文件在 Windows 上可能因行尾
+    // 规范化而看起来「已修改」，add 之后才归一，若与 HEAD 实际一致，
+    // commit 会以 "nothing to commit" 退出码 1 失败，把一次「本来就无需发布」
+    // 误报成部署失败。
+    //
+    // ⚠️ 本仓库已在 clone 之后关掉 `core.autocrlf`（见上文），构建产物不再被转换，
+    // 所以这条兜底**现在是双保险**——正常情况下根本不会走到「有差异又被 add 抹平」这条路。
     if (!staged.trim()) {
-      log("线上与构建产物一致（差异仅为行尾规范化），无需发布")
+      log("线上与构建产物一致，无需发布")
       return
     }
 
