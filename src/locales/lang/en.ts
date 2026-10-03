@@ -668,4 +668,8 @@ export default {
   "搜索语法说明": "Search tips: space = match all words, | = match any, quote for phrases. Prefix with 名称:/name:, 分类:/category:, 动作:/project:, hrid: to restrict the field. All three languages are searched at once.",
   "结果计数": "{n} items",
   "重置筛选": "Reset filters",
+  "区间之外": "Outside range",
+  "接近": "Near",
+  "前 N": "Top N",
+  "后 N": "Bottom N",
 }

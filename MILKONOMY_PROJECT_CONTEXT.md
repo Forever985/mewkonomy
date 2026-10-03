@@ -329,7 +329,7 @@ AIGC:
 - **迷宫（重要）**：`data.json` 已是 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。§八「功能D：卷轴排查结论」里「当前 data.json 无迷宫玩法」的判断**基于旧版本，已失效**。
 - **市场历史（§12 的补充）**：归档已从 v1 单文件 `market_history.json` 升级为 **v2 分片** `market_history_<UTC日>T<HH>.json`（UTC 6 小时一块、字典编码、滚动 7 天 / 168 点；前端按窗口**按需只拉 1~2 片**，取不到才回退 v1 文件）。§12.2 中「上限 520 点」「前端按 `<BASE_URL>data/market_history.json` 拉取」已不适用于 v2。
 - **`game.ts` 行数**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 35 文件 / 299 用例**，见 §二十一）。
+- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 37 文件 / 336 用例**，见 §二十一）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 13.3 有意不改的项
@@ -637,7 +637,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 - `ActionDetail.vue` 底部挂载（所有检索页共用该弹窗，一处接入全站可用）。
 
 ### 20.4 验证
-- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` 双模式成功；
   dev server 下三个新/改模块均可被 Vite 正常编译。
 - 手算样例验算：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
   目标 500 → 材料临界价 230、成品临界价 729.1667，代回利润均精确等于 500 ✓
@@ -663,7 +663,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
   新增纯函数 `SolveUnit` / `HOURS_PER_DAY` / `toProfitPHOf` / `fromProfitPHOf` / `resolveTargetProfitPH`。
 - 测试从 9 个用例增到 **15 个**：新增「日薪 = 时薪 × 24 与往返一致」「两种口径解出的临界价相同」
   「留空回落当前值」「**0 是有效目标**」「日薪数额换算成时薪」5 项。
-- 验证：`vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` public/private 均成功；
+- 验证：`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` public/private 均成功；
   dev server 下两个模块均编译通过；lint 非风格问题 0。
 - 顺带：`i18n` 的 key 就是中文原文，所以改中文文案等于**换 key**——
   新键已补进 `en.ts` / `zh-tw.ts`，被替换的旧键同时删除（不留孤儿键）。
@@ -710,7 +710,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 需由物品反推 action）。
 
 ### 21.5 验证
-- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
+- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
 - 默认值复现：decompose 成本 `2239964909.22` 对 `2239964909.22`、总耗时 **1.000000 小时**；transmute 同。
 - 枚举闭环：6 个动作样本全部 `available = true`；制造样本反推为 `tailoring`、采集为 `foraging`。
   数量：强化 532 / 分解 742 / 转化 622 / 点金 889 / 制造 647 / 采集 26。
@@ -777,7 +777,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ### 23.3 验证
 
-- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**
+- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**
 - 新增 `tests/price-fallback-strategies.test.ts`（17 用例，纯函数，含 **360 组策略矩阵**不变量断言）
   与 `tests/price-fallback-integration.test.ts`（4 用例，真实数据）
 - 实测：全物品 × 多等级共 **2163 个组合，来源与价格 0 漂移**；来源分布
@@ -818,5 +818,43 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ### 24.4 验证
 
-`vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**（上轮 209，+90）；
+`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**（上轮 209，+90）；
 `vite build` public/private 均成功（2961 模块）；lint 非风格问题 0。
+
+## 二十五、区间条件模式化：4 种 → 9 种，检索页与监控页共用一套（2026-10-03）
+
+起因：用户要求「第六条区间条件补齐模式补一下，这个正是我所推崇的，
+一定要尽可能多的提供接口、窗口，**用户可以不用，但不能没有**」。
+
+### 25.1 改造前的分裂
+
+同一个「数值区间」有两套实现：检索页是**两个裸输入框拼 min~max，只能表达区间**；
+市场监控页是 `RangeFilter` 组件 + `filters.ts` 的 `matchesRange`（4 种模式）。
+判定也分两处（`handleSearch` 五段硬编码 `>=`/`<=` vs `matchesRange` 模式机）。
+
+### 25.2 现状
+
+- `query-engine` 的 `RangeMode` 扩到 **9 种**：在 `between` 之上加
+  `outside`（区间之外）、`near`（带容差）、`eq`（浮点相等）、`topN` / `bottomN`（跨条目排行）。
+- `SearchPanel` 的 range 字段改用 `RangeFilter` 组件 ⇒ 检索页与监控页**同一控件、同一判定**。
+- `marketvolume/filters.ts` 的 `isRangeActive` / `matchesRange` **改为从 query-engine 再导出**，
+  消除重复实现；`applyRangeFilters` 额外处理 `topN`/`bottomN` 的整表语义。
+- `handleSearch` 新增 `rangeFromFlat` / `numOk`，把平铺 min/max + `__mode` 组装成 `RangeQuery`。
+
+### 25.3 向后兼容
+
+`SearchPanel` 做双向映射（模式存 `${minKey}__mode`，`minKey`/`maxKey` 照旧读写），
+所以 11 个页面 / 29 个 range 字段的声明**一行未改**、历史本地条件**照常可用**。
+`handle-search-parity` 的 34 个行为锁定用例全绿，证明旧语义未漂移。
+
+### 25.4 顺带修掉的隐性 bug
+
+`handleSearch` 读容差的键名是 `${minKey}__mode__tolerance`，`SearchPanel` 写的是
+`${minKey}__tolerance` ⇒ 容差永远读不到、`near` 静默退化成 `=`。
+**两种情况都返回"看起来合理"的结果**，靠"带容差/不带容差"对照才暴露。
+
+### 25.5 验证
+
+`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**（上轮 299，+37）；
+`vite build` 双模式成功；新增 `tests/range-modes.test.ts`（21）与
+`tests/search-range-modes.test.ts`（16）。

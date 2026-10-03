@@ -556,11 +556,30 @@ r.impossible     // 临界价 ≤ 0 = 即使白送也达不到
 **⚠️ 一个真实踩过的坑**：引擎的字段取值器签名是 `(field) => (item) => string`，
 不是 `(item, field)`。写反了**不会报错**，只会静默返回全 false —— 列表全空且无任何日志。
 
+
+### 2.21 区间/阈值类条件：模式元数据要双向映射，键名只有一处定义（2026-10-03）
+
+给一个「min/max 双头」的老条件加模式支持时，最容易出两类错：
+
+1. **只改控件不改判定** —— 界面能选新模式，但 `handleSearch` 不认，表现为
+   「选项在那里，行为没变」。反向也要查：`handleSearch` 认了但控件不写那个键。
+2. **键名两处各写一遍** —— 本轮真实踩到：`handleSearch` 读
+   `${minKey}__mode__tolerance`，`SearchPanel` 写 `${minKey}__tolerance`。
+   后果是**容差永远读不到、`near` 静默退化成 `=`**，而且两种情况都返回
+   "看起来合理"的结果，**不对比「带参数 / 不带参数」根本发现不了**。
+
+⇒ 规矩：
+- 键名**只在 `SearchPanel` 的 `onRangeChange` 里拼一次**，`handleSearch` 从同一常量取；
+- 改这类条件必须写**对照用例**：「同样数据 + 不加该参数」与「加了参数」结果要不同，
+  否则无法证明参数真的生效了；
+- 模式元数据一律放 `${minKey}__xxx`，**平铺的 `minKey`/`maxKey` 照旧读写**，
+  这样老页面声明与历史本地数据都无需迁移。
+
 ## 三、测试
 
 - 框架：**vitest + happy-dom**（`pnpm test`）。测试文件在 `tests/` 下。
 - **Mock 策略**：用 `vi` 控制模块（`vi.resetModules()` + 动态 `import` 重新加载 store / 模块，见 `marketvolume-cache.test.ts`、`marketvolume-history.test.ts`）；纯计算逻辑（calculator）可直接断言数值；涉及 localStorage 的用例先 `localStorage.clear()`。
-- 既有测试清单（`tests/`，2026-10-03 实测：**35 个文件 / 299 个用例，全部通过**）：
+- 既有测试清单（`tests/`，2026-10-03 实测：**37 个文件 / 336 个用例，全部通过**）：
   - 市场监控家族（12 个，当前测试重心）：`marketvolume-cache`（旧缓存结构兼容）、`marketvolume-history`（涨跌历史：本地采样节流/强制、无历史空 map、时间窗涨跌百分比、基准/当前价缺失过滤）、`marketvolume-history-format`、`marketvolume-rolling-volume`、`marketvolume-shard`（Python 编码 → TS 解码的**跨语言**防漂移断言）、`marketvolume-sort`、`marketvolume-tiers`、`marketvolume-verify`、`marketvolume-volume-rate`、`marketvolume-alerts`（**提醒纯函数语义**：绝对值/相对排行、范围与 onlyActive、多规则去重与优先级、非法参数与零基准边界）、`marketvolume-alerts-integration`（**列表→预置规则→命中**的真实链路）、`marketvolume-filters`（**区间筛选语义**：端点包含、阈值留空=不筛选、填反自动对调、null/-1 值处理、多条件叠加；外加收藏 store 的持久化与坏数据归一化）
   - 业务校验：`bigset-c-verify`（大批量组合检索）、`ban-filter-independence`（**排除装备/首饰/护符三开关互相独立**）、`chainbuilder-verify`（手动产业链）、`charmtransform-verify`（护符转化）、`cross-project-tail-verify`（及 `extended`，跨项目尾段）、`handle-best-per-item`（每物品最优方案）、`enhanceexp-profitable`（仅看赚钱方案）、`condition-level-range`（按行限定要求等级区间）、`artisan-tea-level-bonus`（工匠茶 +5）、`price-fallback-verify`（价格兜底回归）、`price-fallback-strategies`（**兜底策略矩阵**：6 种单侧策略 × 左右组合 × 强制开关，穷举 360 组断言「标了来源就一定取到价」）、`price-fallback-integration`（**真实数据上来源与价格必须一致**，含 level>0 与「同一 tick 切换设置」）、`price-status-tiers`（**价格档位口径**：6 个口径递增性、0.366% 与强化 ×5 的幅度、低价保底 1 金、无价保持 -1）、`price-solve`（**目标时薪反解**：手算样例验符号、真实计算器验线性模型精确到 1e-9、**时薪/日薪两种口径解出的临界价必须一致**、**输入框留空回落当前值而 0 仍是有效目标**）、`profit-form`（**填表算利润**：手算样例、默认值必须精确复现计算器的 costPH/incomePH/profitPH、动作枚举的**可用性闭环**）、`sort-priority`、`search-panel-checkbox`
   - 基础：`demo`、`components/Notify`、`utils/validate`

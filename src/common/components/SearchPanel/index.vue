@@ -1,8 +1,10 @@
 <script lang="ts" setup>
 import { useI18n } from "vue-i18n"
 import { Delete, Plus } from "@element-plus/icons-vue"
+import RangeFilter from "@@/components/RangeFilter/index.vue"
 import SortPriority from "@@/components/SortPriority/index.vue"
-import type { PanelField, PanelProjectOptions, PanelSearchData } from "./types"
+import type { NumericRange, RangeMode } from "@/common/apis/marketvolume/filters"
+import type { PanelField, PanelProjectOptions, PanelSearchData, RangeField } from "./types"
 
 /**
  * 通用「多变搜索」面板
@@ -27,6 +29,52 @@ const emit = defineEmits<{ change: [] }>()
 const { t } = useI18n()
 
 /** 标签 = 前缀 + t(label) + 后缀；在模板里求值才能跟随语言切换 */
+/**
+ * 区间字段 ⇄ `RangeFilter` 的双向映射。
+ *
+ * ## 为什么要有这一层
+ *
+ * `RangeFilter` 只认 `{ mode, min, max, tolerance }` 这个 `NumericRange`，
+ * 而 `PanelSearchData` 用的是**平铺**的 `minProfitRate` / `maxProfitRate`（11 个页面、
+ * 29 个 range 字段都是这个形态，`handleSearch` 也直接读它们）。
+ *
+ * 所以这里做两件事：
+ * - **读**（`rangeOf`）：把平铺字段组装成 `NumericRange`；
+ * - **写**（`onRangeChange`）：把 `NumericRange` **拆回**平铺字段 + 一个 `__mode` 元数据键。
+ *
+ * 这样新模式可用，而**旧路径一行都不用改** —— 没设过 `__mode` 的历史条件
+ * 会被当成 `between`（与改造前语义完全一致）。
+ */
+function modeKeyOf(field: RangeField): string {
+  return `${field.minKey ?? field.maxKey}__mode`
+}
+
+/** 平铺字段 → `NumericRange`（供 RangeFilter 显示） */
+function rangeOf(field: RangeField): NumericRange {
+  const raw = props.modelValue as any
+  const mode = (raw[modeKeyOf(field)] as RangeMode | undefined) ?? "between"
+  return {
+    mode,
+    min: (raw[field.minKey ?? ""] as number | undefined),
+    max: (raw[field.maxKey] as number | undefined),
+    tolerance: (raw[`${modeKeyOf(field)}__tolerance`] as number | undefined)
+  }
+}
+
+/** `NumericRange` → 平铺字段（写回 modelValue） */
+function onRangeChange(field: RangeField, value: NumericRange) {
+  const raw = props.modelValue as any
+  const mk = modeKeyOf(field)
+  raw[mk] = value.mode
+  // min / max 照旧写回平铺字段：旧代码路径（handleSearch、页面自身逻辑）不受影响
+  if (field.minKey) {
+    raw[field.minKey] = value.min
+  }
+  raw[field.maxKey] = value.mode === "between" || value.mode === "outside" ? value.max : value.min
+  // 容差单独存（topN/bottomN 复用 min 存 N）
+  raw[`${mk}__tolerance`] = value.tolerance
+}
+
 function fieldLabel(field: { label: string, labelPrefix?: string, labelSuffix?: string }) {
   return `${field.labelPrefix ?? ""}${t(field.label)}${field.labelSuffix ?? ""}`
 }
@@ -252,34 +300,30 @@ defineExpose({ sortPriorityRef })
         </el-form-item>
 
         <!-- 数值区间 -->
+        <!--
+          区间字段：委托给 `RangeFilter`，与市场监控页**共用同一套模式**。
+
+          改造前这里是「两个裸 el-input-number 拼 min~max」，只能表达区间一种语义；
+          复用组件后自动获得 9 种模式（不限 / ≥ / ≤ / 区间 / 区间之外 / 接近 / = / 前 N / 后 N），
+          且判定语义只有一份实现（`common/utils/query-engine`）。
+
+          向后兼容的关键：`rangeOf` / `onRangeChange` 会把模式值**同时**映射回
+          `minKey` / `maxKey` 两个平铺字段，所以 `handleSearch` 的旧读法、
+          页面声明、以及已存在用户本地的旧条件都不受影响。
+        -->
         <el-form-item v-else-if="field.type === 'range'" :label="fieldLabel(field)">
-          <div style="display:flex; align-items:center; gap:4px;">
-            <template v-if="field.minKey">
-              <el-input-number
-                v-model="(modelValue[field.minKey] as any)"
-                :min="field.min"
-                :max="field.max"
-                :controls="false"
-                clearable
-                :style="{ width: `${field.width || 70}px` }"
-                :placeholder="field.placeholderMin"
-                @change="emit('change')"
-              />
-              <span v-if="field.unit">&nbsp;{{ field.unit }}</span>
-            </template>
-            <span v-if="field.minKey">{{ field.separator ?? '~' }}</span>
-            <el-input-number
-              v-model="(modelValue[field.maxKey] as any)"
-              :min="field.min"
-              :max="field.max"
-              :controls="false"
-              clearable
-              :style="{ width: `${field.width || 70}px` }"
-              :placeholder="field.placeholderMax"
-              @change="emit('change')"
-            />
-            <span v-if="field.unit">&nbsp;{{ field.unit }}</span>
-          </div>
+          <RangeFilter
+            :model-value="rangeOf(field)"
+            label=""
+            :unit="field.unit ?? ''"
+            :step="field.step ?? 1"
+            :precision="field.precision ?? 0"
+            :min="field.min"
+            :modes="field.modes"
+            :width="field.width"
+            @update:model-value="v => onRangeChange(field, v)"
+            @change="emit('change')"
+          />
         </el-form-item>
 
         <!-- 复选 -->

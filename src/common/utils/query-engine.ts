@@ -56,14 +56,41 @@ export interface TextQuery {
 }
 
 /** 数值区间条件（语义与 `marketvolume/filters.ts` 的 `NumericRange` 一致，但与具体业务解耦） */
-export type RangeMode = "any" | "gte" | "lte" | "between"
+/**
+ * 区间模式。
+ *
+ * 原来只有 `any / gte / lte / between` 四种，是「市场监控」那套；
+ * 用户要求「尽可能多提供接口、窗口，用户可以不用，但不能没有」，
+ * 因此补齐了下面这几种**成本很低但很实用**的模式：
+ *
+ * | 模式 | 含义 | 需要填 | 典型场景 |
+ * | --- | --- | --- | --- |
+ * | `any` | 不限 | — | 关闭该条件 |
+ * | `gte` | 不低于（含端点） | min | 「利润率至少 20%」 |
+ * | `lte` | 不高于（含端点） | min | 「风险不超过 10」 |
+ * | `between` | 在两者之间（含两端） | min / max 都填 | 「等级 30~50」 |
+ * | `outside` | 在区间**之外** | min / max 都填 | 「价格排除 1000~2000 的档」 |
+ * | `near` | 最接近某个值（按 `tolerance` 容差） | min = 目标值，tolerance = 容差 | 「等级 30 上下 2 级以内」 |
+ * | `topN` | 取该字段最大的 N 条 | min = N | 「只看成交量前 20 的物品」 |
+ * | `bottomN` | 取该字段最小的 N 条 | min = N | 「只看最冷门的 10 个」 |
+ * | `eq` | 等于（浮点用容差，避免精度问题） | min = 目标值 | 「只看等级 45」 |
+ *
+ * `topN` / `bottomN` 需要**跨条目比较**，单个值自己判不了，
+ * 所以它们由 `applyTopNFilter` 在整表层面处理（见该函数注释）。
+ */
+export type RangeMode = "any" | "gte" | "lte" | "between" | "outside" | "near" | "eq" | "topN" | "bottomN"
+
+/** 需要「跨条目比较」的模式：不能靠单条记录判定 */
+export const RANKING_MODES: readonly RangeMode[] = ["topN", "bottomN"]
 
 export interface RangeQuery {
   mode: RangeMode
-  /** gte / lte 的阈值；between 的下界 */
+  /** gte / lte / near / eq / topN / bottomN 的阈值；between / outside 的下界 */
   min?: number
-  /** between 的上界 */
+  /** between / outside 的上界 */
   max?: number
+  /** near 模式的容差（半宽）。未填时 `near` 退化为 `eq` */
+  tolerance?: number
 }
 
 /** 通用筛选条件：字段名 → 判定器 */
@@ -262,14 +289,20 @@ export function isRangeActive(range: RangeQuery | null | undefined): boolean {
   if (!range) {
     return false
   }
-  if (range.mode === "gte" || range.mode === "lte") {
-    return finite(range.min) != null
+  if (range.mode === "any") {
+    return false
   }
-  if (range.mode === "between") {
-    // 只填一边也算生效：等价于 >= 下界 或 <= 上界，符合直觉
+  if (range.mode === "between" || range.mode === "outside") {
+    // 只填一边也算生效：等价于 >= 下界 或 <= 上界（outside 则是 <下界 或 >上界），符合直觉。
+    // 全空则不生效 —— 否则用户切到「区间」还没填数字，列表就瞬间空了。
     return finite(range.min) != null || finite(range.max) != null
   }
-  return false
+  if (range.mode === "near") {
+    // near 没填目标值就等于没条件
+    return finite(range.min) != null
+  }
+  // gte / lte / eq / topN / bottomN 只需要一个阈值
+  return finite(range.min) != null
 }
 
 /**
@@ -296,6 +329,29 @@ export function matchRange(value: number | null, range: RangeQuery | null | unde
   if (r.mode === "lte") {
     return value <= min!
   }
+  if (r.mode === "eq") {
+    // 浮点用容差比较，避免 0.1+0.2 这类表示误差
+    const tol = finite(r.tolerance) ?? 1e-9
+    return Math.abs(value - min!) <= tol
+  }
+  if (r.mode === "near") {
+    // 没填容差时退化为 eq —— 「接近某个值」在容差为 0 时就是「等于」
+    const tol = finite(r.tolerance) ?? 0
+    return Math.abs(value - min!) <= tol
+  }
+  if (r.mode === "outside") {
+    // 「在区间之外」：两端都填 ⇒ 排除中间那段；只填一边 ⇒ 等价于反向下界 / 上界
+    if (min != null && max != null) {
+      const lo = Math.min(min, max)
+      const hi = Math.max(min, max)
+      return value < lo || value > hi
+    }
+    if (min != null) {
+      return value < min
+    }
+    return value > max!
+  }
+  // between：单边时退化为 >= / <=；双边时自动对调，避免"填反了就空列表"
   if (min != null && max != null) {
     return value >= Math.min(min, max) && value <= Math.max(min, max)
   }
@@ -303,6 +359,51 @@ export function matchRange(value: number | null, range: RangeQuery | null | unde
     return value >= min
   }
   return value <= max!
+}
+
+/**
+ * 处理「跨条目比较」的模式（`topN` / `bottomN`）。
+ *
+ * 这两个模式**单条记录判不了** —— "取成交量最大的 20 条"要先把全表排序才知道
+ * 哪 20 条是大。因此不能塞进 `matchRange`，要在这里按整表处理。
+ *
+ * 缺失值（`toComparable` 返回 null）的条目一律不入选 —— 它们无法参与大小比较。
+ *
+ * @param list 已通过其余条件筛选的条目
+ * @param rangeMap 字段名 → 该字段的 RangeQuery（只处理 `topN`/`bottomN`）
+ * @param valueOf 字段名 → 取值函数
+ * @returns 命中集合的 key 集合（调用方用它在整表层面过滤）
+ */
+export function applyRankingFilter<T>(
+  list: readonly T[],
+  rangeMap: Record<string, RangeQuery | null | undefined>,
+  valueOf: (item: T, field: string) => number | null
+): Set<T> {
+  const result = new Set<T>(list)
+  for (const [field, range] of Object.entries(rangeMap)) {
+    if (!range || (range.mode !== "topN" && range.mode !== "bottomN")) {
+      continue
+    }
+    const n = finite(range.min)
+    if (n == null || n <= 0) {
+      continue
+    }
+    // 按该字段排序；缺失值沉底（与 applySort 一致）
+    const sorted = list
+      .map(item => ({ item, v: valueOf(item, field) }))
+      .filter(x => x.v != null)
+      .sort((a, b) => (range.mode === "topN" ? b.v! - a.v! : a.v! - b.v!))
+      .slice(0, Math.floor(n))
+      .map(x => x.item)
+    const keep = new Set(sorted)
+    // 多个 ranking 条件取交集
+    for (const item of result) {
+      if (!keep.has(item)) {
+        result.delete(item)
+      }
+    }
+  }
+  return result
 }
 
 /** 把任意取值归一成可比较的数字；不可用返回 null（排序时沉底） */

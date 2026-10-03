@@ -18,17 +18,44 @@ import type { MarketVolumeItem } from "."
  *    价格无价（-1）等。否则「涨跌幅 ≥ 10%」会把一堆无历史的条目放进来。
  */
 
-/** 区间模式。`any` = 不限（该条件关闭） */
-export type RangeMode = "any" | "gte" | "lte" | "between"
+/**
+ * 区间模式。`any` = 不限（该条件关闭）。
+ *
+ * 原本只有 4 种（any/gte/lte/between），现补齐为 9 种 —— 语义与判定
+ * **统一由 `common/utils/query-engine` 的 `RangeMode` / `matchRange` / `applyRankingFilter`
+ * 实现**，本文件只做类型再导出与市场监控特有的取值口径，避免两处判定逻辑漂移。
+ *
+ * 完整语义见 query-engine 的 `RangeMode` 声明（含每种模式的适用场景表）。
+ */
+import type { RangeMode as EngineRangeMode } from "@/common/utils/query-engine"
+import { RANKING_MODES, applyRankingFilter, isRangeActive, matchRange } from "@/common/utils/query-engine"
 
-export const RANGE_MODES: readonly RangeMode[] = ["any", "gte", "lte", "between"]
+// 判定实现统一到 query-engine，这里做再导出，保持本文件的既有引用面不变。
+// ⚠️ 注意：必须**同时**写 import 与 export-from —— 只有 export-from 时
+// 本文件内拿不到 `matchRange` 这个绑定（`ReferenceError: matchRange is not defined`）。
+export type { RangeMode } from "@/common/utils/query-engine"
+export { RANKING_MODES, applyRankingFilter, isRangeActive, matchRange }
+
+export const RANGE_MODES: readonly EngineRangeMode[] = [
+  "any",
+  "gte",
+  "lte",
+  "between",
+  "outside",
+  "near",
+  "eq",
+  "topN",
+  "bottomN"
+]
 
 export interface NumericRange {
-  mode: RangeMode
-  /** `gte` / `lte` 的阈值；`between` 的下界 */
+  mode: EngineRangeMode
+  /** `gte`/`lte`/`near`/`eq`/`topN`/`bottomN` 的阈值；`between`/`outside` 的下界 */
   min?: number
-  /** `between` 的上界 */
+  /** `between` / `outside` 的上界 */
   max?: number
+  /** `near` 模式的容差（半宽）。未填时 `near` 退化为 `eq` */
+  tolerance?: number
 }
 
 /** 可被区间筛选的字段 */
@@ -59,22 +86,19 @@ function finite(value: unknown): number | null {
 }
 
 /**
- * 某个区间条件是否真的在生效（模式非 any **且** 该模式需要的阈值都填了）。
- * 页面用它来决定"是否显示为已筛选"、以及是否要在结果为空时给出提示。
+ * 区间判定与「是否生效」**已上移到 query-engine**。
+ *
+ * 原因：市场监控页与利润检索页现在共用同一套区间语义（`RangeFilter` 组件也是共用的），
+ * 判定逻辑只留一份。原先这里是独立实现，检索页另有一套裸 min/max 五段 if，
+ * 两边语义会漂移。
  */
-export function isRangeActive(range: NumericRange | undefined | null): boolean {
-  if (!range) {
-    return false
-  }
-  if (range.mode === "gte" || range.mode === "lte") {
-    return finite(range.min) != null
-  }
-  if (range.mode === "between") {
-    // 只填了一边也算生效：等价于 >= 下界 或 <= 上界，符合直觉
-    return finite(range.min) != null || finite(range.max) != null
-  }
-  return false
-}
+
+// ── 语义说明（判定实现在 query-engine）────────────────────────────────
+//  1. **端点一律包含**：`不低于` 是 `>=`、`不高于` 是 `<=`、`区间` 是 `min <= v <= max`。
+//  2. **阈值缺失 / 非有限数 ⇒ 该条件视为未启用**，而不是"匹配空集"。
+//  3. `区间` 模式下 `min > max` 时**自动对调**：这是填反了，不是要筛出空集。
+//  4. **取值缺失的条目在条件启用时一律不匹配**（`changePct` 无历史基准、价格为 -1 等）。
+//  5. `topN` / `bottomN` 需要跨条目比较，由 `applyRankingFilter` 在整表层面处理。
 
 /**
  * 取某条目某字段用于筛选的**数值**。返回 null 表示"这个条目没有该值"。
@@ -102,31 +126,7 @@ export function rangeValueOf(item: MarketVolumeItem, field: MarketRangeField): n
 
 /** 单个值是否满足区间条件。`value === null`（条目无该值）在条件启用时一律不匹配。 */
 export function matchesRange(value: number | null, range: NumericRange | undefined | null): boolean {
-  if (!isRangeActive(range)) {
-    return true
-  }
-  if (value == null) {
-    return false
-  }
-  const r = range!
-  const min = finite(r.min)
-  const max = finite(r.max)
-  if (r.mode === "gte") {
-    return value >= min!
-  }
-  if (r.mode === "lte") {
-    return value <= min!
-  }
-  // between：单边时退化为 >= / <=；双边时自动对调，避免"填反了就空列表"
-  if (min != null && max != null) {
-    const lo = Math.min(min, max)
-    const hi = Math.max(min, max)
-    return value >= lo && value <= hi
-  }
-  if (min != null) {
-    return value >= min
-  }
-  return value <= max!
+  return matchRange(value, range)
 }
 
 /** 按多个区间条件过滤（各条件之间是「与」） */
@@ -135,7 +135,26 @@ export function applyRangeFilters(list: MarketVolumeItem[], ranges: MarketRanges
   if (!active.length) {
     return list
   }
-  return list.filter(item => active.every(field => matchesRange(rangeValueOf(item, field), ranges[field])))
+  // `topN`/`bottomN` 跨条目比较，必须在整表层面做
+  const rankingKeys = active.filter(f => RANKING_MODES.includes(ranges[f].mode))
+  const hasRanking = rankingKeys.length > 0
+  const pointActive = active.filter(f => !RANKING_MODES.includes(ranges[f].mode))
+
+  let out = pointActive.length
+    ? list.filter(item => pointActive.every(field => matchesRange(rangeValueOf(item, field), ranges[field])))
+    : list
+
+  if (hasRanking) {
+    const rangeMap: Record<string, NumericRange> = {}
+    for (const f of rankingKeys) {
+      rangeMap[f] = ranges[f]
+    }
+    const keep = applyRankingFilter(out, rangeMap, (item, field) =>
+      rangeValueOf(item, field as MarketRangeField)
+    )
+    out = out.filter(item => keep.has(item))
+  }
+  return out
 }
 
 /** 当前生效的区间条件数量（用于「筛选 N 项」角标） */

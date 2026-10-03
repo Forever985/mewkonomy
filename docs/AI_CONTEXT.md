@@ -181,7 +181,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 - **迷宫（重要）**：`data.json` 已从 `v1.20250818.0` 升到 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。原「无迷宫玩法、无需开发」的结论**已失效**。
 - **市场历史归档**：已从 v1 单文件升级为 **v2 分片**（`market_history_<UTC日>T<HH>.json`，UTC 6 小时一块、字典编码、7 天 / 168 点，按窗口按需拉 1~2 片）。
 - **`game.ts` 规模**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 35 文件 / 299 用例**）。
+- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 37 文件 / 336 用例**）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 8.4 本次改动后的验证（实测）
@@ -610,7 +610,7 @@ profitPH = incomePH − costPH
 档位价由 `getPriceOf` 按各档位口径算出，与别处显示的价格同源。
 
 ### 15.4 验证（实测）
-- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` public/private 均成功；
+- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` public/private 均成功；
   dev server 下 `ActionSolveCard.vue` / `price-solve.ts` / `ActionDetail.vue` 三个模块均能被 Vite 正常编译。
 - `tests/price-solve.test.ts` 分两层：
   1. **手算样例**（完全可控的假计算器）：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
@@ -698,7 +698,7 @@ profitPH = incomePH − costPH
 表现成**"选择器列得出物品、却被判定不支持该动作"**。这个坑是测试抓出来的（见 16.5 第 3 条）。
 
 ### 16.5 验证（实测）
-- `vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` 双模式成功；
   dev server 下 3 个新模块均编译通过。
 - **默认值复现**（真实计算器）：decompose 的成本 `2239964909.22` 对 `2239964909.22`、
   收入与利润同样精确相等，**总耗时 = 1.000000 小时**；transmute 同样精确。
@@ -760,7 +760,7 @@ profitPH = incomePH − costPH
 `tests/price-fallback-integration.test.ts`（4 用例，真实数据）：全物品 × 多等级的来源一致性、
 「借另一端」确实取到的是另一端**原始市价**、同一 tick 切换设置、强制大全套。
 
-验证：`vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` public/private 均成功。
+验证：`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` public/private 均成功。
 
 ---
 
@@ -837,5 +837,72 @@ profitPH = incomePH − costPH
   `name` 传数组是 **OR**；单值 `profitRate` 用 `&&` 判定、**传 0 不生效**，
   而 `minProfitRate` 用 `!= null`、传 0 生效（两者并不对称，是现状）。
 
-验证：`vue-tsc` 通过；`vitest` **35 文件 / 299 用例全绿**；`vite build` public/private 均成功
+验证：`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` public/private 均成功
 （2961 模块）；lint 非风格问题 0。
+
+## 19. 区间条件模式化：从 4 种扩到 9 种（2026-10-03）
+
+### 19.1 改造前的分裂状态
+
+同一个「数值区间」在项目里有**两套互不相同的实现**：
+
+| | 利润检索页（11 个） | 市场监控页 |
+| --- | --- | --- |
+| 控件 | `SearchPanel` 里两个裸 `el-input-number` 拼 `min~max` | `RangeFilter` 组件（有模式下拉） |
+| 语义 | **只能表达区间** | `any / gte / lte / between` 四种 |
+| 判定 | `handleSearch` 里五段 `>=` / `<=` 硬编码 | `filters.ts` 的 `matchesRange` |
+
+⇒ 检索页想表达「利润率**至少** 20%」只能填 `min=20, max=∞`（而 `max` 填不了 ∞）；
+想表达「**排除** 20%~40% 那一段」根本做不到。
+
+### 19.2 统一到一套 9 种模式
+
+用户要求「**尽可能多提供接口、窗口，用户可以不用，但不能没有**」。现在
+`query-engine` 的 `RangeMode` 有 9 种，检索页与市场监控页**共用同一控件、同一判定**：
+
+| 模式 | 含义 | 需要填 | 典型场景 |
+| --- | --- | --- | --- |
+| `any` | 不限 | — | 关闭该条件 |
+| `gte` | 不低于（含端点） | min | 「利润率至少 20%」 |
+| `lte` | 不高于（含端点） | min | 「风险不超过 10」 |
+| `between` | 在两者之间（含两端） | min / max | 「等级 30~50」—— **改造前唯一能表达的模式** |
+| `outside` | 在区间**之外** | min / max | 「排除 1000~2000 这一档」 |
+| `near` | 最接近某值（带容差） | min = 目标，tolerance | 「等级 30 上下 2 级以内」 |
+| `eq` | 等于（浮点带容差） | min | 「只看等级 45」 |
+| `topN` | 该字段最大的 N 条 | min = N | 「只看成交量前 20」 |
+| `bottomN` | 该字段最小的 N 条 | min = N | 「只看最冷门的 10 个」 |
+
+`topN` / `bottomN` 需要**跨条目比较**（单条记录判不了「是不是前 20」），
+因此由 `applyRankingFilter` 在整表层面处理，不塞进 `matchRange`。
+
+### 19.3 向后兼容的做法（关键）
+
+`SearchPanel` 的 `rangeOf` / `onRangeChange` 做**双向映射**：
+模式存 `${minKey}__mode`（及 `__tolerance`），而 `minKey` / `maxKey` 两个**平铺字段照旧读写**。
+所以：
+
+- 11 个页面、29 个 range 字段的声明**一行都不用改**；
+- 用户已有的本地条件（`useMemory` 存的）没有 `__mode` 键 ⇒ 被当成 `between`，**语义与改造前一致**；
+- `handleSearch` 的 `rangeFromFlat` 在没有 `__mode` 时走「旧路径」分支，
+  逐字保留 `profitRate` 的 `&&` 短路与「两个下限取更严」的既有行为。
+
+由 `tests/handle-search-parity.test.ts`（34 个行为锁定用例）、
+`tests/range-modes.test.ts`（21）、`tests/search-range-modes.test.ts`（16）共同守住。
+
+### 19.4 合并掉一处重复实现
+
+`marketvolume/filters.ts` 原本有**自己的一套** `isRangeActive` / `matchesRange`，
+与 `query-engine` 的同名函数语义相同但代码独立。现改为从 `query-engine` 再导出，
+判定只留一份（`applyRangeFilters` 里额外处理了 `topN`/`bottomN` 的整表语义）。
+
+### 19.5 顺带修掉的一个隐性 bug
+
+`handleSearch` 读容差的键名写成了 `${minKey}__mode__tolerance`，
+而 `SearchPanel` 写的是 `${minKey}__tolerance` ⇒ **容差永远读不到**，
+`near` 静默退化成 `=`。界面能设容差、结果却不对，且**两种情况都返回"看起来合理"的结果**
+——只有"带容差 / 不带容差"对比才暴露。已用探针定位并修正。
+
+### 19.6 验证
+
+`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**（上轮 299，+37）；
+`vite build` public/private 均成功（2961 模块）。

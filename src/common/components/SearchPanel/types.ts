@@ -34,6 +34,10 @@ export interface PanelSearchData {
   maxRisk?: number
   minLevel?: number
   maxLevel?: number
+  /**
+   * 区间字段的**模式**等元数据走 `${minKey}__mode` / `__max` / `__tolerance` 这几个键
+   * （由末尾的索引签名容纳），由 `SearchPanel` 自动维护，页面与 `handleSearch` 一般不必碰。
+   */
   banEquipment?: boolean
   banJewelry?: boolean
   banCharm?: boolean
@@ -63,7 +67,31 @@ interface FieldBase {
   when?: () => boolean
 }
 
-/** 数值区间：[minKey, maxKey] 双头，或单头只给 maxKey */
+/**
+ * 数值区间。
+ *
+ * ## 模式（2026-10-03 新增）
+ *
+ * 改造前只能表达「`minKey` ~ `maxKey`」一种语义（等价于现在的 `between`），
+ * 用户想筛「至少 20%」或「排除 1000~2000」就得手算并凑成区间。
+ * 现支持全部 9 种模式（与市场监控页共用 `RangeFilter` 组件与判定实现）：
+ *
+ * | mode | 含义 |
+ * | --- | --- |
+ * | 不限 | 关闭该条件（默认） |
+ * | ≥ / ≤ | 不低于 / 不高于（含端点） |
+ * | 区间 | 在两者之间（含两端）—— **改造前唯一能表达的模式** |
+ * | 区间之外 | 排除中间那段 |
+ * | 接近 | 目标值 ± 容差 |
+ * | = | 等于（浮点带容差） |
+ * | 前 N / 后 N | 该字段最大/最小的 N 条 |
+ *
+ * ## 向后兼容
+ *
+ * **不写 `modes` 的字段行为完全不变**：模式数据存放在 `${minKey}__mode`
+ * （以及 `__max` / `__tolerance`），而 `minKey` / `maxKey` 两个平铺字段照旧读写，
+ * 所以页面声明与 `handleSearch` 的旧用法都不需要改。
+ */
 export interface RangeField extends FieldBase {
   type: "range"
   minKey?: string
@@ -77,6 +105,15 @@ export interface RangeField extends FieldBase {
   min?: number
   max?: number
   width?: number
+  /** 步长（RangeFilter 用），默认 1 */
+  step?: number
+  /** 小数位，默认 0 */
+  precision?: number
+  /**
+   * 允许的模式子集。**不写 = 全部 9 种**（用户要求「可以不用，但不能没有」）。
+   * 写了则只列这些，按给定顺序显示。
+   */
+  modes?: Array<"any" | "gte" | "lte" | "between" | "outside" | "near" | "eq" | "topN" | "bottomN">
 }
 
 /** 条件行：可增删的多行「步数/等级 + 动作」 */
