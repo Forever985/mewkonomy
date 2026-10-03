@@ -981,8 +981,87 @@ const risk = cost4EnhancePH / profitPH
 `vue-tsc` 通过（基线 0 条 → 现在 0 条）；`vitest` **37 文件 / 336 用例全绿**；
 `vite build` 成功，产物中可 grep 到 `风险系数说明` / `装备损耗` / `追得上装备贬值`。
 
-### 20.6 尚未做：到强化工具中查看
+### 20.6 「到强化工具中查看」：已完成（见 PROJECT_CONTEXT §二十六）
 
 用户提到「『到强化工具中查看』这个功能你也并没有复制过去」。
-实测**全仓搜索「强化工具」零命中** —— 该功能在当前代码中不存在，需要新建。
-所需基础设施齐全（`enhancerStore.config.hrid` 存在、路由有 `name: "Enhancer"`）。
+实测**全仓搜索「强化工具」零命中** —— 该功能在当前代码中**不存在**，属新建而非补齐。
+
+**已完成**（提交 `f0af1b2`）：11 个含强化功能的利润页**每行最后**新增「去强化」入口
+（与「查看」并排，`MagicStick` 图标），纯路由跳转 `router.push({ name: "Enhancer" })`，
+**不带任何参数**。
+
+**为什么不传装备 hrid**（用户要求求证，结论：用户完全正确）：
+`pinia/stores/enhancer.ts:91` 显示强化页的整套配置（`hrid` / `originLevel` /
+`enhanceLevel` / `escapeLevel` / `hourlyRate` / `taxRate`）**本来就持久化在 localStorage**，
+是玩家自己调好的预设 —— 传参过去反而会覆盖它。
+
+这与 `usePriceStatus` 是同一类思路：**用 store 隐式带状态，而不是往地址栏塞参数**
+（地址栏会暴露在分享链接与浏览器历史里）。
+
+## 21. 三轮改动汇总与运行验证（2026-10-03）
+
+本节是 §18~§20 三轮的**收口**，记录实测基线与「怎么证明功能真的生效」。
+
+### 21.1 本轮的三个提交
+
+| 提交 | 内容 |
+| --- | --- |
+| `d0dff70` | 查询引擎 `query-engine.ts` + 多语言检索 `multilang-search.ts`；`marketvolume` 与 `handleSearch` 接入 |
+| `312b20e` | 区间条件从 4 种模式扩到 **9 种**；`RangeFilter` 与 `SearchPanel` 共用；`filters.ts` 判定上移到 query-engine |
+| `07b53fd` | 术语 hover：修掉中文下风险 tooltip 为空的 bug；`SearchPanel` 加 `tip`；11 页 37 处 |
+| `f0af1b2` | 11 个利润页每行新增「去强化」入口（提交 `e445ffe` 是 `.gitattributes`，见 PROJECT_CONTEXT §二十七） |
+
+### 21.2 实测基线（2026-10-03 18:2x，`main` = `f0af1b2`）
+
+| 项 | 结果 |
+| --- | --- |
+| `npx vue-tsc --noEmit` | **报错 0 条** |
+| `npx vitest run` | **37 文件 / 336 用例全绿** |
+| `npx vite build --mode public` | 成功，**2961 模块**，11.49s |
+| dev server 编译冒烟 | 11 个改动模块全部 **HTTP 200**、无编译错误 |
+| 产物内容验证 | `去强化`(12 chunk) / `风险系数说明`(6) / `topN`(5) / `区间之外`(2) / `地獄精華`(2) / `借另一端`(5) 全部命中 |
+
+### 21.3 「功能真的生效」的判定方法（本轮实践，可复用）
+
+`tsc` 通过 + 测试全绿 + 构建成功**只证明能编译，不证明运行时功能生效**。
+本轮用四层递进验证，前一层不能替代后一层：
+
+1. **静态** —— `vue-tsc` 0 报错（与 HEAD 基线对比，确认没引入新错）
+2. **产物** —— `grep` 构建产物里的新标识（`topN` / `去强化` / `地獄精華`），
+   证明代码**真的进了 bundle**，而不是被 tree-shake 掉
+3. **编译** —— 起 dev server 逐个请求改动模块，全部 HTTP 200 且响应体里
+   **不含** `Internal server error` / `Transform failed` / `Parse failure`
+4. **依赖链** —— 顺藤摸瓜请求 `main.ts`（依赖树根）与三个关键页面模块，
+   确认「页面 → composable → 引擎 → 工具函数」整条链能连通
+
+**第 3 层的价值**：它能抓出「tsc 干净但运行时才炸」的问题。
+本轮就靠它确认了 `SearchPanel/types.ts` 返回 0 字节是**正常的** ——
+该文件 13 个类型声明、**0 个运行时语句**，编译后必然为空。
+再反证 `SearchPanel/index.vue` 产物里 `fieldTitleOf` 出现 8 次、`title:` 7 处
+（6 个 `el-form-item` + 1 处函数定义），确认 `tip` 逻辑真的注入了。
+
+⚠️ 判空产物前**先确认那个文件是不是纯类型模块**，别把正常当异常、
+也别把异常当正常。这是本轮踩过的思维坑。
+
+### 21.4 已知遗留（**未**做，不是 bug）
+
+按用户判断，**市场监控页 / 利润检索页的 URL 同步不做**（单人自用，地址栏无意义）。
+以下是评估过但主动不做的项：
+
+- **视图状态持久化**：`useMemory` 已在 11 处用于搜索条件的落盘，但**市场监控页是唯一漏网的**
+  （它的 `keyword` / 排序 / 每页条数都在组件 `ref` 里，刷新即丢）。
+  引擎侧的 `encodeQueryState` / `decodeQueryState` 已就绪，接页面即可。
+- **命中历史**：提醒规则（`alerts.ts`）命中后**没有时间戳、不落盘、从不展示**。
+  `notifiedAtMap` 是纯内存 Map，只用于通知去重，刷新即丢。
+  所以「3 小时前涨了 12% 发生过几次」目前答不出。
+- **切页停止评估**：采样器 `startMarketAutoSampling` 放在 `main.ts` 全局
+  （注释明说「开着任意页面都在采样」），但**提醒评估只在监控页做**
+  ⇒ 切到别的页面提醒就停了。采样与评估的覆盖范围不一致。
+- **异常检测**：全项目 `stddev` / `分位` / `zscore` / `spike` / `outlier` **零命中**。
+  `changePct` 只是两点比较（`cur - base`），没有「相对自身历史是否异常」的概念。
+- **两页联动**：市场监控页**没有 import `vue-router`**，物品名是纯 `<span>`。
+  但注意 —— **不是「零联动」**：jungle 一类页面通过 `usePriceStatus` 隐式联动
+  （进入时把买卖价状态写进全局 `gameStore`，离开时 `onBeforeRouteLeave` 还原）。
+  **查联动时不能只 grep `router.push`**，会漏掉 store 驱动的隐式联动。
+- **收藏粒度错配**：收藏是 `hrid|level`（同物品 +0 与 +3 是两条），
+  而提醒规则的「指定物品」只比 `hrid` ⇒ 「只盯我收藏的」这个最自然的需求做不出来。

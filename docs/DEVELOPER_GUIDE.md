@@ -597,6 +597,74 @@ r.impossible     // 临界价 ≤ 0 = 即使白送也达不到
 3. 优先选**不动元素结构**的方案（原生属性如 `title` / `placeholder` / `alt`），
    把 tooltip 留给表格列头那种本来就是自由布局的地方。
 
+
+### 2.23 声称「功能可用」之前必须做运行验证（2026-10-03）
+
+`vue-tsc` 通过 + `vitest` 全绿 + `vite build` 成功 —— 这三样**只证明能编译，
+不证明运行时功能生效**。本轮实践的四层验证，**前一层不能替代后一层**：
+
+| 层 | 手段 | 能抓出什么 |
+| --- | --- | --- |
+| 1 静态 | `vue-tsc --noEmit` 报错数（**先记 HEAD 基线**再改） | 类型错误 |
+| 2 产物 | `grep` 构建产物里的新标识 | 代码被 tree-shake 掉、没进 bundle |
+| 3 编译 | dev server 逐个请求改动模块，看 HTTP + 响应体 | 「tsc 干净但运行时炸」 |
+| 4 依赖链 | 请求 `main.ts`（依赖树根）与关键页面模块 | 整条链是否连通 |
+
+**第 3 层的具体做法**：
+
+```bash
+npx vite --mode private --port 3430 --strictPort --no-open   # 后台起
+for m in src/common/utils/query-engine.ts src/pages/jungle/index.vue; do
+  code=$(curl -s -o /tmp/m.js -w "%{http_code}" "http://127.0.0.1:3430/$m")
+  grep -qE "Internal server error|Transform failed|Pre-transform error|Parse failure" /tmp/m.js \
+    && echo "$m 编译报错" || echo "$m OK"
+done
+```
+
+⚠️ **判空产物前先确认那是不是纯类型模块**。本轮 `SearchPanel/types.ts`
+返回 0 字节，一度疑似异常，实查是 **13 个类型声明 + 0 个运行时语句**
+⇒ 编译后必然为空。**别把正常当异常，也别把异常当正常。**
+
+**「条件不成立时测试通过」比失败更危险**（§2.21 已有同款案例）。
+本轮还遇到一次：想验证 `.gitattributes` 消 warning，新建空仓库测 A/B 都是 0 行 ——
+因为空仓库里没有「已跟踪的 CRLF 文件」，git 压根不警告，**等于没验证**。
+必须构造出与生产环境相同的条件。
+
+### 2.24 行尾配置：`.gitattributes` + 发布脚本双管（2026-10-03）
+
+`超级一键部署` 曾刷出近百行 `warning: LF will be replaced by CRLF`，
+把真正的输出淹掉。根因三层叠加：
+
+1. 本机 `core.autocrlf=true`（**系统级**，Git for Windows 安装默认）
+2. 项目**没有 `.gitattributes`** ⇒ git 只能靠全局配置无差别转换所有文本文件
+3. 被转的正好是**不该转的** —— `gh-pages` 上全是 `assets/*.js|css`，文件名带内容 hash
+
+**修法（两处都要，缺一不可）**：
+
+```
+# .gitattributes（主仓库，治本）
+* text=auto eol=lf
+/dist/**            # 构建产物
+/public/data/**     # 数据快照
+*.jpg *.png *.woff *.ttf *.mp4 ... pnpm-lock.yaml
+```
+
+```js
+// scripts/publish-gh-pages.mjs：clone 之后立刻关（治标，但必要）
+run("git", ["config", "core.autocrlf", "false"], { cwd: work })
+run("git", ["config", "core.safecrlf", "false"], { cwd: work })
+```
+
+⚠️ **只改 `.gitattributes` 不够** —— 那 94 行 warning 出在**脚本克隆的临时仓库**里，
+主仓库的 attributes 管不到它。而 `git config` **不带 `--global` 时只写该仓库的
+`.git/config`**，不动用户全局配置。
+
+`pnpm-lock.yaml` 特意排除：逐行解析，转换会破坏一致性校验。
+
+**本次刻意不做 renormalize**：`git add --renormalize` 会列出 344 个文件，
+但**只有 48 个内容真会变**（39 CRLF + 9 mixed），其余 296 个只是被列出。
+用户选「最小变更」⇒ 那 48 个继续以 CRLF/mixed 存索引，**若要归一单独提一个 commit**。
+
 ## 三、测试
 
 - 框架：**vitest + happy-dom**（`pnpm test`）。测试文件在 `tests/` 下。

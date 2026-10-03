@@ -913,3 +913,46 @@ function gotoEnhancer() {
 
 `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` 成功，
 产物中可 grep 到 `去强化` / `To enhancer` / `Enhancer` / `去强化说明`。
+
+## 二十七、行尾配置与 warning 消除（2026-10-03）
+
+### 27.1 问题
+`超级一键部署` 的 `[3/3]` 阶段刷出**近百行**
+`warning: in the working copy of 'assets/xxx.js', LF will be replaced by CRLF`，
+把真正的输出（同步了哪些文件、发布成功与否）完全淹掉。
+
+### 27.2 根因（三层叠加）
+1. 本机 `core.autocrlf=true` —— **系统级**默认，Git for Windows 安装时设的
+2. 项目**没有 `.gitattributes`** ⇒ git 只能靠全局配置**无差别**转换所有文本文件
+3. 被转的正好是**不该转的**：`gh-pages` 上全是 `assets/*.js|css`，
+   文件名带内容 hash，转换只有坏处没有好处
+
+顺带查出**历史污染**（不是本次引入的，是 `autocrlf` 长期作用的结果）：
+- **39 个文件以 CRLF 存入索引**（`README.md`、几份文档、十几个 `.ts`）
+- **9 个文件行尾混杂** —— `src/pages/jungle/index.vue` 是 **394 行 CRLF + 1 行 LF**
+
+### 27.3 改动（提交 `e445ffe`）
+- **新增 `.gitattributes`**：`* text=auto eol=lf`；构建产物 / 二进制 / 锁文件排除
+- **`scripts/publish-gh-pages.mjs`**：clone 之后立刻
+  `git config core.autocrlf false` + `core.safecrlf false`
+  —— 不带 `--global` 时**只写该临时仓库的 `.git/config`**
+- 顺带更正了脚本里一段会误导人的注释（原文把「差异仅为行尾规范化」写成
+  `无需发布` 的**原因**，实际那描述的是历史现象；关掉 autocrlf 后它只是**双保险**）
+
+### 27.4 验证（对照实验，非 dry-run）
+
+在临时仓库里构造与 `gh-pages` 相同的情形（**仓库里有 CRLF 索引文件 + 工作区放 LF 版本**）：
+
+| | warning |
+| --- | --- |
+| A) 不带 `.gitattributes` | **2 行** |
+| B) 带 `.gitattributes` | **0 行** |
+
+⚠️ 第一次的验证是**错的**：在新建的空仓库里测，A/B 都是 0 ——
+没有已跟踪的 CRLF 文件，git 压根不报 warning，**等于没验证**。
+
+### 27.5 刻意不做 renormalize
+`git add --renormalize` 会列出 344 个文件，但**只有 48 个内容真会变**
+（39 CRLF + 9 mixed），其余 296 个只是被列出、内容不变。
+按「最小变更」原则本次不执行 ⇒ 那 48 个继续以 CRLF/mixed 存索引。
+代价：别的平台 clone 会看到整文件行尾变化。**若要归一，单独提一个 commit 更清晰。**
