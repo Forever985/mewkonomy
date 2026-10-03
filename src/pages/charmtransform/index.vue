@@ -24,9 +24,17 @@ const result = computed<CharmTierResult[]>(() => {
 })
 const activeResult = computed(() => result.value.find(r => r.tier === activeTier.value))
 
+/**
+ * 催化剂标签 —— 用**游戏内的真实物品名**。
+ *
+ * 此前写的是「普通催化剂 / 主要催化剂」，但 `data.json` 里根本没有这两个物品：
+ * 转化这一步能用的是「转化催化剂」（+15%，成功时消耗 1 个）与
+ * 「至高催化剂」（+25%，任意炼金通用）。
+ * 玩家按界面的名字去游戏里找是找不到的。
+ */
 function catalystLabel(rank: number) {
-  if (rank === 1) return t("普通催化剂")
-  if (rank === 2) return t("主要催化剂")
+  if (rank === 1) return t("转化催化剂")
+  if (rank === 2) return t("至高催化剂")
   return t("无")
 }
 function onRowClick(row: CharmTierResult) {
@@ -35,6 +43,19 @@ function onRowClick(row: CharmTierResult) {
 function profitClass(v: number) {
   return v > 0 ? "success" : v < 0 ? "error" : ""
 }
+
+/**
+ * 五档是否**全部**无市场报价。
+ *
+ * 实测 `market.json` 里所有护符（冲泡 + 其它技能）ask/bid 都是 -1，
+ * 即市场上**一件都卖不掉**。此时「理想利润」只是**理论上限** ——
+ * 假设你能按自制成本价卖得掉。
+ *
+ * 不标注的话，页面会给用户一个不存在的收益预期 ⇒ 这正是「效果不好」的来源。
+ */
+const allNoQuote = computed(() => result.value.length > 0 && result.value.every(r => r.noMarketQuote))
+/** 有市场报价的档位数（用于提示文案） */
+const quotedCount = computed(() => result.value.filter(r => !r.noMarketQuote).length)
 </script>
 
 <template>
@@ -48,11 +69,44 @@ function profitClass(v: number) {
         </div>
       </template>
 
-      <div class="flex items-center gap-3 mb-3">
-        <span class="text-sm">{{ t("催化剂") }}：</span>
-        <el-radio-group v-model="catalystRank">
-          <el-radio-button v-for="r in [0, 1, 2]" :key="r" :value="r">{{ catalystLabel(r) }}</el-radio-button>
-        </el-radio-group>
+        <el-alert
+          v-if="allNoQuote"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="mb-3"
+        >
+          <template #title>
+            {{ t("当前市场没有任何护符报价") }}
+          </template>
+          <div class="text-xs leading-5">
+            {{ t("五档产出护符在市场上一件都卖不掉（买价与卖价均为空），所以「实际利润」按 0 计价。") }}
+            {{ t("「理想利润」只是理论上限——它假设你能按「用对应精华从零制作的成本」卖出去。") }}
+            {{ t("转化本身不创造利润，只是把冲泡精华换成别的技能精华；真正盈利的前提是市场愿意给高于自制成本的价格。") }}
+          </div>
+        </el-alert>
+        <el-alert
+          v-else
+          type="info"
+          :closable="false"
+          show-icon
+          class="mb-3"
+        >
+          <template #title>
+            {{ t("有市场报价的档位") }}：{{ quotedCount }} / {{ result.length }}
+          </template>
+        </el-alert>
+
+        <div class="flex items-center gap-3 mb-3">
+          <span class="text-sm">{{ t("催化剂") }}：</span>
+          <el-tooltip placement="top" effect="light" :show-after="120">
+            <template #content>
+              <div class="max-w-360px leading-5">{{ t("催化剂说明") }}</div>
+            </template>
+            <el-radio-group v-model="catalystRank">
+              <el-radio-button v-for="r in [0, 1, 2]" :key="r" :value="r">{{ catalystLabel(r) }}</el-radio-button>
+            </el-radio-group>
+          </el-tooltip>
         <PriceStatusSelect @change="onPriceStatusChange" />
         <span class="text-sm text-gray-400 ml-2">{{ t("理想价格") }}：{{ t("市场无人买卖时由你主宰，挂价上限=产出护符自身精华直接制作成本") }}</span>
       </div>
@@ -80,11 +134,21 @@ function profitClass(v: number) {
             <span :class="profitClass(row.profitActualPH)">{{ row.valid ? Format.money(row.profitActualPH) : "--" }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('理想利润 / h')" align="center" min-width="120">
-          <template #default="{ row }">
-            <span :class="profitClass(row.profitIdealPH)">{{ row.valid ? Format.money(row.profitIdealPH) : "--" }}</span>
-          </template>
-        </el-table-column>
+          <el-table-column :label="t('理想利润 / h')" align="center" min-width="120">
+            <template #default="{ row }">
+              <el-tooltip
+                :disabled="!row.noMarketQuote"
+                placement="top"
+                effect="light"
+                :show-after="120"
+              >
+                <template #content>
+                  <div class="max-w-360px leading-5">{{ t("该档产出护符无市场报价，此数字是理论上限") }}</div>
+                </template>
+                <span :class="profitClass(row.profitIdealPH)">{{ row.valid ? Format.money(row.profitIdealPH) : "--" }}</span>
+              </el-tooltip>
+            </template>
+          </el-table-column>
         <el-table-column :label="t('实际利润率')" align="center" min-width="90">
           <template #default="{ row }">{{ row.valid ? Format.percent(row.profitActualRate) : "--" }}</template>
         </el-table-column>

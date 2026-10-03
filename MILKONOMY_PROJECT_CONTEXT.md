@@ -329,7 +329,7 @@ AIGC:
 - **迷宫（重要）**：`data.json` 已是 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。§八「功能D：卷轴排查结论」里「当前 data.json 无迷宫玩法」的判断**基于旧版本，已失效**。
 - **市场历史（§12 的补充）**：归档已从 v1 单文件 `market_history.json` 升级为 **v2 分片** `market_history_<UTC日>T<HH>.json`（UTC 6 小时一块、字典编码、滚动 7 天 / 168 点；前端按窗口**按需只拉 1~2 片**，取不到才回退 v1 文件）。§12.2 中「上限 520 点」「前端按 `<BASE_URL>data/market_history.json` 拉取」已不适用于 v2。
 - **`game.ts` 行数**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 37 文件 / 336 用例**，见 §二十一）。
+- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 38 文件 / 345 用例**，见 §二十一）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 13.3 有意不改的项
@@ -637,7 +637,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 - `ActionDetail.vue` 底部挂载（所有检索页共用该弹窗，一处接入全站可用）。
 
 ### 20.4 验证
-- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` 双模式成功；
   dev server 下三个新/改模块均可被 Vite 正常编译。
 - 手算样例验算：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
   目标 500 → 材料临界价 230、成品临界价 729.1667，代回利润均精确等于 500 ✓
@@ -663,7 +663,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
   新增纯函数 `SolveUnit` / `HOURS_PER_DAY` / `toProfitPHOf` / `fromProfitPHOf` / `resolveTargetProfitPH`。
 - 测试从 9 个用例增到 **15 个**：新增「日薪 = 时薪 × 24 与往返一致」「两种口径解出的临界价相同」
   「留空回落当前值」「**0 是有效目标**」「日薪数额换算成时薪」5 项。
-- 验证：`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` public/private 均成功；
+- 验证：`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` public/private 均成功；
   dev server 下两个模块均编译通过；lint 非风格问题 0。
 - 顺带：`i18n` 的 key 就是中文原文，所以改中文文案等于**换 key**——
   新键已补进 `en.ts` / `zh-tw.ts`，被替换的旧键同时删除（不留孤儿键）。
@@ -710,7 +710,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 需由物品反推 action）。
 
 ### 21.5 验证
-- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
+- `vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
 - 默认值复现：decompose 成本 `2239964909.22` 对 `2239964909.22`、总耗时 **1.000000 小时**；transmute 同。
 - 枚举闭环：6 个动作样本全部 `available = true`；制造样本反推为 `tailoring`、采集为 `foraging`。
   数量：强化 532 / 分解 742 / 转化 622 / 点金 889 / 制造 647 / 采集 26。
@@ -777,7 +777,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ### 23.3 验证
 
-- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**
+- `vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**
 - 新增 `tests/price-fallback-strategies.test.ts`（17 用例，纯函数，含 **360 组策略矩阵**不变量断言）
   与 `tests/price-fallback-integration.test.ts`（4 用例，真实数据）
 - 实测：全物品 × 多等级共 **2163 个组合，来源与价格 0 漂移**；来源分布
@@ -818,7 +818,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ### 24.4 验证
 
-`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**（上轮 209，+90）；
+`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**（上轮 209，+90）；
 `vite build` public/private 均成功（2961 模块）；lint 非风格问题 0。
 
 ## 二十五、区间条件模式化：4 种 → 9 种，检索页与监控页共用一套（2026-10-03）
@@ -855,7 +855,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ### 25.5 验证
 
-`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**（上轮 299，+37）；
+`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**（上轮 299，+37）；
 `vite build` 双模式成功；新增 `tests/range-modes.test.ts`（21）与
 `tests/search-range-modes.test.ts`（16）。
 
@@ -918,7 +918,7 @@ function gotoEnhancer() {
 
 ### 26.4 验证
 
-`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` 成功，
+`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` 成功，
 产物中可 grep 到 `去强化` / `To enhancer` / `Enhancer` / `去强化说明`。
 
 ## 二十七、行尾配置与 warning 消除（2026-10-03）
@@ -1017,7 +1017,7 @@ composable / 路由跳转这类**组件 setup 之外**的场景拿不到当前 p
 | 层 | 结果 |
 | --- | --- |
 | `vue-tsc` | **0 报错** |
-| `vitest` | **37 文件 / 336 用例全绿** |
+| `vitest` | **38 文件 / 345 用例全绿** |
 | `vite build --mode public` | 成功；产物中 `config.hrid` 命中 6 个 chunk、新文案命中 1 个 |
 | dev server 编译 | 7 个相关模块全部 **HTTP 200** |
 | **运行时链路**（最关键） | 编译产物里逐段确认：<br>① `gotoEnhancer(row)` 里 `useEnhancerStoreOutside().config.hrid = row.hrid`<br>② store 产物里 `hrid` getter + `useEnhancerStoreOutside` 各 1 处<br>③ 强化页产物里 `onMounted(() => { enhancerStore.hrid && onSelect(...) }`<br>④ 模板 4 个抽验页均传 `row` |
@@ -1032,3 +1032,96 @@ composable / 路由跳转这类**组件 setup 之外**的场景拿不到当前 p
 tooltip 文案也改了：原来写「只跳转、不会覆盖你的预设」（与新行为相反），
 现为「自动选中**这一行**的装备。起始与目标等级、逃逸等级、时薪、税率等
 计算条件沿用你自己设的预设，不受影响」。
+
+## 二十九、冲泡护符转化的数据正确性修复（2026-10-03）
+
+起因：用户要求「全部修复，让结果符合游戏实际」。
+
+### 29.1 修的五处（全部有实测依据）
+
+| # | 问题 | 修法 | 验证 |
+| --- | --- | --- | --- |
+| 1 | **催化剂期望消耗写成 `successRate`**（应为 `1/successRate`） | `AlchemyCalculator` 新增 `catalystCount` getter，三处炼金共用 | 实测：转化催化剂 0.6 → **1.667**、至高 0.65 → **1.538**（原低估 2.37~2.78×） |
+| 2 | **催化剂标签是虚构物品名** | 「普通/主要催化剂」→「转化/至高催化剂」；`chainbuilder` 按 `step.kind` 分派 | 游戏 `data.json` 只有四种催化剂，正确的两个 key 三个语言包全缺，已补 |
+| 3 | **档位倍率硬编码** | `TIER_ESSENCE_COUNT` → 从 `actionDetailMap.inputItems` 推导 | 数值**完全不变**（证明只是消除隐患，行为一致） |
+| 4 | **制作副产品混进转化产出** | 新增 `byProducts` / `byProductValuePH`，按 hrid 剔除 | 工匠箱（`rareDropTable`）不再出现在 `products` 里 |
+| 5 | **市价缺失未标注** | 新增 `noMarketQuote`，UI 加警示条 + 理想利润列 tooltip | 实测五档 10 种护符全部 `ask/bid = -1` |
+
+### 29.2 用户追加要求：副产品的利润不算进来
+
+用户原话：「副产物的利润就别加进来了。只看护符。」
+
+⇒ 收入口径收紧为**只计护符**。`productMeta` 加一道 `.filter(p => p.hrid.endsWith("_charm"))`，
+把 `TransmuteCalculator.productList` 里的三类东西区分清楚：
+
+| 来源 | 内容 | 本页处理 |
+| --- | --- | --- |
+| `transmuteDropTable` | 10 个同档位护符 | ✅ **计入** |
+| `actionDetailMap.rareDropTable` | 工匠箱（制作阶段的副产品） | ❌ 剔除，列入 `byProducts` |
+| `getAlchemyEssenceDropTable` | 炼金精华（转化阶段精华掉落，约 48/h） | ❌ **剔除**（用户要求只看护符） |
+
+⚠️ 第三项我一度判错：先以为它也是制作副产品，查了
+`game/index.ts:606-613` 才发现它是**按 `timeCost / 6min × (itemLevel+100)/100`
+公式算的转化阶段掉落**。数值极小（占 incomeIdealPH 的 0.0000%），
+但既然口径要干净，就一并剔除。
+
+### 29.3 一个必须说明的事实：按「价格上限」算，利润是负的
+
+修完后实测（`charmtransform` 五档 × 三档催化剂，**全部为负**）：
+
+| 催化剂 | 基础档利润率 | 宗师档利润率 |
+| --- | ---: | ---: |
+| 无 | −25.6% | −24.6% |
+| 转化催化剂 | −15.0% | −13.2% |
+| 至高催化剂 | −14.5% | −5.5% |
+
+**这不是 bug，是「价格上限」这个定义本身决定的。**
+
+「价格上限 = 用对应精华从零制作的成本」⇒ 意味着**你最多只能按自制成本卖掉**。
+而转化有 47.5%~35% 的失败率（收入乘成功率，成本不乘）⇒ 每做一次都亏。
+
+手算验证（基础档、无催化剂）：
+```
+投入  = 10,000 冲泡精华 × 285 = 2,850,000
+期望收入 = Σ(9 个护符上限) × 10% × 0.525 = 4,045,000 × 0.525 = 2,123,625
+⇒ 每次尝试亏 25.5%
+```
+
+⇒ **转化本身不创造利润，它只是把「冲泡精华」换成「别的技能精华」。**
+真正盈利的前提是**市场愿意给高于自制成本的价格**（供不应求），
+而实测市场上一件都卖不掉 ⇒ 前提不成立。
+
+所以 UI 上加了警示条，明确写清这件事，而不是给一个不存在的收益预期。
+
+### 29.4 测试
+
+新增 `tests/charmtransform-data-correctness.test.ts`（**9 个用例**），
+逐条锁住本轮的修复，防退化：
+
+1. 催化剂期望个数 = `1/successRate`，且 **> 1**，且 ≠ `successRate`（反向断言）
+2. `catalystRank=0` 时不出现催化剂原料
+3. 档位倍率与 `inputItems` 独立推导一致 + 锁住具体数值（10000/80000/480000/1920000/3840000）
+4. 制作副产品不在 `products` 里但在 `byProducts` 里
+5. 价格上限逐项核验 = `本技能精华数 × 精华 ask`
+6. `noMarketQuote` 与「产出是否全部无报价」一致
+7. 转化产出只有护符（10 个）
+8. 产出里不含非护符
+9. 护符概率之和为 1
+
+**过程中我写错过一次测试期望**：`⑥ 概率之和` 最初把炼金精华也算进去了，
+失败后查 `productList` 组成才发现三者并存 ⇒ 改成「只累加护符」。
+另一处 `⑦ 收入` 我按 `Σ(cap×rate) × 税率` 手算，差了 425 倍 ——
+**是我漏了 `gainPH = actionsPH × successRate`**，代码是对的、我手算错。
+
+### 29.5 验证
+
+`vue-tsc` **0 报错**；`vitest` **38 文件 / 345 用例全绿**（上轮 336，+9）；
+`vite build --mode public` 成功（12.40s，2961 模块）；
+三份改动文件**零行尾 churn**。
+
+### 29.6 未改（有意保留）
+
+- **coin 成本公式**（转化 `sellPrice/5`、分解 `50+5×itemLevel`）：游戏
+  `inputItems` 为 null，无权威数据，三个炼金公式都是项目经验值，量级占 1~8%
+- **`Catalytic Tea` / 暴饮之囊**：实测已正确计入（52.5% = 0.5 × (1+0.05)）
+- **等级惩罚**：已实现；玩家炼金等级 100 ⇒ 五档 `levelRatio` 全为 0，不触发

@@ -247,7 +247,7 @@ export class EnhanceCalculator extends Calculator {
     }
     const decomposeCal = new DecomposeCalculator({
       hrid: this.item.hrid,
-      /** 催化剂 1普通 2主要催化剂 */
+      /** 催化剂档位：0=无 1=对应炼金的催化剂（转化/分解/点金，+15%）2=至高催化剂（通用，+25%） */
       catalystRank: 2,
       enhanceLevel: this.enhanceLevel
     })

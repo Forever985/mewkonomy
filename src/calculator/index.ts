@@ -16,7 +16,7 @@ export interface CalculatorConfig {
   action?: Action
   ingredientPriceConfigList?: IngredientPriceConfig[]
   productPriceConfigList?: ProductPriceConfig[]
-  /** 催化剂 1普通 2主要催化剂 */
+  /** 催化剂档位：0=无 1=对应炼金的催化剂（转化/分解/点金，+15%）2=至高催化剂（通用，+25%） */
   catalystRank?: number
   enhanceLevel?: number
   originLevel?: number
@@ -29,7 +29,7 @@ export default abstract class Calculator {
   ingredientPriceConfigList: IngredientPriceConfig[]
   /** 此价格配置优先级大于自定义价格 */
   productPriceConfigList: ProductPriceConfig[]
-  /** 催化剂 1普通 2主要催化剂 */
+  /** 催化剂档位：0=无 1=对应炼金的催化剂（转化/分解/点金，+15%）2=至高催化剂（通用，+25%） */
   catalystRank?: number
   result: any
   favorite?: boolean

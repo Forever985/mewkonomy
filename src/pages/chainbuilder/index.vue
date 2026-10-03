@@ -50,9 +50,24 @@ function itemOptions(step: ChainStep) {
 function alchemyOutputs(step: ChainStep) {
   return getChainAlchemyOutputOptions(step)
 }
-function catalystLabel(rank: number) {
-  if (rank === 1) return t("普通催化剂")
-  if (rank === 2) return t("主要催化剂")
+/**
+ * 催化剂标签 —— 用**游戏内的真实物品名**，且随炼金类型变化。
+ *
+ * 四种催化剂（`data.json` 原文 description）：
+ *   点金 +15% coinifying / 分解 +15% decomposition / 转化 +15% transmutation
+ *   / 至高 +25% any action（通用）
+ *
+ * 三种炼金各用自己的那种，**买错无效** ⇒ 标签必须跟着 `step.kind` 走。
+ * 此前写的是「普通 / 主要催化剂」，游戏里不存在这两个物品。
+ */
+const CATALYST_BY_KIND: Record<string, string> = {
+  transmute: "转化催化剂",
+  decompose: "分解催化剂",
+  coinify: "点金催化剂"
+}
+function catalystLabel(rank: number, kind?: string) {
+  if (rank === 1) return t(CATALYST_BY_KIND[kind ?? ""] ?? "催化剂")
+  if (rank === 2) return t("至高催化剂")
   return t("无")
 }
 
@@ -119,7 +134,7 @@ function showDetail(row: Calculator) {
             <el-option v-for="opt in itemOptions(step)" :key="opt.hrid" :label="t(opt.name)" :value="opt.hrid" />
           </el-select>
           <el-select v-if="isAlchemyKind(step.kind)" v-model="step.catalystRank" style="width: 120px">
-            <el-option v-for="r in [0, 1, 2]" :key="r" :label="catalystLabel(r)" :value="r" />
+            <el-option v-for="r in [0, 1, 2]" :key="r" :label="catalystLabel(r, step.kind)" :value="r" />
           </el-select>
           <el-select
             v-if="isAlchemyKind(step.kind) && index < steps.length - 1"

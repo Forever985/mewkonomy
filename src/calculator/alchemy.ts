@@ -26,6 +26,29 @@ abstract class AlchemyCalculator extends Calculator {
     return ratio
   }
 
+  /**
+   * 催化剂的**期望消耗个数**。
+   *
+   * 游戏 description 明确写 "One catalyst is consumed on success"（成功时消耗 1 个），
+   * 失败不消耗。而 `successRate` 是**单次**成功率，
+   * 所以「凑成一次成功」所需的期望个数 = 1 / successRate。
+   *
+   * ⚠️ 这里曾长期写成 `successRate`，把 0.6 当成「需要 0.6 个」——
+   * **方向完全反了**：那算出来的是「成功率越高要用的催化剂越少」，
+   * 而真实情况是「成功率越高要的催化剂越少，但绝对值远大于 1」。
+   * 实测偏差：转化催化剂低估 2.78×、至高催化剂低估 2.37×（见 PROJECT_CONTEXT）。
+   *
+   * 另外，成功率被 `min(1, ...)` 封顶 ⇒ 若 successRate 为 0，
+   * 期望个数无穷大（永远做不成）。此时用 0 避免 `Infinity` 污染利润。
+   */
+  get catalystCount(): number {
+    const sr = this.successRate
+    if (!(sr > 0)) {
+      return 0
+    }
+    return 1 / sr
+  }
+
   abstract get baseSuccessRate(): number
   abstract get baseExp(): number
 
@@ -90,8 +113,8 @@ export class TransmuteCalculator extends AlchemyCalculator {
       ]
       this.catalyst && list.push({
         hrid: `/items/${this.catalyst}`,
-        // 成功才会消耗
-        count: this.successRate,
+        // 成功才消耗 ⇒ 期望个数 = 1 / 成功率（见 catalystCount）
+        count: this.catalystCount,
         marketPrice: getPriceOf(`/items/${this.catalyst}`).ask
       })
 
@@ -191,8 +214,8 @@ export class DecomposeCalculator extends AlchemyCalculator {
       if (this.catalyst) {
         list.push({
           hrid: `/items/${this.catalyst}`,
-          // 成功才会消耗
-          count: this.successRate,
+          // 成功才消耗 ⇒ 期望个数 = 1 / 成功率（见 catalystCount）
+          count: this.catalystCount,
           marketPrice: getPriceOf(`/items/${this.catalyst}`).ask
         })
       }
@@ -282,8 +305,8 @@ export class CoinifyCalculator extends AlchemyCalculator {
       ]
       this.catalyst && list.push({
         hrid: `/items/${this.catalyst}`,
-        // 成功才会消耗
-        count: this.successRate,
+        // 成功才消耗 ⇒ 期望个数 = 1 / 成功率（见 catalystCount）
+        count: this.catalystCount,
         marketPrice: getPriceOf(`/items/${this.catalyst}`).ask
       })
 

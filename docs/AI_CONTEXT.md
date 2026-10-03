@@ -181,7 +181,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 - **迷宫（重要）**：`data.json` 已从 `v1.20250818.0` 升到 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。原「无迷宫玩法、无需开发」的结论**已失效**。
 - **市场历史归档**：已从 v1 单文件升级为 **v2 分片**（`market_history_<UTC日>T<HH>.json`，UTC 6 小时一块、字典编码、7 天 / 168 点，按窗口按需拉 1~2 片）。
 - **`game.ts` 规模**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 37 文件 / 336 用例**）。
+- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 38 文件 / 345 用例**）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 8.4 本次改动后的验证（实测）
@@ -610,7 +610,7 @@ profitPH = incomePH − costPH
 档位价由 `getPriceOf` 按各档位口径算出，与别处显示的价格同源。
 
 ### 15.4 验证（实测）
-- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` public/private 均成功；
+- `vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` public/private 均成功；
   dev server 下 `ActionSolveCard.vue` / `price-solve.ts` / `ActionDetail.vue` 三个模块均能被 Vite 正常编译。
 - `tests/price-solve.test.ts` 分两层：
   1. **手算样例**（完全可控的假计算器）：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
@@ -698,7 +698,7 @@ profitPH = incomePH − costPH
 表现成**"选择器列得出物品、却被判定不支持该动作"**。这个坑是测试抓出来的（见 16.5 第 3 条）。
 
 ### 16.5 验证（实测）
-- `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` 双模式成功；
   dev server 下 3 个新模块均编译通过。
 - **默认值复现**（真实计算器）：decompose 的成本 `2239964909.22` 对 `2239964909.22`、
   收入与利润同样精确相等，**总耗时 = 1.000000 小时**；transmute 同样精确。
@@ -760,7 +760,7 @@ profitPH = incomePH − costPH
 `tests/price-fallback-integration.test.ts`（4 用例，真实数据）：全物品 × 多等级的来源一致性、
 「借另一端」确实取到的是另一端**原始市价**、同一 tick 切换设置、强制大全套。
 
-验证：`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` public/private 均成功。
+验证：`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` public/private 均成功。
 
 ---
 
@@ -837,7 +837,7 @@ profitPH = incomePH − costPH
   `name` 传数组是 **OR**；单值 `profitRate` 用 `&&` 判定、**传 0 不生效**，
   而 `minProfitRate` 用 `!= null`、传 0 生效（两者并不对称，是现状）。
 
-验证：`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` public/private 均成功
+验证：`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` public/private 均成功
 （2961 模块）；lint 非风格问题 0。
 
 ## 19. 区间条件模式化：从 4 种扩到 9 种（2026-10-03）
@@ -904,7 +904,7 @@ profitPH = incomePH − costPH
 
 ### 19.6 验证
 
-`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**（上轮 299，+37）；
+`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**（上轮 299，+37）；
 `vite build` public/private 均成功（2961 模块）。
 
 ## 20. 术语 hover 说明：先修 bug，再补能力（2026-10-03）
@@ -978,7 +978,7 @@ const risk = cost4EnhancePH / profitPH
 
 ### 20.5 验证
 
-`vue-tsc` 通过（基线 0 条 → 现在 0 条）；`vitest` **37 文件 / 336 用例全绿**；
+`vue-tsc` 通过（基线 0 条 → 现在 0 条）；`vitest` **38 文件 / 345 用例全绿**；
 `vite build` 成功，产物中可 grep 到 `风险系数说明` / `装备损耗` / `追得上装备贬值`。
 
 ### 20.6 「到强化工具中查看」：已完成（见 PROJECT_CONTEXT §二十六）
@@ -1017,7 +1017,7 @@ const risk = cost4EnhancePH / profitPH
 | 项 | 结果 |
 | --- | --- |
 | `npx vue-tsc --noEmit` | **报错 0 条** |
-| `npx vitest run` | **37 文件 / 336 用例全绿** |
+| `npx vitest run` | **38 文件 / 345 用例全绿** |
 | `npx vite build --mode public` | 成功，**2961 模块**，11.49s |
 | dev server 编译冒烟 | 11 个改动模块全部 **HTTP 200**、无编译错误 |
 | 产物内容验证 | `去强化`(12 chunk) / `风险系数说明`(6) / `topN`(5) / `区间之外`(2) / `地獄精華`(2) / `借另一端`(5) 全部命中 |
