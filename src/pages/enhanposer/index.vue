@@ -1,32 +1,45 @@
 <script lang="ts" setup>
-import type Calculator from "@/calculator"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import PagerFooter from "@@/components/PagerFooter/index.vue"
 import SearchPanel from "@@/components/SearchPanel/index.vue"
 import type { PanelField } from "@@/components/SearchPanel/types"
-import { usePagination } from "@@/composables/usePagination"
 import { Edit, Search } from "@element-plus/icons-vue"
-import { ElMessageBox, type Sort } from "element-plus"
-import { cloneDeep, debounce } from "lodash-es"
 import { getEnhanposerDataApi } from "@/common/apis/enhanposer"
 
-import { getMarketDataApi } from "@/common/apis/game"
-import { useMemory } from "@/common/composables/useMemory"
-import { usePriceStatus } from "@/common/composables/usePriceStatus"
 import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 import { useGameStoreOutside } from "@/pinia/stores/game"
-import { usePlayerStore } from "@/pinia/stores/player"
-import { usePriceStore } from "@/pinia/stores/price"
 import ActionConfig from "../dashboard/components/ActionConfig.vue"
 import ActionDetail from "../dashboard/components/ActionDetail.vue"
 import ActionPrice from "../dashboard/components/ActionPrice.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 import ManualPriceCard from "../dashboard/components/ManualPriceCard.vue"
+import { useLeaderboardPage } from "@/common/composables/useLeaderboardPage"
 // #region 查
-const { paginationData: paginationDataLD, handleCurrentChange: handleCurrentChangeLD, handleSizeChange: handleSizeChangeLD } = usePagination({}, "enhanposer-leaderboard-pagination")
-const leaderboardData = ref<Calculator[]>([])
-
-const ldSearchData = useMemory("enhanposer-leaderboard-search-data", {
+/**
+ * 检索结果页骨架：分页 / 检索条件缓存 / 防抖检索 / 排序 / 详情与价格弹窗 / 买卖价状态。
+ * 用别名解构，模板里的变量名（ldSearchData、paginationDataLD…）保持不变。
+ * 要改检索流程请改 `common/composables/useLeaderboardPage.ts`，不要在这里恢复手写骨架。
+ */
+const {
+  searchData: ldSearchData,
+  list: leaderboardData,
+  loading: loadingLD,
+  paginationData: paginationDataLD,
+  handleCurrentChange: handleCurrentChangeLD,
+  handleSizeChange: handleSizeChangeLD,
+  handleSearch: handleSearchLD,
+  handleSortChange: handleSortLD,
+  currentRow,
+  detailVisible,
+  showDetail,
+  priceVisible,
+  currentPriceRow,
+  setPrice,
+  onPriceStatusChange
+} = useLeaderboardPage({
+  key: "enhanposer",
+  api: getEnhanposerDataApi,
+  searchData: {
   name: [],
   minProfitRate: undefined,
   maxProfitRate: undefined,
@@ -36,11 +49,22 @@ const ldSearchData = useMemory("enhanposer-leaderboard-search-data", {
   conditions: [{ steps: undefined, minLevel: undefined, maxLevel: undefined }],
   banEquipment: false,
   banJewelry: false,
+  banCharm: false,
   banCombat: false,
   banLife: false,
   noDecompose: false,
   materialPriceType: "ask",
   productPriceType: "bid"
+  }
+})
+// 影响「计算模式」的参数变化：清缓存后重算（缓存按模式签名校验，签名不符也会自动重算）
+watch([
+  () => ldSearchData.value.noDecompose,
+  () => ldSearchData.value.materialPriceType,
+  () => ldSearchData.value.productPriceType
+], () => {
+  useGameStoreOutside().clearEnhanposerCache()
+  handleSearchLD()
 })
 // 兼容旧版字符串 name，迁移为数组（多物品选择）
 if (typeof ldSearchData.value.name === "string") {
@@ -105,6 +129,7 @@ const panelFields: PanelField[] = [
   },
   { type: "checkbox", key: "banEquipment", label: "排除装备" },
   { type: "checkbox", key: "banJewelry", label: "排除首饰" },
+  { type: "checkbox", key: "banCharm", label: "排除护符" },
   { type: "checkbox", key: "banCombat", label: "排除战斗装备" },
   { type: "checkbox", key: "banLife", label: "排除生活装备" },
   { type: "checkbox", key: "noDecompose", label: "不分解模式" },
@@ -114,89 +139,6 @@ const panelFields: PanelField[] = [
 
 
 
-const loadingLD = ref(false)
-const getLeaderboardData = debounce(() => {
-  loadingLD.value = true
-  getEnhanposerDataApi({
-    currentPage: paginationDataLD.currentPage,
-    size: paginationDataLD.pageSize,
-    ...ldSearchData.value,
-    sort: sortLD.value
-  }).then((data) => {
-    paginationDataLD.total = data.total
-    leaderboardData.value = data.list
-  }).catch((e) => {
-    console.error(e)
-    leaderboardData.value = []
-  }).finally(() => {
-    loadingLD.value = false
-  })
-}, 300)
-function handleSearchLD() {
-  paginationDataLD.currentPage === 1 ? getLeaderboardData() : (paginationDataLD.currentPage = 1)
-}
-
-const sortLD: Ref<Sort | undefined> = ref()
-function handleSortLD(sort: Sort) {
-  sortLD.value = sort
-  getLeaderboardData()
-}
-
-// 监听分页参数的变化
-watch([
-  () => paginationDataLD.currentPage,
-  () => paginationDataLD.pageSize,
-  () => getMarketDataApi(),
-  () => usePlayerStore().config,
-  () => useGameStoreOutside().buyStatus,
-  () => useGameStoreOutside().sellStatus
-], getLeaderboardData, { immediate: true })
-
-// #endregion
-
-// #region deepWatch
-
-watch(() => usePriceStore(), () => {
-  getLeaderboardData()
-}, { deep: true })
-// #endregion
-
-// 影响「计算模式」的参数变化：清缓存后重算（缓存按模式签名校验，签名不符也会自动重算）
-watch([
-  () => ldSearchData.value.noDecompose,
-  () => ldSearchData.value.materialPriceType,
-  () => ldSearchData.value.productPriceType
-], () => {
-  useGameStoreOutside().clearEnhanposerCache()
-  handleSearchLD()
-})
-
-const currentRow = ref<Calculator>()
-const detailVisible = ref<boolean>(false)
-async function showDetail(row: Calculator) {
-  currentRow.value = cloneDeep(row)
-  detailVisible.value = true
-}
-
-const priceVisible = ref<boolean>(false)
-const currentPriceRow = ref<Calculator>()
-function setPrice(row: Calculator) {
-  const activated = usePriceStore().activated
-  if (!activated) {
-    ElMessageBox.confirm(t("是否确定开启自定义价格？"), t("需先开启自定义价格"), {
-      confirmButtonText: t("确定"),
-      cancelButtonText: t("取消"),
-      closeOnClickModal: true
-    }).then(() => {
-      usePriceStore().setActivated(true)
-    })
-    return
-  }
-  currentPriceRow.value = cloneDeep(row)
-  priceVisible.value = true
-}
-
-const onPriceStatusChange = usePriceStatus("enhanposer-price-status")
 const { t } = useI18n()
 </script>
 

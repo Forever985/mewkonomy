@@ -44,7 +44,6 @@ watch(() => useGameStoreOutside().gameData, () => {
   initBigSetCache()
 }, { immediate: true })
 watch(() => useGameStoreOutside().marketData, () => {
-  console.log("raw marketData changed")
   const data = Object.freeze(structuredClone(toRaw(useGameStoreOutside().marketData)))
   game.marketData = data
   _priceCache = {}
@@ -89,28 +88,37 @@ const SPECIAL_PRICE: Record<string, () => MarketItemPrice> = {
   })
 }
 
-function convertPriceOfStatus(price: MarketItemPrice, buyStatus: PriceStatus, sellStatus: PriceStatus) {
+/**
+ * 每个价格口径 =（基准报价, 档位方向）。
+ *
+ * 用 `Record<PriceStatus, ...>` 而不是 `switch`：**漏掉一个枚举成员会被类型检查直接拦下**。
+ * 这在加了 `ASK_HIGH`/`BID_LOW` 之后尤其重要——只改 UI 列表、忘了改计算分支，
+ * 会表现成「下拉里能选、但算出来的价格没变化」这种很难发现的静默错误。
+ *
+ * `dir`：`0` = 取原价；`+1` = 抬一档（价格更高）；`-1` = 压一档（价格更低）。
+ */
+const STATUS_STEP_SPEC: Record<PriceStatus, { base: "ask" | "bid", dir: -1 | 0 | 1 }> = {
+  [PriceStatus.ASK]: { base: "ask", dir: 0 },
+  [PriceStatus.ASK_LOW]: { base: "ask", dir: -1 },
+  [PriceStatus.ASK_HIGH]: { base: "ask", dir: 1 },
+  [PriceStatus.BID]: { base: "bid", dir: 0 },
+  [PriceStatus.BID_LOW]: { base: "bid", dir: -1 },
+  [PriceStatus.BID_HIGH]: { base: "bid", dir: 1 }
+}
+
+function convertPriceOfStatus(price: MarketItemPrice, buyStatus: PriceStatus, sellStatus: PriceStatus, enhanced = false) {
   function convert(status: PriceStatus) {
     const result = { price: -1 }
-    switch (status) {
-      case PriceStatus.ASK:
-        result.price = price.ask
-        break
-      case PriceStatus.BID:
-        result.price = price.bid
-        break
-      case PriceStatus.ASK_LOW:
-        result.price = price.ask
-        if (result.price > 0) {
-          result.price = priceStepOf(result.price, false)
-        }
-        break
-      case PriceStatus.BID_HIGH:
-        result.price = price.bid
-        if (result.price > 0) {
-          result.price = priceStepOf(result.price, true)
-        }
-        break
+    // 断言成可空：状态值可能来自 localStorage（`usePriceStatus` 按页记忆），
+    // 手工改过的旧值不在枚举里。旧实现的 switch 没有 default，同样会静默返回 -1。
+    const spec = STATUS_STEP_SPEC[status] as { base: "ask" | "bid", dir: -1 | 0 | 1 } | undefined
+    if (!spec) {
+      return result
+    }
+    result.price = spec.base === "ask" ? price.ask : price.bid
+    // 无价（≤ 0）保持原样、不参与档位移动（与旧实现一致：-1 传进去只会得到 -1）
+    if (spec.dir !== 0 && result.price > 0) {
+      result.price = priceStepOf(result.price, spec.dir > 0, enhanced)
     }
     return result
   }
@@ -121,49 +129,47 @@ function convertPriceOfStatus(price: MarketItemPrice, buyStatus: PriceStatus, se
   }
 }
 
-const priceStep = [
-  [0, 1],
-  [50, 2],
-  [100, 5],
-  [300, 10]
-  // [500,20],
-  // [1000,50]
-  // ...
-]
 /**
- * 举例：
- * priceStepOf(300,true) = 310
- * priceStepOf(300,false) = 295
- * priceStepOf(1000,true) = 1050
- * priceStepOf(1000,false) = 980
- * priceStepOf(100000,true) = 105000
- * priceStepOf(100000,false) = 98000
- * @param price 原价
- * @param high true加价, false减价
+ * 市场价「一档」的相对增量。
+ *
+ * 权威来源（2026/9/28 补丁原文，随客户端一并分发）：
+ *   - 标准物品：相邻挂单价相差 **0.33% ~ 0.44%**（此前为 0.17% ~ 0.5%）；
+ *   - 强化物品（+1 及以上）：流动性低，增量**大 5 倍**，即 1.67% ~ 2.22%。
+ * 实测核对（2026-10-01 官方 marketplace.json：754 对 0 级、756 对强化档的 ask−bid 价差）：
+ *   标准 ≈ 0.366%、强化 ≈ 1.852%，两者之比 5.06 ≈ 5×，与补丁一致。
+ * 故此处取实测值作为「一档」的点估计，5 倍关系按补丁的整数倍实现。
+ *
+ * 另注：游戏本身并没有全局固定档位——每个 (物品, 强化等级) 各有一个服务端下发的
+ * 「交易区间」[bandMin, bandMax]（客户端 `priceBandMins` / `priceBandMaxs`），输入价只是被
+ * `deriveWorkingPrice` 夹进该区间；区间每 60 分钟校准一次、每次最多移动 1%
+ * （`recalibrationIntervalMinutes: 60` / `bandMaxMovePerPassFactor: 1.01`）。
+ * 我们手上只有 ask / bid 两个点，因此用「一档增量」来近似表达「压一档 / 抬一档」。
+ *
+ * 历史：本函数原先是「按十进制归一化后取 1/2/5/10 的粗档位表」，隐含增量约 1%~5%，
+ * 比游戏真实增量大 3~10 倍，已在 2026-10-01 依官方数据改正。
  */
-function priceStepOf(price: number, high: boolean = true) {
+const PRICE_STEP_RATIO = 0.00366
+/** 强化物品的档位倍数（补丁：5×） */
+const PRICE_STEP_ENHANCED_MULTIPLIER = 5
+
+/**
+ * 把价格移动一档。
+ * @param price 原价
+ * @param high true = 抬一档（价格更高，如 `左价+` / `右价+`）；false = 压一档（价格更低，如 `左价-` / `右价-`）
+ * @param enhanced 是否强化物品（强化等级 ≥ 1），决定增量倍数
+ */
+function priceStepOf(price: number, high: boolean = true, enhanced = false) {
   if (price <= 0) {
     return -1
   }
-  // 先将price按十进制转为0~300的范围
-  let dec = 0
-  while (price > 300) {
-    price /= 10
-    dec += 1
+  const ratio = PRICE_STEP_RATIO * (enhanced ? PRICE_STEP_ENHANCED_MULTIPLIER : 1)
+  const stepped = Math.round(high ? price * (1 + ratio) : price * (1 - ratio))
+  // 市场价是整数金币；低价物品的一档可能不足 1 金币（如 10 金 × 0.366% = 0.037），
+  // 此时取整会原地不动，但游戏的最小价格栅格就是 1 金币，所以保底移动 1 金。
+  if (stepped === price) {
+    return Math.max(1, high ? price + 1 : price - 1)
   }
-  // 找到对应的step和stepIndex
-  let highStepIndex = 0
-  let lowStepIndex = 0
-  for (let i = 0; i < priceStep.length; i++) {
-    if (price <= priceStep[i][0]) {
-      highStepIndex = lowStepIndex = i - 1
-      if (price === priceStep[i][0]) {
-        highStepIndex = i
-      }
-      break
-    }
-  }
-  return high ? (price + priceStep[highStepIndex][1]) * 10 ** dec : (price - priceStep[lowStepIndex][1]) * 10 ** dec
+  return Math.max(1, stepped)
 }
 
 export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStatus = currentBuyStatus, sellStatus: PriceStatus = currentSellStatus): MarketItemPrice {
@@ -200,7 +206,8 @@ export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStat
         }
       }
     }
-    return convertPriceOfStatus(price, buyStatus, sellStatus)
+    // level > 0 即强化物品（+1 及以上），档位增量大 5 倍
+    return convertPriceOfStatus(price, buyStatus, sellStatus, true)
   }
 
   // 缓存 key 含价格模式与买卖状态：切换模式/状态后即使 watch 异步清缓存，也不会命中旧值
@@ -209,7 +216,7 @@ export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStat
     return _priceCache[cacheKey]
   }
   const resolved = resolveLevel0Price(hrid)
-  _priceCache[cacheKey] = convertPriceOfStatus({ ask: resolved.ask, bid: resolved.bid }, buyStatus, sellStatus)
+  _priceCache[cacheKey] = convertPriceOfStatus({ ask: resolved.ask, bid: resolved.bid }, buyStatus, sellStatus, false)
   return _priceCache[cacheKey]
 }
 

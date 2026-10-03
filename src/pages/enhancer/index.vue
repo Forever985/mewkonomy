@@ -2,6 +2,7 @@
 import type { Action, ItemDetail } from "~/game"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 
+import { MARKET_TAX_RATE } from "@@/constants/market"
 import * as Format from "@@/utils/format"
 import { QuestionFilled, Star, StarFilled } from "@element-plus/icons-vue"
 import { ElTable } from "element-plus"
@@ -42,10 +43,12 @@ const protectionList = ref<Ingredient[]>([])
 
 /**
  * 游戏固定的市场成交税率（%）。玩家无法更改，所以只作展示，不放进可编辑配置。
+ * 取值来自 `@@/constants/market`（权威来源：客户端 `br.TAX_RATE = .04` +
+ * 2026/9/28 补丁「市场税率由 5% 降至 4%」）。
  * 注意与 defaultConfig.taxRate 区分：后者绑定的是界面上「溢价率%」，
  * 语义是**成本上浮**，跟这里的成交税完全是两回事。
  */
-const MARKET_TAX_PERCENT = 2
+const MARKET_TAX_PERCENT = MARKET_TAX_RATE * 100
 
 const defaultConfig = {
   hourlyRate: 5000000,

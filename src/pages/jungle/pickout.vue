@@ -40,6 +40,7 @@ const ldSearchData = useMemory("pickout-leaderboard-search-data", {
   minItemLevel: 90,
   banEquipment: false,
   banJewelry: true,
+  banCharm: false,
   banCombat: false,
   banLife: false,
   bestManufacture: true
@@ -92,6 +93,7 @@ const panelFields: PanelField[] = [
   { type: "checkbox", key: "bestManufacture", label: "最佳制作方案", disabled: true },
   { type: "checkbox", key: "banEquipment", label: "排除装备" },
   { type: "checkbox", key: "banJewelry", label: "排除首饰" },
+  { type: "checkbox", key: "banCharm", label: "排除护符" },
   { type: "checkbox", key: "banCombat", label: "排除战斗装备" },
   { type: "checkbox", key: "banLife", label: "排除生活装备" }
 ]
@@ -178,7 +180,10 @@ function setPrice(row: Calculator) {
 
 const { t } = useI18n()
 
-const onPriceStatusChange = usePriceStatus("pickout-price-status", {
+// 本页不提供价格口径切换（模板中的 PriceStatusSelect 已注释），但 usePriceStatus 的副作用是必需的：
+// onBeforeMount 会把全局 buy/sellStatus 固定为本页口径，onBeforeRouteLeave 负责离开时复位。
+// 因此保留调用，仅去掉未被使用的返回值（原先的 const 绑定是死代码，会让 lint 报错）。
+usePriceStatus("pickout-price-status", {
   sellStatus: PriceStatus.ASK
 })
 </script>

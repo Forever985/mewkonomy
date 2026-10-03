@@ -50,6 +50,16 @@ export const privateRoutes: RouteRecordRaw[] = [
         }
       },
       {
+        path: "profitform",
+        component: () => import("@/pages/profitform/index.vue"),
+        name: "Profitform",
+        meta: {
+          title: t("填表算利润"),
+          affix: false,
+          elIcon: "Coin"
+        }
+      },
+      {
         path: "docs",
         component: () => import("@/pages/docs/index.vue"),
         name: "Docs",

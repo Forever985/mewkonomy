@@ -362,13 +362,15 @@ export function hasLoadedShards(): boolean {
 let autoSamplingStarted = false
 
 /**
- * 开启「快照前进就记一个点」的自动采样。在 `main.ts` 里调用一次。
+ * 开启「快照前进就记一个点」的本地自动采样。在 `main.ts` 里调用一次。
  *
- * 这是唯一能真正做到**每小时一个采样点**的路径：
- *   - GitHub Actions 的 `schedule` 是 best-effort 的（本仓库实测声明 60min、
- *     实际中位 307min），服务端归档因此平均 5 小时才有一个点；
- *   - 而 `main.ts` 每 60s 直接轮询官方 marketplace.json，官方快照本身是
- *     **整点小时粒度**，所以只要页面开着，快照一出现就会在 1 分钟内落盘。
+ * 定位（2026-10-01 校正）：这是**本地兜底**，不是唯一通道。
+ *   - 服务端归档（`gh-pages:data/market_history_*.json`）自 **2026-09-26** 起已由外部定时器
+ *     做到真·每小时（实测每天 24 点、相邻间隔严格 60 分钟），是主通道；
+ *   - 本函数写入 `localStorage`（key `mewkonomy-market-history`，7 天 / 上限 200 条），
+ *     用于：① 离线或服务端分片取不到时仍有历史可算；② 覆盖服务端分片尚未生成的最近区间。
+ * 早期注释称「GitHub Actions 的 schedule 是 best-effort、服务端归档平均 5 小时才一个点」——
+ * 那对应 2026-09-26 之前外部触发器尚未生效的时期，现已不成立。
  *
  * 只依赖 `marketData.timestamp` 变化触发：`recordLocalSample` 本身会按时间戳去重，
  * 所以重复触发（多标签页/反复往返路由）不会写出重复点，也不会重复写盘。

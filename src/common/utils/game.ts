@@ -34,6 +34,25 @@ export function isJewelry(item?: ItemDetail): boolean {
   return (JEWELRY_EQUIPMENT_TYPES as readonly string[]).includes(getEquipmentTypeOf(item) as string)
 }
 
+/** 护符部位（`/equipment_types/charm`） */
+export const CHARM_EQUIPMENT_TYPE = "charm"
+
+/**
+ * 是否为护符。
+ *
+ * 与 `isJewelry` 同理：护符必须能从「排除装备」里**单独摘出来**，否则
+ * 「排除护符」在勾了「排除装备」时就会彻底失效（首饰当年正是踩了这个坑才改成独立开关的）。
+ *
+ * 值得单列一个开关的量级：实测 `data.json` 里护符有 **102 件**，是最大的装备类别
+ * （532 件装备里占 19%，比 main_hand 的 69 件还多）。
+ */
+export function isCharm(item?: ItemDetail): boolean {
+  if (!item) {
+    return false
+  }
+  return getEquipmentTypeOf(item) === CHARM_EQUIPMENT_TYPE
+}
+
 export type EquipmentClass = "combat" | "life" | "both" | "none"
 
 /**

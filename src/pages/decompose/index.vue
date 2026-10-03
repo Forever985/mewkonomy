@@ -38,6 +38,7 @@ const ldSearchData = useMemory("decompose-leaderboard-search-data", {
   minLevel: 1,
   banEquipment: false,
   banJewelry: false,
+  banCharm: false,
   banCombat: false,
   banLife: false
 })
@@ -88,6 +89,7 @@ const panelFields: PanelField[] = [
   },
   { type: "checkbox", key: "banEquipment", label: "排除装备" },
   { type: "checkbox", key: "banJewelry", label: "排除首饰" },
+  { type: "checkbox", key: "banCharm", label: "排除护符" },
   { type: "checkbox", key: "banCombat", label: "排除战斗装备" },
   { type: "checkbox", key: "banLife", label: "排除生活装备" }
 ]

@@ -1,4 +1,5 @@
 import type { Action, ActionDetail, ItemDetail } from "~/game"
+import { MARKET_TAX_FACTOR } from "@@/constants/market"
 import * as Format from "@@/utils/format"
 import { getItemDetailOf, getPriceSourceOf, type PriceSource } from "@/common/apis/game"
 import { getBuffOf, getPlayerLevelOf } from "@/common/apis/player"
@@ -214,7 +215,7 @@ export default abstract class Calculator {
       // 不逃逸时，等价于逃逸到初始装备
       return item.countPH! * item.price
     }
-    return item.countPH! * escape.price * 0.95
+    return item.countPH! * escape.price * MARKET_TAX_FACTOR
   }
 
   /**
@@ -223,10 +224,11 @@ export default abstract class Calculator {
    */
   get income(): number {
     const income = this.productListWithPrice.reduce((acc, product) => {
-      const coinRate = product.hrid === COIN_HRID ? 0.95 : 1
+      // 金币不是市场物品、不交税，所以先除税后系数，让下面统一的课税再乘回来抵消
+      const coinRate = product.hrid === COIN_HRID ? MARKET_TAX_FACTOR : 1
       return acc + product.count * (product.rate || 1) * product.price / coinRate
     }, 0)
-    return income * 0.95
+    return income * MARKET_TAX_FACTOR
   }
 
   _actionsPH?: number

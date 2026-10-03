@@ -6,6 +6,7 @@ import { EnhanceCalculator } from "@/calculator/enhance"
 import { WorkflowCalculator } from "@/calculator/workflow"
 import { getActionConfigOf } from "@/common/apis/player"
 import ActionDetailCard from "./ActionDetailCard.vue"
+import ActionSolveCard from "./ActionSolveCard.vue"
 
 const props = defineProps<{
   modelValue: boolean
@@ -141,6 +142,9 @@ const { t } = useI18n()
           </el-col>
         </el-row>
       </template>
+
+      <!-- 目标时薪反解：给定目标时薪，算出主要询价物品的临界单价与档位对照 -->
+      <ActionSolveCard :data="data" />
     </template>
   </el-dialog>
 </template>

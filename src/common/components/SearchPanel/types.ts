@@ -4,8 +4,8 @@
  * 背景：11 个检索页各自手写了一份搜索表单，实测重复度极高 ——
  *   jungle/decompose/inherit/junglest 系列两两相似度 91%~100%，
  *   dashboard 与 manualchemy 94%，enhanposer 与 enhanposest 100%。
- *   其中 12 个字段（name / conditions / banEquipment / minProfitRate / maxProfitRate /
- *   banJewelry / banCombat / banLife / maxRisk / minLevel / maxLevel / excludes）
+ *   其中 13 个字段（name / conditions / banEquipment / minProfitRate / maxProfitRate /
+ *   banJewelry / banCharm / banCombat / banLife / maxRisk / minLevel / maxLevel / excludes）
  *   在 9~11 个页面里反复出现，差异只在「标签文案 + 取值范围 + 显示与否」。
  *
  * 于是把「有哪些字段、各自的文案与边界」抽成纯配置（本文件），
@@ -36,6 +36,7 @@ export interface PanelSearchData {
   maxLevel?: number
   banEquipment?: boolean
   banJewelry?: boolean
+  banCharm?: boolean
   banCombat?: boolean
   banLife?: boolean
   compare?: boolean

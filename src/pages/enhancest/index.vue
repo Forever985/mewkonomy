@@ -2,6 +2,7 @@
 import type { Action, ItemDetail } from "~/game"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 
+import { MARKET_TAX_FACTOR } from "@@/constants/market"
 import * as Format from "@@/utils/format"
 import { Star, StarFilled } from "@element-plus/icons-vue"
 import { ElTable } from "element-plus"
@@ -270,7 +271,7 @@ const results = computed(() => {
           : currentItemEscapePrice.value)
 
     // 逃逸损耗
-    const fallingRate = (curentItemPrice - escapePrice * 0.98) / actions * calc.actionsPH
+    const fallingRate = (curentItemPrice - escapePrice * MARKET_TAX_FACTOR) / actions * calc.actionsPH
 
     /**
      * tag = 1时，利用指导价计算工时费
@@ -289,10 +290,10 @@ const results = computed(() => {
       productPrice = currentDecomposePrice.value
     }
 
-    const hourlyCost = ((productPrice * (targetRate + leapRate) + escapePrice * escapeRate) * 0.98 - totalCostNoHourly) / actions * calc.actionsPH
+    const hourlyCost = ((productPrice * (targetRate + leapRate) + escapePrice * escapeRate) * MARKET_TAX_FACTOR - totalCostNoHourly) / actions * calc.actionsPH
 
     // 单件利润
-    const profitPP = (productPrice * (targetRate + leapRate) + escapePrice * escapeRate) * 0.98 - totalCostNoHourly
+    const profitPP = (productPrice * (targetRate + leapRate) + escapePrice * escapeRate) * MARKET_TAX_FACTOR - totalCostNoHourly
 
     const guidePrice = (totalCost - escapePrice * escapeRate) / (targetRate + leapRate)
     const seconds = actions / calc.actionsPH * 3600
@@ -753,7 +754,7 @@ watch(menuVisible, (value) => {
                 </div>
 
                 <el-tag class="w-100px " type="success" size="large">
-                  {{ currentDecomposePrice && Format.money(currentDecomposePrice * 0.98) }}
+                  {{ currentDecomposePrice && Format.money(currentDecomposePrice * MARKET_TAX_FACTOR) }}
                 </el-tag>
               </div>
             </el-tab-pane>

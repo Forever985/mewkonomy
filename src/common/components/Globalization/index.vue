@@ -8,7 +8,6 @@ const { locale } = locales.global
 // const { lang } = useSettingsStore()
 
 function onSelectLang(value: Lang) {
-  console.log("Language Switch", value)
   setLang(value)
   location.reload()
   locale.value = value

@@ -1,35 +1,49 @@
 <script lang="ts" setup>
-import type Calculator from "@/calculator"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import PagerFooter from "@@/components/PagerFooter/index.vue"
 import SearchPanel from "@@/components/SearchPanel/index.vue"
 import type { PanelField } from "@@/components/SearchPanel/types"
-import { usePagination } from "@@/composables/usePagination"
 import { normalizeSearchData } from "@@/composables/useSearchPanel"
 import { Edit, Search } from "@element-plus/icons-vue"
-import { ElMessageBox, type Sort } from "element-plus"
-import { cloneDeep, debounce } from "lodash-es"
 
 import { getItemDetailOf } from "@/common/apis/game"
 import { getDataApi } from "@/common/apis/jungle/inherit"
-import { useMemory } from "@/common/composables/useMemory"
-import { usePriceStatus } from "@/common/composables/usePriceStatus"
 import * as Format from "@/common/utils/format"
-import { useGameStore } from "@/pinia/stores/game"
-import { usePlayerStore } from "@/pinia/stores/player"
-import { usePriceStore } from "@/pinia/stores/price"
 import ActionConfig from "../dashboard/components/ActionConfig.vue"
 import ActionDetail from "../dashboard/components/ActionDetail.vue"
 import ActionPrice from "../dashboard/components/ActionPrice.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 import ManualPriceCard from "../dashboard/components/ManualPriceCard.vue"
 import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
+import { useLeaderboardPage } from "@/common/composables/useLeaderboardPage"
 
 // #region 查
-const { paginationData: paginationDataLD, handleCurrentChange: handleCurrentChangeLD, handleSizeChange: handleSizeChangeLD } = usePagination({}, "inherit-leaderboard-pagination")
-const leaderboardData = ref<Calculator[]>([])
-
-const ldSearchData = useMemory("inherit-leaderboard-search-data", {
+const { t } = useI18n()
+/**
+ * 检索结果页骨架：分页 / 检索条件缓存 / 防抖检索 / 排序 / 详情与价格弹窗 / 买卖价状态。
+ * 用别名解构，模板里的变量名（ldSearchData、paginationDataLD…）保持不变。
+ * 要改检索流程请改 `common/composables/useLeaderboardPage.ts`，不要在这里恢复手写骨架。
+ */
+const {
+  searchData: ldSearchData,
+  list: leaderboardData,
+  loading: loadingLD,
+  paginationData: paginationDataLD,
+  handleCurrentChange: handleCurrentChangeLD,
+  handleSizeChange: handleSizeChangeLD,
+  handleSearch: handleSearchLD,
+  handleSortChange: handleSortLD,
+  currentRow,
+  detailVisible,
+  showDetail,
+  priceVisible,
+  currentPriceRow,
+  setPrice,
+  onPriceStatusChange
+} = useLeaderboardPage({
+  key: "inherit",
+  api: getDataApi,
+  searchData: {
   name: [],
   // 组合条件 = 并行检索行：每行（初始等级 + 动作）
   conditions: [{ steps: undefined, project: undefined }],
@@ -41,8 +55,10 @@ const ldSearchData = useMemory("inherit-leaderboard-search-data", {
   minLevel: 1,
   banEquipment: false,
   banJewelry: false,
+  banCharm: false,
   banCombat: false,
   banLife: false
+  }
 })
 // 历史结构迁移统一走 normalizeSearchData（原先这里手写了 5 步迁移）
 normalizeSearchData(ldSearchData.value)
@@ -90,85 +106,12 @@ const panelFields: PanelField[] = [
   },
   { type: "checkbox", key: "banEquipment", label: "排除装备" },
   { type: "checkbox", key: "banJewelry", label: "排除首饰" },
+  { type: "checkbox", key: "banCharm", label: "排除护符" },
   { type: "checkbox", key: "banCombat", label: "排除战斗装备" },
   { type: "checkbox", key: "banLife", label: "排除生活装备" }
 ]
 
 
-const loadingLD = ref(false)
-const getLeaderboardData = debounce(() => {
-  loadingLD.value = true
-  getDataApi({
-    currentPage: paginationDataLD.currentPage,
-    size: paginationDataLD.pageSize,
-    ...ldSearchData.value,
-    sort: sortLD.value
-  }).then((data) => {
-    paginationDataLD.total = data.total
-    leaderboardData.value = data.list
-  }).catch((e) => {
-    console.error(e)
-    leaderboardData.value = []
-  }).finally(() => {
-    loadingLD.value = false
-  })
-}, 300)
-function handleSearchLD() {
-  paginationDataLD.currentPage === 1 ? getLeaderboardData() : (paginationDataLD.currentPage = 1)
-}
-
-const sortLD: Ref<Sort | undefined> = ref()
-function handleSortLD(sort: Sort) {
-  sortLD.value = sort
-  getLeaderboardData()
-}
-
-// 监听分页参数的变化
-watch([
-  () => paginationDataLD.currentPage,
-  () => paginationDataLD.pageSize,
-  () => useGameStore().marketData,
-  () => usePlayerStore().config,
-  () => useGameStore().buyStatus,
-  () => useGameStore().sellStatus
-], getLeaderboardData, { immediate: true })
-
-// #endregion
-
-// #region deepWatch
-
-watch(() => usePriceStore(), () => {
-  getLeaderboardData()
-}, { deep: true })
-// #endregion
-
-const currentRow = ref<Calculator>()
-const detailVisible = ref<boolean>(false)
-async function showDetail(row: Calculator) {
-  currentRow.value = cloneDeep(row)
-  detailVisible.value = true
-}
-
-const priceVisible = ref<boolean>(false)
-const currentPriceRow = ref<Calculator>()
-function setPrice(row: Calculator) {
-  const activated = usePriceStore().activated
-  if (!activated) {
-    ElMessageBox.confirm(t("是否确定开启自定义价格？"), t("需先开启自定义价格"), {
-      confirmButtonText: t("确定"),
-      cancelButtonText: t("取消"),
-      closeOnClickModal: true
-    }).then(() => {
-      usePriceStore().setActivated(true)
-    })
-    return
-  }
-  currentPriceRow.value = cloneDeep(row)
-  priceVisible.value = true
-}
-
-const { t } = useI18n()
-const onPriceStatusChange = usePriceStatus("inherit-price-status")
 </script>
 
 <template>

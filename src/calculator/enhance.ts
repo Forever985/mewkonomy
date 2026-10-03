@@ -1,4 +1,5 @@
 import type { CalculatorConfig, Ingredient, IngredientWithPrice, Product } from "."
+import { MARKET_TAX_FACTOR } from "@@/constants/market"
 import * as Format from "@@/utils/format"
 import * as math from "mathjs"
 import { getEnhancelateCache, getEnhancementExp, getEnhanceTimeCost, getEnhancingEssenceDropTable, getEnhancingRareDropTable, getGameDataApi, getPriceOf, setEnhancelateCache } from "@/common/apis/game"
@@ -262,7 +263,7 @@ export class EnhanceCalculator extends Calculator {
 
     const decomposeIncome = decomposeCal.successRate * decomposeCal.productListWithPrice.reduce((acc, item) => acc + item.price * item.count * (item.rate || 1), 0)
     const decomposeCost = decomposeCal.ingredientListWithPrice.slice(1).reduce((acc, item) => acc + item.price * item.count, 0)
-    this._maxProfitApproximate = (decomposeIncome * (this._targetRate || 1) + income) * 0.98 - cost - decomposeCost * (this._targetRate || 1)
+    this._maxProfitApproximate = (decomposeIncome * (this._targetRate || 1) + income) * MARKET_TAX_FACTOR - cost - decomposeCost * (this._targetRate || 1)
     return this._maxProfitApproximate
   }
 
@@ -308,9 +309,6 @@ export class EnhanceCalculator extends Calculator {
     // 计算所有level到targetLevel的期望 = (I - P)^-1 * 1
     const inv = math.inv(math.subtract(math.identity(size), stMatrix)) as math.Matrix
     const all = math.multiply(inv, math.ones(size, 1)) as math.Matrix
-
-    // console.log("inv", inv)
-    // console.log("all", all)
 
     // 计算从protectLevel级开始使用垫子的期望
     let protectVector = math.zeros(targetLevel, 1) as math.Matrix

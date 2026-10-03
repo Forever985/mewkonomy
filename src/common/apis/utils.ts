@@ -1,5 +1,5 @@
 import type Calculator from "@/calculator"
-import { getEquipmentClassOf, getEquipmentTypeOf, isJewelry } from "../utils/game"
+import { getEquipmentClassOf, isCharm, isJewelry } from "../utils/game"
 
 /**
  * 单条排序规则
@@ -163,20 +163,23 @@ export function handleSearch(profitList: Calculator[], params: any) {
     })
   }
 
-  // ── 排除装备 / 排除首饰：两个开关**互相独立**，可任意组合 ────────────────────
-  // 关键：banEquipment 只负责「非首饰的那部分装备」，首饰完全交给 banJewelry。
+  // ── 排除装备 / 排除首饰 / 排除护符：三个开关**互相独立**，可任意组合 ──────────
+  // 关键：banEquipment 只负责「既不是首饰、也不是护符的那部分装备」，
+  // 首饰交给 banJewelry、护符交给 banCharm。
   //
-  // 修正前两者是包含关系（banEquipment 一并剔除首饰），后果是：只要勾了「排除装备」，
+  // 修正前是包含关系（banEquipment 一并剔除首饰），后果是：只要勾了「排除装备」，
   // 「排除首饰」就变成空操作。而 利润排行(dashboard) 与 制作炼金(manualchemy) 的默认值
   // 恰好是 banEquipment=true —— 于是这两页上勾「排除首饰」**永远看不到任何变化**，
-  // 表现为「排除首饰没用」。
+  // 表现为「排除首饰没用」。护符这次一并按同一原则摘出来（用户明确要求它可单独排除）。
   //
-  // 现在的语义（保持「两个都勾 = 排除全部装备」与修正前一致）：
-  //   排除装备          -> 只去掉护甲/武器/工具/护符/披风/袋子等，保留项链/戒指/耳环
+  // 现在的语义（保持「三个都勾 = 排除全部装备」与修正前勾「排除装备」的结果一致）：
+  //   排除装备          -> 只去掉护甲/武器/工具/披风/袋子等，保留项链/戒指/耳环/**护符**
   //   排除首饰          -> 只去掉项链/戒指/耳环
-  //   两个都勾          -> 全部装备都被排除（与修正前勾「排除装备」的结果相同）
-  params.banEquipment && (profitList = profitList.filter(cal => !cal.isEquipment || isJewelry(cal.item)))
+  //   排除护符          -> 只去掉护符（实测 102 件，占全部装备 19%）
+  //   三个都勾          -> 全部装备都被排除
+  params.banEquipment && (profitList = profitList.filter(cal => !cal.isEquipment || isJewelry(cal.item) || isCharm(cal.item)))
   params.banJewelry && (profitList = profitList.filter(cal => !isJewelry(cal.item)))
+  params.banCharm && (profitList = profitList.filter(cal => !isCharm(cal.item)))
   // 排除战斗装备：剔除 combat / both 类（依据 combatStats 派生分类）
   params.banCombat && (profitList = profitList.filter(cal => {
     const cls = getEquipmentClassOf(cal.item)

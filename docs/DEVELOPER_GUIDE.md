@@ -106,6 +106,20 @@ public/data/market.json┘         │ 缓存：localStorage，按 timestamp + �
 
   **采样频率的真相（决定了上面的精度上限）**：官方 `marketplace.json` 每 60s 轮询一次（`main.ts`），而官方快照是**整点小时粒度**；GitHub Actions 的 `schedule` 是 best-effort 的 —— 本仓库实测声明 60min、实际相邻间隔 143~466min（中位 307，全部 success，是触发器被延迟而不是脚本失败）。所以**每小时采样只能靠浏览器**：`startMarketAutoSampling()`（在 `main.ts` 调用一次）监听 `marketData.timestamp` 变化，快照一前进就落一个本地采样点，不受 Actions 延迟影响。本地上限 200 条 ≥ 7 天 × 24 点 = 168，够用。
 
+  > ⚠️ **2026-10-01 实测更新（本条结论已变，勿再照抄上面那段旧推断）**：
+  > 上面「每小时只能靠浏览器」是基于「外部定时器尚未生效、只剩 GitHub 自身 `schedule`」的时期。
+  > **数据侧**：09-25 及以前每天仅 ~5 个采样点、相邻间隔 3~6 小时；09-26 起变密，
+  > 09-27 ~ 09-30 连续 4 天每天恰好 24 个采样点、间隔严格 60 分钟（整点 `:06`）。
+  > **触发器侧**（GitHub API 拉运行记录）：本 workflow 共 170 次运行、全部 success，
+  > 其中 `workflow_dispatch`（cron-job.org 打的）117 次、`schedule` 53 次；
+  > `workflow_dispatch` 在 09-20 试了 3 次后**断了 6 天**，自 **2026-09-26T09:19 恢复**，
+  > 并从 10:00 起严格整点触发，此后 112 次相邻间隔全部为 60 分钟、无缺口。
+  > 该时点 `main` 上并无对应代码提交 → 确认是**外部触发器在 09-26 才真正稳定生效**，非代码改动。
+  > ⚠️ 那次 6 天断档期间 GitHub 侧全部 success、**无任何告警**（数据只是从 24 点/天退化为 ~5 点/天，
+  > 被 GitHub 自带 cron 兜底掩盖）。若要守住「每小时」SLA，建议加健康检查：
+  > 定时校验 `market_history_*.json` 最新采样点年龄，超阈值即让 workflow 失败以触发邮件告警。
+  > 因此服务端归档现在本身就是真·每小时，`startMarketAutoSampling()` 已降级为「本地兜底/离线补点」，而非唯一通道。
+
 ### 2.3.1 服务端归档：分片格式 v2 与外部定时触发
 
 服务端归档（`gh-pages:data/market_history_<UTC日>T<HH>.json`）解决的是**多设备共享**：浏览器本地采样只覆盖当前这一台设备。
@@ -258,22 +272,240 @@ const panelFields: PanelField[] = [ /* 声明字段 */ ]
 - `pages/marketvolume/index.vue` 仍直接使用 `<el-pagination>`：它自带独立的摘要区与
   「只看有成交」开关，分页块并非同一形态，未强行统一。
 
+### 2.10 市场提醒（纯函数 + 独立 store 的分层写法）
+
+新增业务能力时值得照抄的**分层模板**——把「逻辑」与「配置」与「展示」彻底分开：
+
+```
+common/apis/marketvolume/alerts.ts   ← 纯函数：规则模型 + 评估（只 import 类型，可单测）
+pinia/stores/alert.ts                ← 配置持久化（localStorage，带 version，缺字段补默认）
+pages/marketvolume/index.vue         ← 只负责：把列表喂进评估、渲染命中、发通知
+layouts/components/Settings/index.vue ← 只负责：渲染开关并把改动写回 store
+```
+
+三条经验：
+
+1. **副作用不要进纯函数模块**。`alerts.ts` 不碰 localStorage、不碰 i18n、不读 store，所以
+   `evaluateAlerts` 可以直接用普通数组断言；页面决定"怎么显示、要不要弹系统通知"。
+2. **配置单独一个 store，别塞进既有 store**。提醒配置放进 `layoutsConfig` 会被
+   「重置布局配置」误删；独立 key（`market-alert-config`）也让"缺字段补默认"的归一化更简单。
+3. **持久化配置一律写归一化函数**（`normalizeConfig`/`normalizeRules`）：`localStorage` 里可能是
+   旧版本、被手改、或字段类型不对的数据，读取时逐字段兜底，**不要写一次性迁移脚本**。
+
+⚠️ 该功能的输入列表必须用页面回填后的 `changeApplied`（不是 `all`），详见 `AI_CONTEXT.md` §10.3。
+
+### 2.11 数值区间筛选（RangeFilter）与「纯工具不要走 barrel」
+
+同一套「逻辑下沉 + 可复用控件」的写法，市场监控的**区间筛选**是另一个例子：
+
+```
+common/apis/marketvolume/filters.ts        ← 纯函数：NumericRange 模型 + matchesRange/applyRangeFilters
+common/components/RangeFilter/index.vue    ← 可复用控件：模式下拉 + 1~2 个数字输入（被 5 个指标复用）
+```
+
+控件只负责**采集输入**，判定全在 `filters.ts`。这样 5 个指标不会各写一遍选项文案与 v-model 逻辑，
+也不会把"端点是否包含"这种语义散落在模板里。
+
+定义区间语义时踩过的两个坑，值得照抄结论：
+
+- 选项文案用 **`≥` / `≤` / `区间`** 而不是"高于/低于"——后者会让人反复纠结端点；
+  实现上一律**含端点**，并与提醒规则的 `gte`/`lte` 保持同一理解。
+- **阈值留空必须等于"不筛选"**，不能等于"匹配空集"。否则用户把模式切成 `≥`、还没填数字的那一瞬间，
+  列表会整片变空，看起来像坏了。
+
+> ⚠️ **零依赖的纯工具要单独成文件，不要放进 `common/apis/<域>/index.ts`。**
+> 那个 barrel 会 `import @/common/apis/game`，而 game 在顶层注册了
+> `watch(..., { immediate: true })` 重建全量索引 —— 在没有数据的时机（**单元测试最容易**）
+> 导入它就会以 `Cannot read properties of null (reading 'actionDetailMap')` 直接抛错。
+> 所以行 key 这种纯字符串工具落在 `common/apis/marketvolume/keys.ts`，需要它的 store / 纯函数
+> **直接从该文件引**。判断标准很简单：*这个模块需要游戏数据吗？* 不需要就别让它有能力把数据层拖进来。
+
+### 2.12 加价格档位口径时改哪里
+
+价格口径目前是 **左/右 ×（`-` / 原价 / `+`）共 6 个**（`PriceStatus`）。新增一个口径只动两处：
+
+1. `pinia/stores/game.ts`：`PriceStatus` 枚举 + `PRICE_STATUS_LIST`（标签用 `${getTrans("左价")}+` 这种后缀语法）。
+2. `common/apis/game/index.ts`：`STATUS_STEP_SPEC`。
+
+**`STATUS_STEP_SPEC` 是 `Record<PriceStatus, { base, dir }>` 而不是 `switch`，这是刻意的**：
+漏掉新枚举成员会**直接编译失败**。如果写成 `switch`，很容易出现「UI 下拉里能选、但价格没变化」
+这种静默错误（因为没有 `default` 分支，编译器不会提醒）。
+
+- `dir`：`0` = 原价、`+1` = 抬一档、`-1` = 压一档；`base` = 读 `ask` 还是 `bid`。
+- `priceStepOf(price, high, enhanced)` 不用改——它只认"抬/压"方向，强化物品的 ×5 自动适用。
+- 价格缓存不用清：`_priceCache` 的 key 含 `buyStatus|sellStatus`，新口径自带一个桶。
+- 所有下拉都是 `v-for="item in PRICE_STATUS_LIST"`，所以 UI 会自动多出选项（含共用组件
+  `common/components/PriceStatusSelect/index.vue`）。
+
+> ⚠️ 写测试时若要给 `store.marketData` 注入自定义报价：**必须赋一个全新字面量**。
+> `{ ...store.marketData }` 这类"展开 reactive 对象"的写法会把嵌套的 reactive 代理带进新值，
+> 而 game 的模块级 watch 会做 `structuredClone(toRaw(...))`（`toRaw` 只解顶层），
+> 于是抛 `DataCloneError: #<Object> could not be cloned`。
+
+### 2.13 加「排除某类」开关：必须是独立开关，不能做成包含关系
+
+检索侧的 `banEquipment` / `banJewelry` / `banCharm` **三者互相独立**，`banEquipment`
+只负责「既非首饰、也非护符」的装备。这不是洁癖，是被真实 bug 教出来的：
+
+> 最初 `banEquipment` 直接按 `isEquipment` 剔除，而首饰（项链/戒指/耳环）的 categoryHrid
+> 同样是 `/item_categories/equipment`，于是首饰被一并剔掉。后果是**只要勾了「排除装备」，
+> 「排除首饰」就永远没反应**。而 dashboard / manualchemy 的 `banEquipment` 默认就是 `true`，
+> 用户在这两页上怎么点都看不到变化，报成「排除首饰没用」。护符（`/equipment_types/charm`，
+> 102 件）后来也按同一原则摘了出来。
+
+新增一个「排除 X」时要同步的地方（一处漏改就会退化成包含关系或彻底不生效）：
+
+1. `common/utils/game.ts`：加判定函数（参照 `isJewelry` / `isCharm`），
+   并把它从 `banEquipment` 的过滤条件里**放行**（`!isEquipment || isJewelry(x) || isCharm(x)`）。
+2. `common/apis/utils.ts` 的 `handleSearch`：加过滤分支。
+3. `common/apis/favorite/index.ts`：**收藏夹是另一条检索路径**，必须保持同一语义
+   （历史上两条路径对「排除装备」的理解就分叉过）。
+4. 类型：`common/apis/leaderboard/type.d.ts`（`RequestData`）与 `SearchPanel/types.ts`（`PanelSearchData`）。
+5. 各页 `searchData` 默认值 + `panelFields`；`enhanceexp` 还有一个「生效条件」摘要列表要补。
+6. **默认值要让默认行为不变**：新开关的默认值取与该页 `banEquipment` 相同
+   （`banEquipment: true` 的页面默认也排除），否则改完一刷新，用户的列表内容就变了。
+
+### 2.14 「可开可关」的显示过滤放哪：一个独立 store，别用 `useMemory`
+
+市场监控的「隐藏小成交量」需要**设置面板和市场监控页同时读写**。
+
+- ❌ `useMemory(key, ...)`：每处调用各持一个独立 ref，在设置里改了，页面不会更新（要等刷新）。
+- ❌ 塞进 `layoutsConfig`：「重置布局配置」会顺手把业务过滤条件一起重置。
+- ✅ 单独一个 store（`pinia/stores/marketfilter.ts`），两处 `v-model` 同一份状态，天然同步。
+
+另外，过滤用的**数值口径要与 UI 展示的那一列一致**（这里复用 `rangeValueOf(item, "volume")`），
+否则会出现「屏幕上写着 0、却因为底层另一个字段非 0 而被留下」这种自相矛盾。
+
+### 2.15 新增一个「检索结果页」：不要手抄骨架，用 `useLeaderboardPage`
+
+新建检索页（或迁移老页面）时，**不要**再手写分页 / 检索调用 / 排序 / 详情弹窗那一段。
+它们已经收敛到 `src/common/composables/useLeaderboardPage.ts`：
+
+```ts
+import { useLeaderboardPage } from "@/common/composables/useLeaderboardPage"
+
+const {
+  searchData: ldSearchData,
+  list: leaderboardData,
+  loading: loadingLD,
+  paginationData: paginationDataLD,
+  handleCurrentChange: handleCurrentChangeLD,
+  handleSizeChange: handleSizeChangeLD,
+  handleSearch: handleSearchLD,
+  handleSortChange: handleSortLD,
+  currentRow, detailVisible, showDetail,
+  priceVisible, currentPriceRow, setPrice,
+  onPriceStatusChange
+} = useLeaderboardPage({
+  key: "yourpage",              // 缓存 key 前缀
+  api: getYourDataApi,
+  searchData: { /* 本页检索条件默认值 */ }
+})
+```
+
+三条纪律：
+
+1. **`key` 决定三个 localStorage key**（检索条件 / 分页 / 买卖价状态）。
+   默认派生自 `key`，**与历史 key 不一致时必须用 `memoryKey` / `paginationKey` / `priceStatusKey` 覆盖**，
+   否则用户的条件与分页会"看起来丢了"。新页面直接用默认值即可。
+2. **别名解构，别改模板**。全站模板都在用 `ldSearchData` / `paginationDataLD` / `loadingLD` 这套命名，
+   沿用它们能让改动只落在 `<script>` 里。
+3. **本页特有逻辑留在页面里**。骨架不覆盖的（表头点击并入排序优先级、模式缓存重算、
+   行高亮、只读回调等）写在调用之后；需要"改骨架某个行为"时，用别名接住原函数再包一层，例如
+   `handleSortChange: applyHeaderSortLD` + 自己定义 `handleSortLD`。
+
+### 2.16 批量替换「重复区块」时：区域里常混着各页特有代码
+
+**动手前先跑仓库自带的扫描器**（不需要装任何依赖）：
+
+```bash
+python scripts/dup-scan.py                  # 默认最小 8 行、跨 ≥2 文件
+python scripts/dup-scan.py --min-lines 12   # 只看更大的块
+python scripts/dup-scan.py --src src/pages  # 只扫页面
+```
+
+输出两个榜单：「重复行数最多的文件」（重构收益最大的目标）与「出现在最多文件里的重复块」
+（最该优先抽成公共模块的轮子）。**先量再改**，不要凭印象挑目标。
+
+抽公共逻辑时最容易出的事故不是语法错误，而是**把夹在骨架之间的业务逻辑一起删掉**，
+而且**类型检查查不出来**（没被引用的函数删了不报错）。
+
+实测例子：某页的「骨架区域」里夹着 `rowClassName`（整行高亮）、`searchPanelRef`（排序优先级联动）、
+以及两个「改价格口径就清模式缓存」的 watch —— 它们都在骨架函数之间，位置很"像"骨架。
+
+做法：
+
+1. 先算出「各页该区域行的**交集**」——只出现在 1~2 个页面里的行就是各页特有逻辑，必须保留；
+2. 替换后除了 `tsc`，还要**对比迁移前后的顶层声明集合**（`function`/`const` 名），
+   确认消失的每一个都能解释清楚（"搬进公共模块了"），而不是"不知道去哪了"；
+3. 若某个骨架函数的**行为被某页重载过**（如上例的 `handleSortLD`），
+   公共模块要允许用别名接住原函数、由页面包一层，而不是把页面那版删掉。
+
+### 2.17 想加「反解某价格」类功能：先看 `common/utils/price-solve.ts`
+
+时薪对**每个单价都是线性的**（`profitPH = incomePH − costPH`，两项都是单价的一次式），
+所以「给定目标时薪 → 临界单价」是**闭式解**，不要写迭代或二分：
+
+**临界单价 = 当前单价 + (目标时薪 − 当前时薪) / 系数**
+- 材料侧系数 = `−countPH`（买贵了利润降）
+- 成品侧系数 = `+countPH × MARKET_TAX_FACTOR`（金币不课税，系数不带税率）
+
+`countPH`（每小时用量/产量）计算器已经算好，直接取即可，**不要自己重新推导游戏公式**。
+
+```ts
+import { primaryCandidateOf, solveCandidatesOf, solvePriceForTarget } from "@/common/utils/price-solve"
+
+const cand = primaryCandidateOf(calc)!          // 主要询价物品 = ingredientList[0]（本体/主料）
+const r = solvePriceForTarget(calc.result.profitPH, cand, 目标时薪)!
+r.criticalPrice  // 临界单价
+r.impossible     // 临界价 ≤ 0 = 即使白送也达不到
+```
+
+三条注意：
+
+1. **`calc.run()` 必须先调**——`result`（含 `profitPH`）是它填充的，否则拿到 `undefined`。
+2. 该模块是**纯函数**（零运行时依赖），物品名与档位价由调用方补；
+   要显示「哪个档位」用 `getPriceOf(hrid, level, status, ...)` + `PRICE_STATUS_LIST`，别硬编码档位文案。
+3. 反解的正确性**建立在线性模型上**，所以测试要验模型本身：
+   断言 `Σ countPH×price ≈ calc.result.costPH`、`Σ 系数×countPH×price ≈ calc.result.incomePH`
+   （应精确到 1e-9 量级）。只验"临界价代回等于目标"是自证循环，证明不了什么。
+
+### 2.18 「填表算利润」页：新增动作或改表单时看这里
+
+页面在 `pages/profitform/index.vue`，算钱的逻辑在 `common/utils/profit-form.ts`（纯函数）。
+
+**改动前必守的两条**：
+
+1. **默认值必须精确复现计算器**。表单默认值全部来自 `createFormState(calc)`，
+   不改任何格子时应满足
+   `总成本 ≡ costPH`、`总收入 ≡ incomePH`、`总利润 ≡ profitPH`、`总耗时 ≡ 1 小时`。
+   这条有单测盯着（`tests/profit-form.test.ts`），改完必须仍然成立——
+   **它是"改哪格就是覆盖哪格"这个承诺的地基**。
+
+2. **加动作时，物品枚举必须过「可用性闭环」测试**。新动作要在
+   `common/apis/profitform/index.ts` 的 `PROFIT_FORM_ACTIONS` 里声明 `match`，
+   并如实标注必填参数（`needEnhanceLevel` / `needProtectLevel` / `needCatalyst`）。
+   ⚠️ **"能列出"与"能用"是两件事**：强化计算器的 `protectLevel` 是必填，
+   不传会让 `available` 为 false，表现成"选择器里有这件物品，却提示不支持该动作"。
+   测试里那条「选择器列出的物品，计算器必须真的接受」就是专门拦这个的。
+
+**持久化只存覆盖值**（`stores/profitform.ts`）：存的是"你手填过的那几项"，
+不是整张表。因为配方（工匠茶/触媒/强化等级）会变，存整张表会显示过期配方且静默算错。
+
 ---
 
 ## 三、测试
 
 - 框架：**vitest + happy-dom**（`pnpm test`）。测试文件在 `tests/` 下。
 - **Mock 策略**：用 `vi` 控制模块（`vi.resetModules()` + 动态 `import` 重新加载 store / 模块，见 `marketvolume-cache.test.ts`、`marketvolume-history.test.ts`）；纯计算逻辑（calculator）可直接断言数值；涉及 localStorage 的用例先 `localStorage.clear()`。
-- 既有测试清单（`tests/`）：
-  - `bigset-c-verify`（大批量组合检索校验）
-  - `chainbuilder-verify`（手动产业链计算）
-  - `charmtransform-verify`（护符转化盈利）
-  - `cross-project-tail-verify`（及 `extended`，跨项目尾段校验）
-  - `handle-best-per-item`（每物品最优方案）
-  - `marketvolume-cache` / `marketvolume-verify`（市场监控缓存兼容与结果）
-  - `marketvolume-history`（涨跌历史：本地采样节流/强制、无历史空 map、时间窗涨跌百分比、基准/当前价缺失过滤；4 用例 `vi.resetModules` 重建模块隔离）
-  - `demo`、`components/Notify`、`utils/validate`
+- 既有测试清单（`tests/`，2026-10-03 实测：**30 个文件 / 182 个用例，全部通过**）：
+  - 市场监控家族（12 个，当前测试重心）：`marketvolume-cache`（旧缓存结构兼容）、`marketvolume-history`（涨跌历史：本地采样节流/强制、无历史空 map、时间窗涨跌百分比、基准/当前价缺失过滤）、`marketvolume-history-format`、`marketvolume-rolling-volume`、`marketvolume-shard`（Python 编码 → TS 解码的**跨语言**防漂移断言）、`marketvolume-sort`、`marketvolume-tiers`、`marketvolume-verify`、`marketvolume-volume-rate`、`marketvolume-alerts`（**提醒纯函数语义**：绝对值/相对排行、范围与 onlyActive、多规则去重与优先级、非法参数与零基准边界）、`marketvolume-alerts-integration`（**列表→预置规则→命中**的真实链路）、`marketvolume-filters`（**区间筛选语义**：端点包含、阈值留空=不筛选、填反自动对调、null/-1 值处理、多条件叠加；外加收藏 store 的持久化与坏数据归一化）
+  - 业务校验：`bigset-c-verify`（大批量组合检索）、`ban-filter-independence`（**排除装备/首饰/护符三开关互相独立**）、`chainbuilder-verify`（手动产业链）、`charmtransform-verify`（护符转化）、`cross-project-tail-verify`（及 `extended`，跨项目尾段）、`handle-best-per-item`（每物品最优方案）、`enhanceexp-profitable`（仅看赚钱方案）、`condition-level-range`（按行限定要求等级区间）、`artisan-tea-level-bonus`（工匠茶 +5）、`price-fallback-verify`（价格兜底）、`price-status-tiers`（**价格档位口径**：6 个口径递增性、0.366% 与强化 ×5 的幅度、低价保底 1 金、无价保持 -1）、`price-solve`（**目标时薪反解**：手算样例验符号、真实计算器验线性模型精确到 1e-9）、`profit-form`（**填表算利润**：手算样例、默认值必须精确复现计算器的 costPH/incomePH/profitPH、动作枚举的**可用性闭环**）、`sort-priority`、`search-panel-checkbox`
+  - 基础：`demo`、`components/Notify`、`utils/validate`
 - **改动涉及缓存/价格/过滤逻辑时，建议补充对应 verify 测试**，与既有命名风格保持一致。
+- **纯逻辑与集成分开写**：像市场提醒那样，把「可单测的纯函数」（`alerts.ts`）与「接线后才有意义的部分」拆成两个文件——前者断言语义，后者用 `vi.mock` 注入真实形状的数据走完整条链路。只写后者会因数据构造复杂而漏掉边界；只写前者会漏掉"两块拼起来才暴露"的问题。
+- ⚠️ **看到 `Errors 1 error` 不要只看 `Test Files xx passed`**：运行器往临时目录写缓存被拒（`EPERM ... open '<TEMP>\...\web\<hash>'`）时会**静默丢掉一整个测试文件**，vitest 自己的警告原文就是 "This might cause false positive tests"。把 `TEMP`/`TMPDIR` 指向工程内可写目录后重跑即可恢复。
+- ⚠️ **测试里要"真数据"时的导入顺序**：`@/common/apis/<域>/index.ts` 这类 barrel 会拉到 `@/common/apis/game`，而它在**顶层**就注册了 `watch(..., { immediate: true })` 重建全量索引。必须「**先写 `localStorage` → 再建 / 播种 store → 最后动态 `import()` 数据层**」；任何把数据层放到模块顶层静态 import 的写法都会以 `Cannot read properties of null (reading 'actionDetailMap')` 直接炸在收集阶段。
 
 ---
 
@@ -298,9 +530,9 @@ const panelFields: PanelField[] = [ /* 声明字段 */ ]
 - **为什么拆开**：历史采样与游戏数据抓取原先共用一个 job，`data.json` 上游一挂，历史采样一起停摆——线上曾因此**连续 8 天没有任何新采样点**。
 - **为什么游戏数据改为每天一次**：游戏数据只在游戏版本更新时变化，原先每小时跑一次纯属浪费 Actions 配额。
 - **官方快照实际是 1 小时粒度（实测）**：`marketplace.json` 顶层 `timestamp` 代表**市场快照本身的生成时间**，实测它以**整点、每小时**为粒度前进（例如 07:06:00 → 08:06:00），而不是每 20 分钟。因此：
-  - 因此稳定产出约 **24 个采样点/天**；更频繁的运行会因时间戳相同被去重跳过（属预期行为，不是故障）。cron 仍取每小时第 5 分钟并保留手动触发，作为对 GitHub 调度延迟（实测 2~4 倍）的容错；
-  - 7 天窗口下约 168 点，远低于 520 的上限，所以上限目前不会触发；
-  - 这意味着「涨跌」基准点的最细分辨率是 1 小时：**1 小时时间窗常常找不到更早的基准点而显示 `--`**，属正常现象；3 小时及以上的窗口才有稳定意义。
+  - 因此稳定产出约 **24 个采样点/天**；更频繁的运行会因时间戳相同被去重跳过（属预期行为，不是故障）。cron 仍取每小时第 5 分钟并保留手动触发，作为对 GitHub 调度延迟的容错；
+  - 7 天窗口下约 168 点；v2 分片按**分片**滚动清理，不会触发旧的上限。线上实测：超出 7 天窗口的旧片（如 `2026-09-23T18`）已返回 404，属预期行为；
+  - 「涨跌」基准点的最细分辨率是 1 小时。**2026-10-01 线上实测：归档已是真·每小时（每天 24 点，起点 2026-09-26），所以 1 小时时间窗现在也能取到基准点、正常出数**——原先「1 小时窗口常显示 `--`、3 小时以上才有稳定意义」的说法对应的是 2026-09-26 之前的稀疏时期，**已不成立**。
 - **部署安全红线（必读）**：`gh-pages` 的 `data/` 是**多脚本共享目录**——`sample_market_history.py` **只拥有** `market_history.json`（v1 遗留）与 `market_history_*.json`（v2 分片），`fetch_game_data.py` **只拥有** `data.json` / `market.json`。两脚本都只把自己的文件复制进 `gh-pages` 的全新克隆再提交，**绝不允许 `rmtree` + `copytree` 整个 `data/`**：早期采样脚本用 `public/data` 整目录替换线上目录，而 `main` 的 `public/data` 不含新抓的 `data.json`/`market.json`，导致**每次采样都会删掉线上 4MB 的 `data.json` 与 70KB 的 `market.json`**（commit `93f0107`）。两脚本另调用 `assert_no_unintended_deletions()`，`git status` 一旦出现本脚本不负责的删除就中止部署。分片版仍遵守这条：只写 / 只删 `market_history_*.json`，且删除目标（超出保留期的旧片）会显式加入 `owned_files` 白名单。
 - **CI 执行顺序**：先 `actions/checkout` 检出 `gh-pages`（线上数据落在 `./data/`，供脚本做增量比对），再 `git fetch origin main:main` + `git checkout main -- scripts/<file>` 取回脚本（脚本只在 `main` 上维护）。
 - **本地部署也必须守同一条红线**：`gh-pages` 的 `data/` 同样**不能被本地部署覆盖**。原先 `deploy.ps1` / `deploy-once.ps1` / `sync-fast.ps1` 都用 `npx gh-pages -d dist`，而该命令默认 `CLEAN=true`，会**先清空整条 gh-pages 分支**再上传 `dist`；`dist/data/` 只是仓库里 `public/data/` 的静态副本，于是每次本地部署都把 Actions 采样的历史文件覆盖回旧快照（实测 commit `a4192aa` 把 2 个采样点覆盖回 1 个）。`.github/workflows/deploy.yml` 早就用 `rm -rf dist/data` + `CLEAN: false` 规避，本地脚本此前漏了。
@@ -320,6 +552,7 @@ const panelFields: PanelField[] = [ /* 声明字段 */ ]
 5. **旧数据迁移兼容**：新增筛选字段时需兼容旧 localStorage（如 `name` 字符串→数组、`actionLevel→minLevel`、`profitRate→minProfitRate` 的迁移逻辑），缺失字段按 undefined/falsy 处理。
 6. **缓存红线**：引入新计算模式参数必须清对应缓存（见 §2.4）。
 7. **改动后更新文档**：涉及架构/功能改动时，同步维护本文件、`MILKONOMY_PROJECT_CONTEXT.md` 与 `REUSABLE_ABSTRACTION_MODULES.md`。
+8. **`pnpm lint` 的作用域与两个坑（2026-10-01 修正）**：`eslint.config.js` 的 `ignores` 只显式列了 `data/**` 与 `public/data/**`（`data.json` 约 4MB，属数据非代码）；`dist/`、`temp/`、`.vite/`、根目录 `assets/` 这些产物目录靠 `.gitignore` 自动生效——`@antfu/eslint-config` 会读取 `.gitignore`。务必记住两点：flat config 的忽略模式**必须带 `/**`** 才会连目录内容一起忽略（只写目录名不生效），并且**不要加前导斜杠**（`/data/**` 不会被归一化，反而匹配不到任何文件）。另：根目录 `assets/`（62 个压缩产物 / 约 2.5MB）是历史某次 `deploy` 提交误跟踪进仓库的构建产物，已补 `.gitignore` 并用 `git rm -r --cached` 退出索引（**文件仍在磁盘**）；修之前 `pnpm lint` 会去「修复」这些产物并报出 21.6 万条错误。
 
 ---
 

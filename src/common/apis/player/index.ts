@@ -65,7 +65,6 @@ watch (() => useGameStoreOutside().gameData, () => {
   initDefaultActionConfigMap()
   initDefaultSpecialEquipmentMap()
   initBuffMap()
-  console.log("equipmentList changed")
 }, { immediate: true })
 
 watch(
@@ -332,7 +331,6 @@ function initBuffMap() {
       }
     }
   }
-  console.log("buffs", buffs)
 }
 
 function getSealBuffRatio(hrid: string): number {

@@ -1,36 +1,51 @@
 <script lang="ts" setup>
-import type Calculator from "@/calculator"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import PagerFooter from "@@/components/PagerFooter/index.vue"
 import SearchPanel from "@@/components/SearchPanel/index.vue"
 import type { PanelField } from "@@/components/SearchPanel/types"
-import { usePagination } from "@@/composables/usePagination"
 import { Plus, QuestionFilled, Search } from "@element-plus/icons-vue"
-import { ElMessageBox, type Sort } from "element-plus"
-import { cloneDeep, debounce } from "lodash-es"
 import { getEnhanceExpDataApi } from "@/common/apis/enhanceexp"
 
-import { getMarketDataApi } from "@/common/apis/game"
 import { getActionConfigOf } from "@/common/apis/player"
 import SortPriority, { type SortRule } from "@@/components/SortPriority/index.vue"
 import { ENHANCEEXP_SORT_FIELDS } from "@/common/constants/sort-fields"
-import { useMemory } from "@/common/composables/useMemory"
-import { usePriceStatus } from "@/common/composables/usePriceStatus"
 import * as Format from "@@/utils/format"
 import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 import { useGameStoreOutside } from "@/pinia/stores/game"
-import { usePlayerStore } from "@/pinia/stores/player"
-import { usePriceStore } from "@/pinia/stores/price"
 import ActionConfig from "../dashboard/components/ActionConfig.vue"
 import ActionDetail from "../dashboard/components/ActionDetail.vue"
 import ActionPrice from "../dashboard/components/ActionPrice.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 import ManualPriceCard from "../dashboard/components/ManualPriceCard.vue"
+import { useLeaderboardPage } from "@/common/composables/useLeaderboardPage"
+import type Calculator from "@/calculator"
+import type { Sort } from "element-plus"
 // #region 查
-const { paginationData: paginationDataLD, handleCurrentChange: handleCurrentChangeLD, handleSizeChange: handleSizeChangeLD } = usePagination({}, "enhanceexp-leaderboard-pagination")
-const leaderboardData = ref<Calculator[]>([])
-
-const ldSearchData = useMemory("enhanceexp-leaderboard-search-data", {
+/**
+ * 检索结果页骨架：分页 / 检索条件缓存 / 防抖检索 / 排序 / 详情与价格弹窗 / 买卖价状态。
+ * 用别名解构，模板里的变量名（ldSearchData、paginationDataLD…）保持不变。
+ * 要改检索流程请改 `common/composables/useLeaderboardPage.ts`，不要在这里恢复手写骨架。
+ */
+const {
+  searchData: ldSearchData,
+  list: leaderboardData,
+  loading: loadingLD,
+  paginationData: paginationDataLD,
+  handleCurrentChange: handleCurrentChangeLD,
+  handleSizeChange: handleSizeChangeLD,
+  handleSearch: handleSearchLD,
+  handleSortChange: applyHeaderSortLD,
+  currentRow,
+  detailVisible,
+  showDetail,
+  priceVisible,
+  currentPriceRow,
+  setPrice,
+  onPriceStatusChange
+} = useLeaderboardPage({
+  key: "enhanceexp",
+  api: getEnhanceExpDataApi,
+  searchData: {
   name: [],
   // 目标强化等级并行筛选（与超级强化分解页同构；行内 steps/区间 AND、行间 OR）
   conditions: [{ steps: undefined, minLevel: undefined, maxLevel: undefined }],
@@ -40,12 +55,35 @@ const ldSearchData = useMemory("enhanceexp-leaderboard-search-data", {
   maxCostPerExp: undefined,
   banEquipment: false,
   banJewelry: false,
+  banCharm: false,
   banCombat: false,
   banLife: false,
   materialPriceType: "ask",
   productPriceType: "bid",
   // 排序优先级：第 0 项为主优先级（分组依据），第 1 项起在组内继续排序；空数组 = 默认按每次经验成本升序
   sortRules: [] as SortRule[]
+  }
+})
+/** 排序优先级控件：表头点击会并入优先级列表（清空排序则整体重置） */
+const searchPanelRef = ref<InstanceType<typeof SearchPanel> | null>(null)
+/** 本页的表头点击除了重算，还要把该列并入「排序优先级」列表，故在骨架之上包一层 */
+function handleSortLD(sort: Sort) {
+  searchPanelRef.value?.sortPriorityRef?.applyHeaderSort(sort)
+  applyHeaderSortLD(sort)
+}
+
+/** 赚钱方案（强化后卖出比总投入还贵）整行高亮 */
+function rowClassName({ row }: { row: Calculator }) {
+  return row.result.profitable ? "profitable-row" : ""
+}
+
+// 影响「计算模式」的参数变化：清缓存后重算（缓存按模式签名校验，签名不符也会自动重算）
+watch([
+  () => ldSearchData.value.materialPriceType,
+  () => ldSearchData.value.productPriceType
+], () => {
+  useGameStoreOutside().clearModeCache("enhanceexp")
+  handleSearchLD()
 })
 // 旧结构迁移（本页字段组合与其它检索页不同，故保留自己的迁移逻辑：
 // 旧的单值 priceType 拆成 materialPriceType / productPriceType，并清理顶层 minLevel/maxLevel）
@@ -85,99 +123,13 @@ const panelFields: PanelField[] = [
   { type: "range", label: "每次经验成本 ≤", maxKey: "maxCostPerExp", width: 110, placeholderMax: "∞" },
   { type: "checkbox", key: "banEquipment", label: "排除装备" },
   { type: "checkbox", key: "banJewelry", label: "排除首饰" },
+  { type: "checkbox", key: "banCharm", label: "排除护符" },
   { type: "checkbox", key: "banCombat", label: "排除战斗装备" },
   { type: "checkbox", key: "banLife", label: "排除生活装备" },
   { type: "select", key: "materialPriceType", label: "材料买价", options: () => priceTypeOptions.value },
   { type: "select", key: "productPriceType", label: "成品售价", options: () => priceTypeOptions.value }
 ]
 
-const loadingLD = ref(false)
-const getLeaderboardData = debounce(() => {
-  loadingLD.value = true
-  getEnhanceExpDataApi({
-    currentPage: paginationDataLD.currentPage,
-    size: paginationDataLD.pageSize,
-    ...ldSearchData.value
-  }).then((data) => {
-    paginationDataLD.total = data.total
-    leaderboardData.value = data.list
-  }).catch((e) => {
-    console.error(e)
-    leaderboardData.value = []
-  }).finally(() => {
-    loadingLD.value = false
-  })
-}, 300)
-function handleSearchLD() {
-  paginationDataLD.currentPage === 1 ? getLeaderboardData() : (paginationDataLD.currentPage = 1)
-}
-
-/** 排序优先级控件：表头点击会并入优先级列表（清空排序则整体重置） */
-const searchPanelRef = ref<InstanceType<typeof SearchPanel> | null>(null)
-function handleSortLD(sort: Sort) {
-  searchPanelRef.value?.sortPriorityRef?.applyHeaderSort(sort)
-  getLeaderboardData()
-}
-
-/** 赚钱方案（强化后卖出比总投入还贵）整行高亮 */
-function rowClassName({ row }: { row: Calculator }) {
-  return row.result.profitable ? "profitable-row" : ""
-}
-
-// 监听分页参数的变化
-watch([
-  () => paginationDataLD.currentPage,
-  () => paginationDataLD.pageSize,
-  () => getMarketDataApi(),
-  () => usePlayerStore().config,
-  () => useGameStoreOutside().buyStatus,
-  () => useGameStoreOutside().sellStatus
-], getLeaderboardData, { immediate: true })
-
-// #endregion
-
-// #region deepWatch
-
-watch(() => usePriceStore(), () => {
-  getLeaderboardData()
-}, { deep: true })
-// #endregion
-
-// 影响「计算模式」的参数变化：清缓存后重算（缓存按模式签名校验，签名不符也会自动重算）
-watch([
-  () => ldSearchData.value.materialPriceType,
-  () => ldSearchData.value.productPriceType
-], () => {
-  useGameStoreOutside().clearModeCache("enhanceexp")
-  handleSearchLD()
-})
-
-const currentRow = ref<Calculator>()
-const detailVisible = ref<boolean>(false)
-async function showDetail(row: Calculator) {
-  currentRow.value = cloneDeep(row)
-  detailVisible.value = true
-}
-
-const priceVisible = ref<boolean>(false)
-const currentPriceRow = ref<Calculator>()
-function setPrice(row: Calculator) {
-  const activated = usePriceStore().activated
-  if (!activated) {
-    ElMessageBox.confirm(t("是否确定开启自定义价格？"), t("需先开启自定义价格"), {
-      confirmButtonText: t("确定"),
-      cancelButtonText: t("取消"),
-      closeOnClickModal: true
-    }).then(() => {
-      usePriceStore().setActivated(true)
-    })
-    return
-  }
-  currentPriceRow.value = cloneDeep(row)
-  priceVisible.value = true
-}
-
-const onPriceStatusChange = usePriceStatus("enhanceexp-price-status")
 const { t } = useI18n()
 /**
  * 本页说明文案。

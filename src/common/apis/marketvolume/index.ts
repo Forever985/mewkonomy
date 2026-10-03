@@ -219,3 +219,14 @@ export function getMarketVolumeSummary(
   const topVolumeSum = sorted.slice(0, 10).reduce((s, i) => s + valueOf(i), 0)
   return { total: list.length, active, topVolume, topTurnover, topVolumeSum }
 }
+
+/**
+ * 市场条目的行 key（`hrid|level`）。
+ *
+ * 实现放在 `./keys`（**零依赖**），这里只是转出，方便从 barrel 引用。
+ * 之所以要拆开：本文件 `import` 了 `@/common/apis/game`，而 game 在顶层注册了
+ * `watch(..., { immediate: true })` 重建全量索引，无数据环境下会直接抛错——
+ * 只想拿一个字符串 key 的模块（store / 纯函数）不该被迫依赖整条数据层。
+ * 新代码若不需要本文件的数据访问函数，请直接从 `./keys` 引。
+ */
+export { marketRowKeyOf } from "./keys"

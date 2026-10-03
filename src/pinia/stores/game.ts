@@ -75,19 +75,34 @@ export const HOUSE_MAP: Record<Action, Partial<Record<NoncombatStatsKey, number>
 }
 
 export enum PriceStatus {
-  // 左价
+  // 左价（挂单最低价，买入即成交口径）
   ASK = "ASK",
-  // 右价
-  BID = "BID",
   // 比左价低一档
   ASK_LOW = "ASK_LOW",
+  // 比左价高一档
+  ASK_HIGH = "ASK_HIGH",
+  // 右价（收购最高价，卖出即成交口径）
+  BID = "BID",
+  // 比右价低一档
+  BID_LOW = "BID_LOW",
   // 比右价高一档
   BID_HIGH = "BID_HIGH"
 }
 
+/**
+ * 价格口径下拉的选项。
+ *
+ * 排列顺序：同一种报价内**按价格由低到高**（`-` → 原价 → `+`），两种报价各成一组。
+ * 这样下拉展开后「档位方向」一眼可见，不用逐个读后缀。
+ *
+ * 新增档位时同步处只有两处：这里的列表、以及 `common/apis/game/index.ts` 的
+ * `STATUS_STEP_SPEC`——后者是 `Record<PriceStatus, ...>`，漏改会被类型检查拦下。
+ */
 export const PRICE_STATUS_LIST = [
-  { value: PriceStatus.ASK, label: getTrans("左价") },
   { value: PriceStatus.ASK_LOW, label: `${getTrans("左价")}-` },
+  { value: PriceStatus.ASK, label: getTrans("左价") },
+  { value: PriceStatus.ASK_HIGH, label: `${getTrans("左价")}+` },
+  { value: PriceStatus.BID_LOW, label: `${getTrans("右价")}-` },
   { value: PriceStatus.BID, label: getTrans("右价") },
   { value: PriceStatus.BID_HIGH, label: `${getTrans("右价")}+` }
 ]
@@ -389,11 +404,15 @@ function getMarketData() {
 }
 
 function hasVolumeField(market: Market): boolean {
+  // 新版 updateMarketData 必定为每条报价写出 number 类型的 volume 字段，旧版缓存则整份都没有。
+  // 注意必须「遍历到找到为止」：原实现把 return 写在循环体内，实际只检查了第一个物品的第一个档位，
+  // 一旦该条目恰好缺 volume，就会把整份新缓存误判为过期并清除（每次进入页面都要重拉一次市场数据）。
   for (const hrid in market) {
     for (const level in market[hrid]) {
       const p = market[hrid][level] as MarketItemPrice
-      // 新版 updateMarketData 必定写出 number 类型的 volume 字段
-      return typeof p.volume === "number"
+      if (typeof p.volume === "number") {
+        return true
+      }
     }
   }
   return false

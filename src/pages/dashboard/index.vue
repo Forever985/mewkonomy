@@ -47,6 +47,7 @@ const ldSearchData = useMemory("dashboard-leaderboard-search-data", {
   excludes: [{ name: undefined, project: undefined }],
   banEquipment: true,
   banJewelry: false,
+  banCharm: true,
   banCombat: false,
   banLife: false,
   compare: false
@@ -138,6 +139,7 @@ const mainPanelFields: PanelField[] = [
   },
   { type: "checkbox", key: "banEquipment", label: "排除装备" },
   { type: "checkbox", key: "banJewelry", label: "排除首饰" },
+  { type: "checkbox", key: "banCharm", label: "排除护符" },
   { type: "checkbox", key: "banCombat", label: "排除战斗装备" },
   { type: "checkbox", key: "banLife", label: "排除生活装备" },
   { type: "checkbox", key: "compare", label: "比较模式" }

@@ -56,7 +56,6 @@ const price = structuredClone(toRaw(usePriceStoreOutside().$state))
 
 watch(() => usePriceStoreOutside().map, () => {
   price.map = Object.freeze(structuredClone(toRaw(usePriceStoreOutside().map)))
-  console.log("raw priceMap changed")
 }, { deep: true })
 
 watch(() => usePriceStoreOutside().activated, () => {

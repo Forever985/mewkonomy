@@ -33,7 +33,6 @@ function getPriceData() {
     size: paginationDataPrice.pageSize,
     ...priceSearchData.value
   }).then((data) => {
-    console.log("getPriceData", data)
     paginationDataPrice.total = data.total
     priceData.value = data.list
   }).catch(() => {

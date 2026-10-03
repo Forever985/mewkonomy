@@ -31,7 +31,7 @@ AIGC:
 | 时间/顺序 | 改动 | 说明 |
 | --- | --- | --- |
 | 早期 | 改名 MewKonomy | 全站标题、仓库名、brand 更新 |
-| 早期 | 税率改 5% | 市场税费参数由原值调为 5% |
+| 早期 | 税率改 5% | 市场税费参数由原值调为 5%（**已被 §十四 的 4% 取代**） |
 | 早期 | 移除英灵殿 / 埋骨地页面 | 历史纪念页下线（相关词条与路由已清理） |
 | 早期 | 等级 / 利润率 / 风险区间双头筛选 | 检索区支持 min~max 双端范围 |
 | 早期 | 组合条件并行检索 | 多物品 / 多条件同时检索（`conditions` 数组） |
@@ -43,6 +43,15 @@ AIGC:
 | 近期 | 工匠茶等效等级 +5 | 修正工匠茶 buff 符号（见功能2） |
 | 近期 | 强化分解放开负利润过滤 | 负利润方案也写入结果（见功能3） |
 | 近期 | 强化分解"不分解模式"+ 价格源切换 | 新子模式与成品计价价格源开关（见功能4） |
+| 2026-10-01 | 基础夯实：仓库卫生 + 8 处真实缺陷 + 文档一致性修订 | 详见 §十三 |
+| 2026-10-01 | 跟进游戏 2026/9/28 更新：市场税率 5%→4%；价格「档位」改为百分比增量（强化 ×5） | 详见 §十四 |
+| 2026-10-02 | 新增「市场提醒」：多条自定义规则（范围×指标×方向×绝对值/相对排行）+ 页面内高亮 + 浏览器通知 | 详见 §十五 |
+| 2026-10-02 | 新增市场监控「收藏」与「区间筛选」（成交量/涨跌幅等支持 ≥、≤、区间） | 详见 §十六 |
+| 2026-10-02 | 价格档位口径由 4 个补齐为 6 个（新增 `左价+` / `右价-`） | 详见 §十七 |
+| 2026-10-02 | 检索面板新增「排除护符」（三开关独立）；新增可开可关的「隐藏小成交量」 | 详见 §十八 |
+| 2026-10-03 | 抽取「检索结果页」骨架 `useLeaderboardPage`，8 个页面迁移，重复块 169 → 155 | 详见 §十九 |
+| 2026-10-03 | 详情弹窗新增「目标时薪反解」：给定目标时薪算出主要询价物品的临界价与档位对照 | 详见 §二十 |
+| 2026-10-03 | 新增独立页面「填表算利润」：用手填成交价算利润，与实时市价解耦 | 详见 §二十一 |
 
 ## 三、构建与部署系统（关键知识）
 
@@ -294,3 +303,397 @@ AIGC:
 - `Polokikiki/Milkonomy` fork：有 `v1.20260309.0`，但只有 **2,744,882 字节**（比完整版小 1.3MB，疑似裁剪版），**不能直接替代**。
 
 因此 `update-data.yml` 目前的状态是：**有护栏保护、不会破坏线上，但也抓不到新数据**。要真正恢复它的自动更新，需要先确认一个能提供完整版 data.json 的可靠源。
+
+## 十三、基础夯实与文档一致性修订（2026-10-01）
+
+本次以「源码 / 数据实测」为准做了一轮打基础改动：**修掉 8 处真实缺陷**，并修正本套文档里已过期的结论。
+详细清单与推理过程见 [docs/AI_CONTEXT.md](./docs/AI_CONTEXT.md) §8，此处只记结论。
+
+### 13.1 代码与配置修复
+
+| # | 位置 | 问题 | 处理 |
+| --- | --- | --- | --- |
+| 1 | 根目录 `assets/`（62 文件 / 约 2.5MB）与 `.vite/deps/` | 被 `deploy:` 提交 `6bacb36` **误跟踪进仓库**的构建产物与 Vite 依赖缓存（`index.html` 引用的是 `/src/main.ts`，正式产物是 `dist/`）。后果：`pnpm lint`（= `eslint . --fix`）会去改写压缩产物并报出 **21.6 万条**错误。 | 补 `.gitignore`（`/assets/`、`/.vite/`）并 `git rm -r --cached`（**文件仍保留在磁盘**，只退出索引） |
+| 2 | `eslint.config.js` 的 `ignores` | 原为空数组；且 flat config 的模式只写目录名不生效——**必须带 `/**`，且不能加前导斜杠** | 改为 `"data/**"`、`"public/data/**"` |
+| 3 | `src/pinia/stores/game.ts` `hasVolumeField()` | `return` 写在循环体内，只检查第一个条目；该条目缺 `volume` 时会把整份**新**缓存误判为过期并清除 | 改为遍历到找到为止 |
+| 4 | 6 处残留调试 `console.log` | 含 `console.log("buffs", buffs)`（每次 buff 重算都打印整个对象） | 全部移除（`catch` 里的 `console.error` 保留） |
+| 5 | `common/apis/utils.ts`、`pages/enhanceexp/index.vue` | 未使用导入：`getEquipmentTypeOf` / `Plus` / `SortPriority` | 移除 |
+| 6 | `pages/jungle/pickout.vue` | `usePriceStatus()` 的返回值未被使用 | **保留调用**（副作用必需），只去掉未使用的 `const` 绑定 |
+| 7 | `.env.staging` | 仍指向改名前的 `/milkonomy/`，staging 构建会整体 404 | 改为 `/mewkonomy/` |
+| 8 | `deploy.yml` / `release.yml` | 引用 fork 中并不存在的 `secrets.MILKONOMY`（触发即失败）；deploy 还缺 `permissions: contents: write` | 改用 `secrets.GITHUB_TOKEN` 并补权限 |
+
+### 13.2 文档已被就地修正的过期结论
+
+- **页面清单**：`public.ts` 实际只有 4 组路由（`/redirect`、`/403`、`/404`、`/link`）；dashboard / enhancer / enhanposer / sponsor 等业务页**全部**在 `private.ts`。`src/pages/` 18 个一级目录全部有路由引用。
+- **`burial` / `valhalla`**：目录**早已删除**（原文档记为「仍残留、待清理」）。
+- **迷宫（重要）**：`data.json` 已是 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。§八「功能D：卷轴排查结论」里「当前 data.json 无迷宫玩法」的判断**基于旧版本，已失效**。
+- **市场历史（§12 的补充）**：归档已从 v1 单文件 `market_history.json` 升级为 **v2 分片** `market_history_<UTC日>T<HH>.json`（UTC 6 小时一块、字典编码、滚动 7 天 / 168 点；前端按窗口**按需只拉 1~2 片**，取不到才回退 v1 文件）。§12.2 中「上限 520 点」「前端按 `<BASE_URL>data/market_history.json` 拉取」已不适用于 v2。
+- **`game.ts` 行数**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
+- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 30 文件 / 182 用例**，见 §二十一）。
+- **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
+
+### 13.3 有意不改的项
+
+`SearchPanel` 的 `vue/no-mutating-props`（既定写法，11 个检索页依赖）、`enhanceexp` 里未接线的价格弹窗 `setPrice`（属未完成功能，接线方式需产品决策）、约 300 条 `src/`+`tests/` 排版风格问题（**不做**整体 `eslint --fix`，避免模板空白变更影响渲染）。
+
+### 13.4 验证（本次改动后实测）
+
+```bash
+npx vue-tsc --noEmit   # 通过，无输出
+npx vitest run         # 24 个测试文件 / 100 个用例，全绿（§13 审计当时；当前 30 / 182，见 §二十一）
+npx eslint .           # 仅剩排版类问题（构建产物造成的 21.6 万条误报已消除）
+```
+
+## 十四、跟进游戏 2026/9/28 更新：税率 4% + 价格档位改为百分比增量（2026-10-01）
+
+游戏在 2026/9/28 的小型更新里调整了**市场税率**与**价格档位**，两项都直接影响本项目的计算口径。
+权威来源、实测数据与完整推理见 [docs/AI_CONTEXT.md](./docs/AI_CONTEXT.md) §9，此处只记结论与改动。
+
+### 14.1 权威来源（不要靠猜）
+
+- **游戏客户端常量**：`www.milkywayidle.com/static/js/main.<hash>.chunk.js` 里
+  `br = { TAX_RATE: .04, COWBELL_TAX_RATE: .18 }`，且
+  `getTaxRate(hrid) = hrid === BagOf10Cowbells ? COWBELL_TAX_RATE : TAX_RATE`。
+- **补丁说明内联在同一个 bundle 中**，原文：「The standard market tax has been lowered from 5% to 4%.」
+  「listing prices are now 0.33% to 0.44% apart at every price level, compared to 0.17% to 0.5% previously.」
+  「Enhanced items (+1 and above) … now use price increments 5x larger (1.67% to 2.22% apart)…」
+- **官方快照** `https://www.milkywayidle.com/game_data/marketplace.json` 用于实测复核。
+- 抓取技巧：`git` 到 github.com 会被 Windows 吊销检查挡住（`CRYPT_E_REVOCATION_OFFLINE`），
+  改用 **`curl --ssl-no-revoke`** 访问 HTTPS 一切正常。
+
+### 14.2 税率：5% → 4%（已修）
+
+- 标准税率 **4%**；`COWBELL_TAX_RATE = 18%` 仅作用于 `/items/bag_of_10_cowbells`，本项目不涉及。
+- 客户端结算**向下取整**：`quantity * Math.floor((1 - taxRate) * price)`；本项目沿用既有口径未做 floor。
+- ⚠️ 修复前本项目**内部不一致**：计算器按 5%（`0.95`），强化计算/强化页按 2%（`0.98` / `MARKET_TAX_PERCENT = 2`）。
+- 现统一到 **`src/common/constants/market.ts`** 的 `MARKET_TAX_RATE` / `MARKET_TAX_FACTOR`；
+  三语文案里的「2% / 98%」同步为「4% / 96%」。
+
+### 14.3 价格「档位」：原粗档位表错误（已修）
+
+- 游戏**没有全局固定档位**：每个 (物品, 强化等级) 有服务端下发的**交易区间** `[bandMin, bandMax]`，
+  输入价只被夹进区间（`deriveWorkingPrice`）；区间每 **60 分钟**校准、每次最多移动 **1%**
+  （`recalibrationIntervalMinutes: 60` / `bandMaxMovePerPassFactor: 1.01`）。
+- 相邻挂单价间距（一档）：标准 **0.33% ~ 0.44%**，强化 **×5（1.67% ~ 2.22%）**。
+- **实测**（754 对 0 级 / 756 对强化档）：标准 ≈ **0.366%**、强化 ≈ **1.852%**，比值 **5.06 ≈ 5×** ✓。
+- 原 `priceStepOf` 用「十进制归一化 + 1/2/5/10」粗表，隐含一档 **1%~5%**，比真实**大 3~10 倍**。
+  已改为百分比增量（`PRICE_STEP_RATIO = 0.00366`，强化 ×5），并处理低价物品「一档不足 1 金币」的取整。
+
+### 14.4 影响与验证
+
+- 界面「左价−」与「右价+」两个口径取值变化（属修正）；税率下调使利润数值整体上升约 1%。
+- `npx vue-tsc --noEmit` 通过；`npx vitest run` 24 文件 / 100 用例全绿。
+
+---
+
+## 十五、新增「市场提醒」（2026-10-02）
+
+### 15.1 需求与取舍
+需求：市场监控能主动提醒——某物品价格跌破/涨过某值、某产品的涨跌幅、成交量、以及**交易量过高的产品**。
+四点已与用户对齐：**页面内 + 浏览器通知都要**（开关/阈值放「设置」）、**仅市场监控页生效**（应用无后端）、
+**多条自定义规则且高度解耦**（独立开关/优先级/冷却）、**绝对值与相对排行都支持**。
+
+### 15.2 新增文件
+- `src/common/apis/marketvolume/alerts.ts` —— **纯函数**：`AlertRule`/`AlertHit` 类型、
+  `evaluateRule`/`evaluateAlerts`/`evaluateAlertsByRule`、`createPresetRules`/`createEmptyRule`、`metricValueOf`。
+  不碰副作用与 i18n，因此可独立单测。
+- `src/pinia/stores/alert.ts` —— 独立持久化（key `market-alert-config`，带 `version` + 归一化）。
+  **刻意不放进 `layoutsConfig`**，否则「重置布局配置」会清掉用户规则。
+- `tests/marketvolume-alerts.test.ts`（21 用例）、`tests/marketvolume-alerts-integration.test.ts`（6 用例）。
+
+### 15.3 规则模型
+范围（全部 / 分类 / 指定物品）× 指标（price/ask/bid/changePct/volumeRate/volumeRolling/volume/turnoverRolling）
+× 方向（`gte` / `lte`）× 判定（**绝对值** 或 **相对排行**：前 N 名 / 超均值 k 倍 / 超中位数 k 倍）
+＋ 独立 `enabled`、`priority`、`cooldownMinutes`、`onlyActive`。
+
+### 15.4 三个容易做错的点（已按正确语义实现）
+- **输入必须是 `changeApplied`**：提醒依赖的涨跌/速率/滚动量是页面上一步回填的，用 `all` 会全是 null。
+- **每行只留一条命中**（优先级优先、其次**显著度**），否则表格行会拿到互相矛盾的标记；
+  但「展开明细」走 `evaluateAlertsByRule` 保留全量，不丢信息。
+- **显著度不能一律按值降序**：`lte` 类规则（如「跌幅 ≥ 20%」）里最该被看到的是**最低**值。
+
+### 15.5 验证
+- `npx vue-tsc --noEmit` 通过；`npx vitest run` **26 文件 / 127 用例全绿**（新增 27 个）。
+- `vite build --mode public`（13.1s）与 `--mode private`（11.6s）均成功；dev server 下三个新/改模块均能被 Vite 正常编译。
+- 集成测试用真实 `getMarketVolumeList()` 输出驱动预置规则，验证「每行一条 + 优先级取胜 + `onlyActive` 挡住无价条目」。
+
+---
+
+## 十六、市场监控：收藏 与 区间筛选（2026-10-02）
+
+### 16.1 需求
+市场监控页要能**收藏**条目，并支持对数值列做**区间筛选**：
+交易量高于/低于/在两值之间、涨跌幅高于/低于/在两值之间。
+
+### 16.2 新增文件
+- `src/common/apis/marketvolume/filters.ts` —— **纯函数**：`NumericRange`/`RangeMode`、
+  `rangeValueOf`/`matchesRange`/`applyRangeFilters`/`countActiveRanges`/`createEmptyRanges`。
+- `src/common/components/RangeFilter/index.vue` —— 可复用控件（5 个指标复用同一套渲染）。
+- `src/pinia/stores/marketfavorite.ts` —— 收藏（key `market-favorite-items`），按 `hrid|level`。
+- `src/common/apis/marketvolume/keys.ts` —— **零依赖**的 `marketRowKeyOf`（全站行 key 的规范定义）。
+- `tests/marketvolume-filters.test.ts`（25 用例）。
+
+### 16.3 为什么收藏要新建一个 store
+项目已有两套「收藏」都不是市场条目：`favorite.ts`（key `manual-list`）收藏的是**生产配方**、
+`enhancer.favorite` 收藏的是**装备 hrid**。市场条目的粒度是 **(物品, 官方市场档位)**，
+且市场里有材料/消耗品（不只是装备），硬塞进任一个都会把语义搅混。
+
+### 16.4 区间语义（刻意定的三条）
+1. **端点一律包含**（`≥` / `≤` / `区间` 都含端点）——选项写成符号而非"高于/低于"以消除歧义，
+   并与提醒规则的 `gte`/`lte` 统一理解。
+2. **阈值留空 = 该条件不生效**，不是"匹配空集"（否则刚切模式、还没填数字时列表会整片变空）。
+3. **值缺失的条目在条件启用时不匹配**（`changePct` 无历史、`price === -1` 无价）；
+   `区间` 填反时自动对调；成交量/成交额取值与表格展示列一致（优先滚动量、回退累计量）。
+
+### 16.5 顺带修掉的一处架构耦合
+`marketRowKeyOf` 原本放在 `common/apis/marketvolume/index.ts`，而这个 barrel 会 `import`
+`@/common/apis/game`——game 在**顶层**注册了 `watch(..., { immediate: true })` 重建全量索引，
+在没有数据的时机（单测最容易）导入即抛 `Cannot read properties of null (reading 'actionDetailMap')`。
+已把它抽到零依赖的 `keys.ts`，store / 纯函数模块直接引该文件，**顺带让收藏 store 可独立单测**。
+
+### 16.6 一处需要更正的旧结论
+上一轮（§十五）在报告里写过「`vite build --mode public` 会剔除私有路由，`marketvolume` 只出现在
+private 产物里」——**这是错的**。实测在 public 产物里 grep 得到 `market-favorite-items`、
+`market-alert-config`、`区间筛选` 等字符串，说明**私有页代码照样打包**（`remove-private-code` 插件
+本就是被注释掉的，见 §十三/`BUILD_SYSTEM.md`），public 模式只是不注册路由。**这再次印证「非安全隔离」。**
+
+### 16.7 验证
+- `vue-tsc` 通过；`vitest` **27 文件 / 152 用例全绿**（新增 25 个）。
+- `vite build --mode public`（13.6s）与 `--mode private`（13.3s）均成功；dev server 下 5 个新/改模块均可编译。
+- **真实官方快照验证**（872 物品 / 3707 条目）：成交量最大 3,745,189、中位 39；
+  「成交量 ≥ 10000」→130 条、「≤ 100」→2679 条、「1000~100000」→141 条、「价格 ≥ 100000」→2263 条、
+  「成交额 ≥ 1e8」→141 条、两条件叠加 →8 条；阈值取最大值时仍命中 1 条（验证含端点）；阈值留空返回同一引用。
+- ⚠️ `public/data/market.json` **只有 `ask/bid/vendor`、没有 `price/volume`**，用它验成交量会得到全 0，
+  别据此判断筛选坏了。
+
+---
+
+## 十七、价格档位口径补齐为 6 个（2026-10-02）
+
+### 17.1 变更
+原为 4 个（`ASK` / `ASK_LOW` / `BID` / `BID_HIGH`），现补齐为
+**左/右 ×（`-` / 原价 / `+`）共 6 个**，新增 `ASK_HIGH`（标签 `左价+`）与 `BID_LOW`（标签 `右价-`）：
+
+| 枚举 | 标签 | 含义 |
+| --- | --- | --- |
+| `ASK_LOW` | 左价- | ask 压一档 |
+| `ASK` | 左价 | ask 原价（默认买价） |
+| `ASK_HIGH` | 左价+ | ask 抬一档 ← 新增 |
+| `BID_LOW` | 右价- | bid 压一档 ← 新增 |
+| `BID` | 右价 | bid 原价（默认卖价） |
+| `BID_HIGH` | 右价+ | bid 抬一档 |
+
+### 17.2 只改两处，其余自动生效
+1. `pinia/stores/game.ts`：枚举 + `PRICE_STATUS_LIST`（顺序＝同一报价内价格由低到高，`-` → 原价 → `+`）。
+2. `common/apis/game/index.ts`：`convertPriceOfStatus` 的 `switch` 换成
+   **`STATUS_STEP_SPEC: Record<PriceStatus, { base, dir }>`**。
+
+`STATUS_STEP_SPEC` 用 `Record` 而不是 `switch` 是刻意的：**漏掉枚举成员会被类型检查拦下**。
+写成 `switch` 且无 `default` 时，最容易出的错是「下拉能选、价格却没变化」这种静默失败。
+
+其余全部自动生效：所有价格下拉都是 `v-for="item in PRICE_STATUS_LIST"`
+（`enhancer` 买价×2、`enhancest` 买价/卖价，以及 9 个页面共用的
+`common/components/PriceStatusSelect/index.vue`）。`priceStepOf(price, high, enhanced)` 无需改动，
+强化物品的 ×5 增量自动适用；`_priceCache` 的 key 已含 `buyStatus|sellStatus`，新口径自带缓存桶。
+
+### 17.3 验证
+- `vue-tsc` 通过；`vitest` **28 文件 / 159 用例全绿**（新增 `price-status-tiers` 7 用例）。
+- 实测：0 级三个左价口径严格递增、抬/压幅度 = **0.366%**；`level 3` 幅度 = **1.83%**、与 0 级之比 **= 5**；
+  10 金物品一档不足 1 金时保底移动 1 金（→ 11 / 9）；无报价档位在 A 模式下任何口径都保持 **-1**。
+- `vite build` public/private 均成功；产物中可读到 6 个枚举、6 项列表与 6 条 `{base, dir}`。
+
+### 17.4 顺带发现（未处理）
+`PriceStatusSelect` 有两个**内容完全相同、仅行尾不同**的副本：
+`common/components/PriceStatusSelect/index.vue` 与 `pages/dashboard/components/PriceStatusSelect.vue`。
+**前者被 9 个页面引用，后者零引用（死文件）**，可安全删除。
+
+---
+
+## 十八、排除护符（三开关独立）与「隐藏小成交量」（2026-10-02）
+
+### 18.1 排除护符
+护符在数据里不是分类而是**部位**（`equipmentDetail.type === "/equipment_types/charm"`），
+实测 **102 件**，占 532 件装备的 19%——是最大的装备类别。它原被「排除装备」一并剔除，
+所以直接加一个「排除护符」会**永远没反应**（与当年「排除首饰」踩的坑同源）。
+
+因此三个开关改为**互相独立**，新增 `isCharm` / `banCharm`：
+
+| 勾选 | 去掉 | 保留 |
+| --- | --- | --- |
+| 排除装备 | 既非首饰也非护符的装备 | 首饰、护符 |
+| 排除首饰 | 项链/戒指/耳环 | 其余 |
+| 排除护符 | 护符 | 其余 |
+| 三个都勾 | 全部装备 | 只剩非装备 |
+
+⚠️ **`banEquipment` 不再吞并护符**（此前会）。为让**各页默认行为完全不变**，`banCharm` 的默认值
+一律取与该页 `banEquipment` 相同：`dashboard` / `manualchemy`（`banEquipment: true`）默认也排除护符，
+其余页面两者都是 `false`。**不主动改开关就不会看到列表变化。**
+
+改动点：`common/utils/game.ts`（判定）、`common/apis/utils.ts`（`handleSearch`）、
+`common/apis/favorite/index.ts`（收藏夹路径同一语义）、`leaderboard/type.d.ts`、
+`SearchPanel/types.ts`、11 个页面的默认值 + `panelFields`、`enhanceexp` 的生效条件摘要。
+顺带给 `manualchemy` 补上了它原先缺失的「排除首饰」。
+
+### 18.2 隐藏小成交量（可开可关的持久设置）
+新 store `pinia/stores/marketfilter.ts`（`{ hideLowVolume, minVolume }`，key `market-filter-config`）：
+默认**关闭**、阈值 `100`；设置面板新增「市场监控」分组，市场监控页头部有一个**同源**开关。
+
+- 取值口径与该页「成交量」列一致（`rangeValueOf(item, "volume")`：滚动量优先、回退当日累计量）。
+- 与页面上已有的**手动区间筛选**是两回事（长期设置 vs 本次会话临时条件），两者叠加。
+
+**实测效果**（官方快照，2944 条 = 物品×档位）：阈值 1 → 保留 623；10 → 415；50 → 311；
+**100（默认）→ 保留 265 / 隐藏 2679**；1000 → 180；10000 → 118。
+注意是按**行（物品×档位）**判定，多数强化档本身不成交，故同一装备的低档位也会被藏掉。
+
+### 18.3 验证
+- `vue-tsc` 通过；`vitest` **28 文件 / 164 用例全绿**。
+- `ban-filter-independence` 真实数据验证：样本 532 = 首饰 23 + 护符 102 + 普通装备 407；
+  leaderboard base 8760 条（首饰 161 / 护符 1015）→「仅排除装备」后首饰与护符**计数一个不变**，
+  「仅排除护符」正好少 1015 条；三者都勾 = `onlyEquip + onlyJewelry + onlyCharm - 2*base`。
+- `marketvolume-filters` 新增 5 用例覆盖过滤设置的默认值/持久化/坏数据归一化/reset。
+- `vite build` public/private 均成功。
+
+---
+
+## 十九、抽取「检索结果页」骨架 useLeaderboardPage（2026-10-03）
+
+### 19.1 先量再改
+写了一个「行级最长公共块」扫描器（最小 8 行、跨 ≥2 文件）：全仓 **169 处重复块**，
+最大单块 **40 行 × 8 个文件**。重复重心不是搜索面板（那个早已收敛成 `SearchPanel`），
+而是**页面骨架**：分页、检索条件缓存、防抖检索、条件变化回第一页、排序、自动重算 watch、
+详情弹窗、价格弹窗、买卖价状态。
+
+最直观的样本：`jungle/index.vue` 与 `junglest/index.vue` 共约 850 行，**只差 217 行**，
+差异几乎全是 API 路径、缓存 key、几个字段与注释 —— **三分之二完全相同**。
+
+### 19.2 交付
+新文件 `src/common/composables/useLeaderboardPage.ts`，把上述骨架全部收进一个 composable，
+页面通过**别名解构**取用（`searchData: ldSearchData`、`list: leaderboardData`、`loading: loadingLD` …），
+因此**模板一行都不用改**，改动只落在 `<script>`。
+
+已迁移 8 页：`junglest/index`、`enhanceexp`、`enhanposer/index`、`enhanposer/enhanposest`、
+`inherit`、`jungle/index`、`junglest/inherit`、`manualchemy`（共减少约 **453 行**）。
+
+暂未迁移 3 页（结构确实不同，不可照抄）：`dashboard`（一页两套检索）、
+`jungle/pickout`（接口多一个实参 + `usePriceStatus` 带第二参数）、
+`decompose`（不用买卖价状态，需 `withPriceStatus: false`）。
+
+### 19.3 顺手修掉的 bug
+`manualchemy` 的分页缓存 key 历史上**误用了 `dashboard-leaderboard-pagination`**（复制粘贴产物），
+会与 dashboard 共享分页状态。已改为自己的 key。
+
+### 19.4 ⚠️ 过程中踩的两个坑（都写进开发指南了）
+1. **「骨架区域」里混着各页特有逻辑**：实测 4 个页面在骨架之间夹着自己的业务逻辑
+   （`enhanceexp` 的排序优先级联动 + 整行高亮、`enhanposer`/`enhanposest` 的模式缓存 watch、
+   `junglerit` 的不逃逸回调）。按整段替换会**把它们一起删掉，而且 tsc 查不出来**
+   （未被引用的函数删了不报错）。补救办法：算「各页该区域行的交集」找出特有行，
+   替换后再对比**顶层声明集合**逐一确认。
+2. **大段替换会改写文件行尾**：编辑器的大块替换会把 CRLF 文件整份转成 LF，
+   `git diff` 立刻多出成百行噪声。改完必须 `git diff --stat` 与
+   `git diff --ignore-cr-at-eol --stat` 对比复核。
+
+另外还暴露了自己脚本的一个 bug：拼装替换块时**少了一个闭合花括号**，
+6 个页面直接语法错误 —— 说明这类批量改写**必须先 dry-run 打印计划**再落地。
+
+### 19.5 验证
+- `vue-tsc` 通过；`vitest` **28 文件 / 164 用例全绿**；`vite build` public/private 均成功。
+- 复扫重复块：**169 处 → 155 处**；已迁移页面参与重复的行数合计减少约 **3700 行**。
+- lint 非风格问题保持在基线 3 条（均为 `enhanceexp` 既有问题）。
+
+### 19.6 还剩什么
+1. **模板侧的 40 行表格列块仍重复 8 次**（`t('经验 / h')` 那一段）—— 现在最大的单块重复；
+2. 9 个页面重复的 `.row` 样式；
+3. `dashboard` / `pickout` / `decompose` 三页的骨架迁移。
+
+---
+
+## 二十、目标时薪反解（2026-10-03）
+
+### 20.1 需求
+「如果我想要实现时薪多少多少，则最多或最少以某个价格买入。」
+关键在于用户点出的**主要询价物品**：分解虚空茶叶→询价虚空茶叶，转化太阳石→询价太阳石。
+
+代码里这个语义已经有现成对应：`ingredientList[0].hrid === this.item.hrid`
+（`cost4Mat` 注释「从第 2 个原料开始计算」也印证 `[0]` 是本体），
+所以主要询价物品直接取 `ingredientListWithPrice[0]`。
+
+### 20.2 为什么是闭式解
+时薪对每个单价都是线性的（`profitPH = Σ系数×countPH×price − ΣcountPH×price`），
+单价涨 1 金币对时薪的影响是常数，于是：
+
+**临界单价 = 当前单价 + (目标时薪 − 当前时薪) / 系数**
+- 材料侧 系数 = `−countPH`（买贵了利润降）
+- 成品侧 系数 = `+countPH × 税后系数`（金币不课税，系数不含税率）
+
+`countPH` 由计算器直接给出，不需要重新推导任何公式。
+
+### 20.3 交付
+- `src/common/utils/price-solve.ts`（纯函数，零运行时依赖）：`solveCandidatesOf` /
+  `primaryCandidateOf` / `solvePriceForTarget`，输出还带 `priceGap` 与 `impossible`。
+- `src/pages/dashboard/components/ActionSolveCard.vue`：详情弹窗内的反解面板 ——
+  目标时薪输入、询价物品下拉（默认主要物品）、临界价大字结论，以及**档位对照**：
+  材料侧列 `左价-/左价/左价+`、成品侧列 `右价-/右价/右价+`，逐档标出是否达标。
+  这样就把临界价翻译成了「我能买到哪个档位」。
+- `ActionDetail.vue` 底部挂载（所有检索页共用该弹窗，一处接入全站可用）。
+
+### 20.4 验证
+- `vue-tsc` 通过；`vitest` **29 文件 / 173 用例全绿**；`vite build` 双模式成功；
+  dev server 下三个新/改模块均可被 Vite 正常编译。
+- 手算样例验算：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
+  目标 500 → 材料临界价 230、成品临界价 729.1667，代回利润均精确等于 500 ✓
+- 真实计算器上，系数模型对 `costPH` / `incomePH` 的相对误差 **< 1e-9**
+  （decompose 实测 2239964909.2155 对 2239964909.2155）—— 模型被验过，反解才可信。
+- 真实数据可读性：如「转化 Artisan Tea 现价 2800 → 要做到 1.69M/h 需买价 ≤ 1716（便宜 1084）」；
+  临界价 ≤ 0 的情形标为不可达（本身就是"该方案已到极限"的有用信息）。
+
+⚠️ 构造计算器后必须调 `run()`，`result`（含 `profitPH`）由它填充。
+
+---
+
+## 二十一、填表算利润（非实时，2026-10-03）
+
+### 21.1 需求
+「填入购买时的价格等，就能获得利润等。**非实时的**——因为实时的不准确，价格会变，
+我买的时候是这个价格，但是卖的时候是另外的价格。」
+
+→ 独立页面（路由 `/profitform`，菜单「填表算利润」，归在「利润检索」组），
+用自己填的成交价算利润，**实时市价只作为默认值**。
+
+### 21.2 设计地基：默认值必须精确复现计算器
+```
+总成本 ≡ calc.result.costPH      总收入 ≡ calc.result.incomePH
+总利润 ≡ calc.result.profitPH    总耗时 ≡ 1 小时      时薪 ≡ calc.result.profitPH
+```
+做法：`perActionCount = countPH / actionsPH`、`actions` 默认 = `actionsPH`、
+`timeCostPerAction` 默认 = `NS_PER_HOUR / actionsPH`（两者相乘恰好 1 小时）。
+这样"改哪格就是覆盖哪格"，且这条性质**可被单测直接断言**。
+
+### 21.3 交付
+| 文件 | 职责 |
+| --- | --- |
+| `common/utils/profit-form.ts` | 纯函数：生成默认值 + 算结果 |
+| `common/apis/profitform/index.ts` | 6 个动作的可选物品枚举（要读 actionDetailMap，故放 API 层） |
+| `pinia/stores/profitform.ts` | 手填值持久化（**只存覆盖值**，配方结构保持实时） |
+| `pages/profitform/index.vue` | 页面 |
+
+表单可改：**单价 / 单次数量 / 动作次数 / 单次耗时**（用户要求四项都可改）。
+
+### 21.4 ⚠️ 一个只有跑测试才能发现的坑
+强化计算器的 `available` 要求 `escapeLevel < originLevel < enhanceLevel` 且
+**`protectLevel ≤ enhanceLevel`**，而 `protectLevel` 在配置里是**必填**。
+不传 → `available = false` → 表现成「选择器列得出物品、却提示不支持该动作」。
+「动作枚举闭环」测试（选择器列出的物品必须被计算器判定可用）**一上来就抓到了它**，
+纯读代码是看不出来的。
+
+各动作的判定依据：强化 `enhancementCosts` / 分解 `decomposeItems` /
+转化 `transmuteDropTable` / 点金 `isCoinifiable` / 制造与采集看
+`actionDetailMap` 里的 `/actions/<专业>/<物品key>`（制造 5 种、采集 3 种专业，
+需由物品反推 action）。
+
+### 21.5 验证
+- `vue-tsc` 通过；`vitest` **30 文件 / 182 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
+- 默认值复现：decompose 成本 `2239964909.22` 对 `2239964909.22`、总耗时 **1.000000 小时**；transmute 同。
+- 枚举闭环：6 个动作样本全部 `available = true`；制造样本反推为 `tailoring`、采集为 `foraging`。
+  数量：强化 532 / 分解 742 / 转化 622 / 点金 889 / 制造 647 / 采集 26。
+- 手算样例：材料 2@100 + 成品 1@1000 → 成本 200、收入 960、利润 760、时薪 760、利润率 3.8；
+  材料改 230 → 利润恰为 500（与「目标时薪反解」的临界价 230 互为佐证）。

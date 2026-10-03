@@ -22,8 +22,11 @@ AIGC:
 ### 1.1 顶层结构与定位
 
 - 纯前端 Vue3 应用：**Vue3 + Vite6 + TypeScript + Pinia + Vue Router(hash) + Element Plus + UnoCSS + vue-i18n**，包管理 pnpm。
-- 数据源：`public/data` 下的官方 JSON（game.json / market.json 等），无后端；所有"API"均为**本地只读数据访问层**，通过 `fetch` 拉 JSON 后注入 Pinia。
-- 构建多模式：`.env.public`（公开版，构建时剔除私有路由）与 `.env.private`（私有版/自用版），`VITE_BUILD_MODE` 控制。
+- 数据源：**运行时由 `game store` 的 `fetchData()` 拉取远端** `data.json`（游戏静态数据，约 4MB）与官方 `marketplace.json`（市场快照），并写入 `localStorage` 缓存；`public/data/` 下的同名文件只作为离线/兜底与构建产物的来源。无后端，「API」均为**只读数据访问层**，把拉到的 JSON 注入 Pinia 后再以 `structuredClone + Object.freeze` 快照对外暴露。
+- 构建多模式：`.env.public`（公开版）与 `.env.private`（私有版/自用版），由 `VITE_BUILD_MODE` 控制。
+  ⚠️ **但它只影响 title、`VITE_PUBLIC_PATH` 与是否移除 `console`/`debugger`**——原本负责「构建时剔除私有路由」的
+  `remove-private-code` 插件**在 `vite.config.ts` 中已被整段注释**，路由与页面始终全部打包，
+  私有页仅靠侧边栏权限 + freeze 守卫控制可见性（**非安全隔离**，勿把敏感逻辑放前端）。
 - 关键目录速查：
 
 | 路径 | 职责 |
@@ -299,12 +302,21 @@ export async function getXxxDataApi(params) {
 
 | Store | 文件 | 职责 / 关键字段 |
 |---|---|---|
-| **game** | game.ts（约 1.2 万行） | 核心：`gameData / marketData` 拉取、`COIN_HRID / PriceStatus / ACTION_LIST / EQUIPMENT_LIST / COMMUNITY_BUFF_LIST / HOUSE_MAP`、**全部时间戳分桶缓存与 clearAllCaches**、`checkSecret()` |
+| **game** | game.ts（443 行） | 核心：`gameData / marketData` 拉取、`COIN_HRID / PriceStatus / ACTION_LIST / EQUIPMENT_LIST / COMMUNITY_BUFF_LIST / HOUSE_MAP`、**全部时间戳分桶缓存与 clearAllCaches**、`checkSecret()` |
 | **price** | price.ts | `map: Map<priceKey, StoragePriceItem>`、`activated`；`commit/setPrice/deletePrice/setActivated`；localStorage `price-list` / `price-activated`；`priceKeyOf(hrid, level)` |
 | **player** | player.ts | `config: ActionConfig`、`presets`（≤5 预设）、`presetIndex`；`setActionConfig/switchTo/removePreset/setPresetIndex`；`defaultActionConfig`；类型 `ActionConfig/ActionConfigItem/PlayerEquipmentItem/CommunityBuffItem` |
 | **favorite** | favorite.ts | `list: StorageCalculatorItem[]`；`addFavorite/deleteFavorite/hasFavorite/findFavorite`（id+catalystRank 判重）；localStorage `manual-list`；**StorageCalculatorItem 类型源头** |
 | **enhancer** | enhancer.ts | 强化专用 store（强化页配置/缓存联动） |
+| **alert** | alert.ts | 市场提醒：`inPageEnabled / notifyEnabled / cooldownMinutes / thresholds / rules`；版本化配置 + 归一化；localStorage `market-alert-config` |
+| **marketfavorite** | marketfavorite.ts | 市场监控收藏，粒度 **(物品, 档位)**；行 key 由 `marketvolume/keys.ts` 的 `marketRowKeyOf` 生成；localStorage `market-favorite-items` |
+| **marketfilter** | marketfilter.ts | 市场监控的**显示过滤设置**：`hideLowVolume / minVolume`（默认关闭、阈值 100）。设置面板与市场监控页读写**同一份状态**，故必须用 store 而非 `useMemory` |
+| **profitform** | profitform.ts | 「填表算利润」的手填值持久化，按方案 key（`profitFormPlanKeyOf`）存。**只存覆盖值**（手改过的单价/数量/次数/耗时），不存整张表——因为工匠茶/触媒会让配方变化，存整表会显示过期配方并静默算错 |
 | app / settings / permission / tags-view | 布局类 | 侧边栏/标签页/权限/设置，通用后台骨架，二次开发一般不改 |
+
+> **判断某个开关该不该用 store**：若**两个及以上位置**要同时读写它（如"设置面板 + 业务页"），
+> 就必须用 store —— `useMemory` 每处调用各持一个独立 ref，改一处另一处不会同步（要等刷新）。
+> 也不要把业务过滤条件塞进 `layoutsConfig`，否则「重置布局配置」会顺手把它一起重置。
+> 新增 store 时照 `marketfilter.ts` 抄：版本化 key + 字段归一化 + `useXxxStoreOutside`。
 
 ---
 
@@ -327,12 +339,31 @@ export async function getXxxDataApi(params) {
 
 `useDevice`（响应式设备）、`useFetchSelect`（下拉远程数据）、`useFullscreenLoading`、`useGreyAndColorWeakness`（灰度/色弱）、`useLayoutMode`、`useMemory`、`usePagination`、`usePriceStatus`（价格状态联动）、`useRouteListener`、`useTheme`、`useTitle`、`useWatermark`。布局侧另有 `src/layouts/composables/useResize`。
 
+**`useLeaderboardPage`（`common/composables/useLeaderboardPage.ts`）—— 最值得复用的一个**
+
+「分页检索结果页」的完整骨架：分页（`usePagination`）+ 检索条件缓存（`useMemory` + `normalizeSearchData`）
++ 防抖检索 + 条件变化回第一页 + 排序 + 自动重算 watch + 详情弹窗 + 价格弹窗 + 买卖价状态。
+
+```ts
+const { searchData: ldSearchData, list: leaderboardData, loading: loadingLD, paginationData: paginationDataLD,
+        handleSearch: handleSearchLD, handleSortChange: handleSortLD, ... }
+  = useLeaderboardPage({ key: "jungle", api: getDataApi, searchData: { /* 默认值 */ } })
+```
+
+- **别名解构是刻意设计**：沿用各页模板既有的变量名，于是**模板一行都不用改**，改动只落在 `<script>`。
+- `key` 派生三个 localStorage key（`-leaderboard-search-data` / `-leaderboard-pagination` / `-price-status`）；
+  **与历史 key 不一致时必须用 `memoryKey`/`paginationKey`/`priceStatusKey` 覆盖**，否则用户的条件与分页会"看起来丢了"。
+- 需要额外实参的接口在页面里包一层：`api: params => getDataApi(params, "pickout")`。
+- 已迁移 8 个页面；`dashboard`（一页两套检索）、`jungle/pickout`、`decompose` 因结构不同暂未迁移。
+
 ### 5.3 工具函数（src/common/utils）
 
 | 文件 | 内容 |
 |---|---|
 | `format.ts` | 数字/金额/百分比/格式化（`@@/utils/format` 全项目复用，含 `percent` 等） |
-| `game.ts` | 游戏数据派生工具：`getEquipmentClassOf / getEquipmentTypeOf / getKeyOf / isRefined` 等（装备分类用于 ban 筛选） |
+| `game.ts` | 游戏数据派生工具：`getEquipmentClassOf / getEquipmentTypeOf / getKeyOf / isRefined / isJewelry / isCharm` 等（装备分类与"排除X"筛选都靠它） |
+| `price-solve.ts` | **目标时薪反解**（纯函数，零运行时依赖）：`solveCandidatesOf / primaryCandidateOf / solvePriceForTarget`。利润对单价线性 ⇒ 临界价是闭式解，不用迭代 |
+| `profit-form.ts` | **填表计算利润**（纯函数）：`createFormState(calc)` 生成与计算器完全一致的默认值、`computeProfitForm(state)` 用任意手填价格算结果 |
 | `css.ts` / `datetime.ts` / `validate.ts` | 样式/时间/校验 |
 | `cache/local-storage.ts` | localStorage 封装（键值 + JSON + 失效） |
 | `cache/cookies.ts` | cookie 封装 |
@@ -365,7 +396,9 @@ routes.push(...privateRoutes)
 // PRIVATE_ROUTES_END
 ```
 
-> 该注释标记是构建期剔除私有路由的锚点（`.env.public` 模式 `esbuild` 清理 console，另有 remove-private-code 插件方案），**新增路由时不得改动标记行**。
+> 这两行注释原本是「构建期剔除私有路由」的锚点，但对应的 `remove-private-code` 插件在 `vite.config.ts` 里
+> **已被整段注释**，当前构建**不会**剔除任何路由。保留标记行是为了将来恢复该能力，
+> **新增路由时仍不得改动标记行**，新页面一律加在两者之间。
 
 - **private.ts 路由项模板**（新增页面照抄）：
 
@@ -437,10 +470,14 @@ export async function getXxxDataApi(params: any) {
 | 玩家 buff | `src/common/apis/player` | watch 快照 + `getBuffOf` 全量聚合 |
 | 手动价 | `src/common/apis/price` + price store | `getUsedPriceOf` / 写后清缓存 |
 | 聚合查询 | leaderboard / manualchemy / chainbuilder / charmtransform / enhanposer / jungle / marketvolume / favorite | 接口见 3.5 表 |
+| **检索页骨架** | `common/composables/useLeaderboardPage.ts` | **一个页面一次调用替代约 100 行手写骨架**；别名解构 ⇒ 模板零改动；已覆盖 8 个页面 |
+| **纯计算工具** | `common/utils/price-solve.ts` · `profit-form.ts` | 目标时薪反解 / 填表算利润。二者都建立在「利润对单价线性」上，**零运行时依赖、可脱离游戏数据单测** |
+| **市场监控过滤** | `common/apis/marketvolume/{keys,filters,alerts}.ts` + `constants/market.ts` | `keys.ts` 是行 key 的**零依赖**规范来源（别从 barrel 引，会被数据层拖住）；`filters.ts` 是区间筛选；`constants/market.ts` 是税率唯一来源（`MARKET_TAX_FACTOR`，**不要再写死 0.95/0.98**） |
+| **动作枚举** | `common/apis/profitform/index.ts` | `PROFIT_FORM_ACTIONS`：6 个动作的可选物品判定 + 必填参数（强化需要 `protectLevel`，漏了会 `available=false`） |
 | store 缓存 | `src/pinia/stores/game.ts` | timestamp 分桶 + `clearAllCaches` + `useXxxStoreOutside` |
 | 全局直连 | `src/pinia/index.ts` + 各 store 底部 | 无组件上下文取 store |
-| 通用组件 | `src/common/components/*` | ItemIcon / SearchMenu / PriceStatusSelect 等 |
-| 组合式函数 | `src/common/composables/*` | usePagination / useTheme / useDevice 等 |
+| 通用组件 | `src/common/components/*` | ItemIcon / SearchMenu / PriceStatusSelect / **SearchPanel（多变搜索面板）** / **PagerFooter** / **RangeFilter** 等 |
+| 组合式函数 | `src/common/composables/*` | **useLeaderboardPage** / usePagination / useMemory / usePriceStatus / useTheme / useDevice 等 |
 | 工具函数 | `src/common/utils/*` | format / game / cache 封装 |
 | 多语言 | `src/locales` | `getTrans(key)` 高性能取词 |
 | 路由 | `src/router` | hash 模式 / public+private 注释拼接 / `t()` 标题 / meta |
@@ -454,4 +491,13 @@ export async function getXxxDataApi(params: any) {
 3. **缓存纪律**：任何会影响价格/玩家配置/游戏数据的写入动作，末尾必须 `useGameStoreOutside().clearAllCaches()`（必要时加 `clearEnhancelateCache()`）。
 4. **可序列化**：凡需收藏/工作流/缓存的方案，统一转 `StorageCalculatorItem`（含 `className`），重建走 `getCalculatorInstance`。
 5. **只读数据防污染**：对外暴露的 game/market/player 数据一律 `structuredClone + freeze` 快照，计算器只读不写。
+6. **动手前先找轮子**（2026-10-03 新增）：写新页面前先确认它是否已有骨架可复用 ——
+   检索结果页用 `useLeaderboardPage`、筛选面板用 `SearchPanel`、分页用 `PagerFooter`、
+   区间筛选用 `RangeFilter`、价格口径用 `PriceStatusSelect`、反解/试算用 `price-solve` / `profit-form`。
+   实测「检索结果页」的骨架曾被 10~11 个页面逐字手抄（169 处跨文件重复块、最大单块 40 行 × 8 文件）。
+7. **量化重复再重构**：`python scripts/dup-scan.py` 可扫描跨文件重复块（行级最长公共块），
+   输出「重复行数最多的文件」与「出现在最多文件里的重复块」两个榜单。**先量再改**，不要凭印象挑目标。
+8. **抽公共逻辑时先找"各页特有逻辑"**：待替换区域里常夹着某页私有逻辑，
+   按整段替换会连它一起删，而且**类型检查查不出来**（未被引用的函数被删不报错）。
+   做法：把该区域**逐行求跨页交集**，只出现在 1~2 个页面里的行就是要保留的；替换后再对比**顶层声明集合**逐一确认。
 *（内容由AI生成，仅供参考）*
