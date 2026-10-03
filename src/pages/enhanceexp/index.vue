@@ -3,7 +3,7 @@ import ItemIcon from "@@/components/ItemIcon/index.vue"
 import PagerFooter from "@@/components/PagerFooter/index.vue"
 import SearchPanel from "@@/components/SearchPanel/index.vue"
 import type { PanelField } from "@@/components/SearchPanel/types"
-import { Plus, QuestionFilled, Search } from "@element-plus/icons-vue"
+import { MagicStick, Plus, QuestionFilled, Search } from "@element-plus/icons-vue"
 import { getEnhanceExpDataApi } from "@/common/apis/enhanceexp"
 
 import { getActionConfigOf } from "@/common/apis/player"
@@ -41,6 +41,7 @@ const {
   priceVisible,
   currentPriceRow,
   setPrice,
+  gotoEnhancer,
   onPriceStatusChange
 } = useLeaderboardPage({
   key: "enhanceexp",
@@ -299,6 +300,14 @@ const activeFilters = computed(() => {
                   <el-link type="primary" :icon="Search" @click="showDetail(row)">
                     {{ t('查看') }}
                   </el-link>
+                  <el-tooltip placement="top" effect="light" :show-after="120">
+                    <template #content>
+                      <div class="max-w-320px leading-5">{{ t('去强化说明') }}</div>
+                    </template>
+                    <el-link type="warning" :icon="MagicStick" @click="gotoEnhancer()">
+                  {{ t('去强化') }}
+                  </el-link>
+                  </el-tooltip>
                 </template>
               </el-table-column>
             </el-table>

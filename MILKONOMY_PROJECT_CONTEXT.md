@@ -858,3 +858,58 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 `vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**（上轮 299，+37）；
 `vite build` 双模式成功；新增 `tests/range-modes.test.ts`（21）与
 `tests/search-range-modes.test.ts`（16）。
+
+## 二十六、「到强化计算页查看」入口（2026-10-03）
+
+起因：用户提到「『到强化工具中查看』这个功能你也并没有复制过去」。
+实测**全仓搜索「强化工具」零命中** —— 它在当前代码里**不存在**，是新建而非补齐。
+
+### 26.1 交互形态（用户确认）
+
+- **位置**：每一行（每个项目）的最后，与「查看」并排
+- **行为**：纯路由跳转，**不带任何参数**
+- **覆盖**：11 个含强化功能的利润页（强化工具页本身除外）
+
+### 26.2 为什么**不传装备 hrid**
+
+用户原话：「跳转之后就是强化页的了，强化页的配置在利润网本身自己是提前设置好的。
+这点你求证一下，并非带过去，而是本身就是有的，是玩家每个预设写好的。」
+
+**求证结果：用户完全正确。** `pinia/stores/enhancer.ts:91`：
+
+```ts
+return JSON.parse(localStorage.getItem(`${KEY_PREFIX}config`) || "{}")
+```
+
+整套配置（`hrid` / `originLevel` / `enhanceLevel` / `escapeLevel` / `hourlyRate` / `taxRate`，
+见 `EnhancerConfig` 定义 `:73-81`）**本来就持久化在 localStorage**，
+是玩家自己调好的预设。传参过去反而会覆盖它。
+
+这与 `usePriceStatus` 是同一类思路：**用 store 隐式带状态，而不是往地址栏塞参数**
+（地址栏会暴露在分享链接与浏览器历史里）。
+
+### 26.3 实现
+
+`useLeaderboardPage` 新增 `gotoEnhancer`（8 个用 composable 的页面直接拿到）：
+
+```ts
+function gotoEnhancer() {
+  router.push({ name: "Enhancer" })
+}
+```
+
+另 3 个手写骨架的页面（`dashboard` / `decompose` / `jungle-pickout`）各自实现一份
+—— 它们没用这个 composable（`dashboard` 一页有两套检索、`pickout` 接口多一个实参、
+`decompose` 不用买卖价状态），本来就不该硬塞进来。
+
+**覆盖的 12 处入口**（dashboard 有两个表格）：
+`dashboard`×2、`decompose`、`jungle`、`jungle/pickout`、`junglest`、`junglest/inherit`、
+`enhanposer`、`enhanposer/enhanposest`、`enhanceexp`、`inherit`、`manualchemy`。
+
+图标用 `MagicStick`（强化页路由 `meta.elIcon` 用的就是它，chainbuilder 也在用）。
+链接带 tooltip 说明「只跳转、不会覆盖你的预设」。
+
+### 26.4 验证
+
+`vue-tsc` 通过；`vitest` **37 文件 / 336 用例全绿**；`vite build` 成功，
+产物中可 grep 到 `去强化` / `To enhancer` / `Enhancer` / `去强化说明`。

@@ -3,7 +3,7 @@ import ItemIcon from "@@/components/ItemIcon/index.vue"
 import PagerFooter from "@@/components/PagerFooter/index.vue"
 import SearchPanel from "@@/components/SearchPanel/index.vue"
 import type { PanelField } from "@@/components/SearchPanel/types"
-import { Edit, Search } from "@element-plus/icons-vue"
+import { Edit, MagicStick, Search } from "@element-plus/icons-vue"
 import { getEnhanposestDataApi } from "@/common/apis/enhanposer/enhanposest"
 
 import * as Format from "@/common/utils/format"
@@ -36,6 +36,7 @@ const {
   priceVisible,
   currentPriceRow,
   setPrice,
+  gotoEnhancer,
   onPriceStatusChange
 } = useLeaderboardPage({
   key: "enhanposest",
@@ -337,6 +338,14 @@ const { t } = useI18n()
                   <el-link type="primary" :icon="Search" @click="showDetail(row)">
                     {{ t('查看') }}
                   </el-link>
+                  <el-tooltip placement="top" effect="light" :show-after="120">
+                    <template #content>
+                      <div class="max-w-320px leading-5">{{ t('去强化说明') }}</div>
+                    </template>
+                    <el-link type="warning" :icon="MagicStick" @click="gotoEnhancer()">
+                  {{ t('去强化') }}
+                  </el-link>
+                  </el-tooltip>
                 </template>
               </el-table-column>
             </el-table>

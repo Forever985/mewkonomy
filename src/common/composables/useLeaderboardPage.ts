@@ -8,6 +8,7 @@ import { normalizeSearchData } from "./useSearchPanel"
 import { usePriceStoreOutside } from "@/pinia/stores/price"
 import { useGameStoreOutside } from "@/pinia/stores/game"
 import { usePlayerStoreOutside } from "@/pinia/stores/player"
+import { useRouter } from "vue-router"
 import { cloneDeep, debounce } from "lodash-es"
 import { ElMessageBox } from "element-plus"
 
@@ -104,6 +105,7 @@ export function useLeaderboardPage<T extends PanelSearchData>(options: UseLeader
   } = options
 
   const { t } = useI18n()
+  const router = useRouter()
 
   // ── 分页 ──────────────────────────────────────────────────────────────
   const { paginationData, handleCurrentChange, handleSizeChange } = usePagination({}, paginationKey)
@@ -192,6 +194,24 @@ export function useLeaderboardPage<T extends PanelSearchData>(options: UseLeader
     priceVisible.value = true
   }
 
+  // ── 跳到强化计算页 ─────────────────────────────────────────────────
+  /**
+   * 「到强化计算页查看」：每行最后一个入口。
+   *
+   * ## 为什么**不传任何参数**
+   *
+   * 强化页的整套配置（装备 hrid / 起始等级 / 目标等级 / 逃逸等级 / 时薪 / 税率）
+   * 本来就持久化在 `pinia/stores/enhancer.ts` 的 `config` 里（`saveConfig` 写
+   * localStorage），**是玩家自己每个预设调好的**。所以这里只做路由跳转 ——
+   * 传参过去反而会覆盖掉人家精心设好的预设。
+   *
+   * 这与 `usePriceStatus` 是同一类思路：**用 store 隐式带状态，而不是往地址栏塞参数**
+   * （地址栏会暴露在分享链接与浏览器历史里）。
+   */
+  function gotoEnhancer() {
+    router.push({ name: "Enhancer" })
+  }
+
   // ── 买卖价状态（按页记忆，离开页面还原全局默认）──────────────────────
   const onPriceStatusChange = withPriceStatus ? usePriceStatus(priceStatusKey) : undefined
 
@@ -212,6 +232,7 @@ export function useLeaderboardPage<T extends PanelSearchData>(options: UseLeader
     priceVisible,
     currentPriceRow,
     setPrice,
+    gotoEnhancer,
     onPriceStatusChange
   }
 }

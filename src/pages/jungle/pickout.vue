@@ -6,7 +6,7 @@ import SearchPanel from "@@/components/SearchPanel/index.vue"
 import type { PanelField } from "@@/components/SearchPanel/types"
 import { usePagination } from "@@/composables/usePagination"
 import { normalizeSearchData } from "@@/composables/useSearchPanel"
-import { Edit, Search } from "@element-plus/icons-vue"
+import { Edit, MagicStick, Search } from "@element-plus/icons-vue"
 import { ElMessageBox, type Sort } from "element-plus"
 import { cloneDeep, debounce } from "lodash-es"
 
@@ -22,6 +22,7 @@ import ActionDetail from "../dashboard/components/ActionDetail.vue"
 import ActionPrice from "../dashboard/components/ActionPrice.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 import ManualPriceCard from "../dashboard/components/ManualPriceCard.vue"
+import { useRouter } from "vue-router"
 
 // #region 查
 const { paginationData: paginationDataLD, handleCurrentChange: handleCurrentChangeLD, handleSizeChange: handleSizeChangeLD } = usePagination({}, "pickout-leaderboard-pagination")
@@ -183,6 +184,7 @@ function setPrice(row: Calculator) {
 }
 
 const { t } = useI18n()
+const router = useRouter()
 
 // 本页不提供价格口径切换（模板中的 PriceStatusSelect 已注释），但 usePriceStatus 的副作用是必需的：
 // onBeforeMount 会把全局 buy/sellStatus 固定为本页口径，onBeforeRouteLeave 负责离开时复位。
@@ -190,6 +192,17 @@ const { t } = useI18n()
 usePriceStatus("pickout-price-status", {
   sellStatus: PriceStatus.ASK
 })
+/**
+ * 跳到强化计算页。
+ *
+ * **不传任何参数**：强化页的配置（装备 / 起始与目标等级 / 逃逸等级 / 时薪 / 税率）
+ * 本来就持久化在 `pinia/stores/enhancer.ts` 里，是玩家自己调好的预设，
+ * 传参过去反而会覆盖它。
+ */
+function gotoEnhancer() {
+  router.push({ name: "Enhancer" })
+}
+
 </script>
 
 <template>
@@ -339,6 +352,14 @@ usePriceStatus("pickout-price-status", {
                   <el-link type="primary" :icon="Search" @click="showDetail(row)">
                     {{ t('查看') }}
                   </el-link>
+                  <el-tooltip placement="top" effect="light" :show-after="120">
+                    <template #content>
+                      <div class="max-w-320px leading-5">{{ t('去强化说明') }}</div>
+                    </template>
+                    <el-link type="warning" :icon="MagicStick" @click="gotoEnhancer()">
+                  {{ t('去强化') }}
+                  </el-link>
+                  </el-tooltip>
                 </template>
               </el-table-column>
             </el-table>
