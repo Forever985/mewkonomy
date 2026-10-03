@@ -137,6 +137,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
     `git config --global --add credential.helper ""`（空值 = 清空从 system 继承来的列表），再
     `git config --global --add credential.helper store`。
     - 提交照常在本地做；推送可交给仓库根目录的 **`一键推送.bat`**（双击即可；flush DNS → **预检待推提交是否触及 `.github/workflows/`** → `git push`，并按日志分类给出 workflow / 网络 / 凭据三种结论）。
+    - **本次的实际收尾**：为立刻解除阻塞，把 `.github/workflows/deploy.yml` / `release.yml` 的改动（改用 `secrets.GITHUB_TOKEN`、补 `permissions: contents: write`）**移出了 main**，其余 4 个提交已成功推送（`a1a908a..cd6c552`）。该改动保留在本地分支 **`pending-workflow-sync`**（另有补丁 `workflow-sync.patch`）；等 token 补上 `workflow` 权限后执行 `git push origin pending-workflow-sync:main` 即可落地。
     - 附带发现：仓库里有一个**损坏的 git 对象** —— `assets/vue-8ikB7t_e.js` 的 blob（`git fsck` 报 `missing blob`，`git fetch` 收尾的 `geometric-repack` 会因此报错）。它是历史误提交的构建产物，已被删除出当前树；**旧提交仍引用它**，如需彻底修复得从远端重新取回该对象。
 
 ## 7. 常规工作流（AI 接手后）
