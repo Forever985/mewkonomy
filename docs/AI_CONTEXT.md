@@ -1065,3 +1065,47 @@ const risk = cost4EnhancePH / profitPH
   **查联动时不能只 grep `router.push`**，会漏掉 store 驱动的隐式联动。
 - **收藏粒度错配**：收藏是 `hrid|level`（同物品 +0 与 +3 是两条），
   而提醒规则的「指定物品」只比 `hrid` ⇒ 「只盯我收藏的」这个最自然的需求做不出来。
+
+## 22. `types/auto/*.d.ts`：不是噪声，别手动还原（2026-10-03）
+
+### 22.1 现象
+每次跑完构建，`git status` 里偶尔冒出 `types/auto/components.d.ts` 被修改。
+因为它是**自动生成**的，直觉反应是「噪声，还原掉」——
+本轮已经这样处理过多次，每次都要额外查一遍才敢提交。
+
+### 22.2 实测结论（四组对照，全部跑过）
+
+| 问题 | 实验 | 结果 |
+| --- | --- | --- |
+| **能不能 gitignore？** | 把两个 `.d.ts` 移走后跑 `vue-tsc` | **613 个错误**（`Cannot find name 'ref'` / `'defineStore'` / `'watchEffect'` …）⇒ **必须留** |
+| **跑构建会改它吗？** | 逐个跑 `vite build --mode public` / `--mode private` / `vue-tsc` / `vitest` | **四次全是 0 改动** |
+| **那什么时候会变？** | 查 git 历史 | `ff46334` **−1 行**（我删掉 `FieldLabel.vue` 那次）、`231ceee` `6176360` 各 **+1 行**（新增组件） |
+| **会不会造成行尾 churn？** | `git ls-files --eol` + 逐提交对比 | 加了 `.gitattributes`（`eol=lf`）后是 `i/lf w/lf`，历史提交**零 churn** |
+
+### 22.3 结论与正确做法
+
+**它不是构建噪声，而是 `unplugin-vue-components` 维护的类型声明，与组件的增删同步。**
+
+- 增删组件 ⇒ 该文件的声明**应该**跟着变 ⇒ 应当**一起提交**
+- 手动 `git checkout --` 还原它 ⇒ **等于丢掉正确的声明同步**
+
+之前我反复还原，是在用「消除工作区脏」的手段制造「类型声明与实际组件不一致」的隐患。
+
+**唯一需要做的纪律**：提交前如果看到它变了，
+先确认**这轮是否真的增删了组件**：
+
+```bash
+git diff -- types/auto/components.d.ts      # 看变的行数与组件名
+# 与本轮改动对得上 → 一起提交
+# 对不上（比如只改了一行声明但没动组件）→ 才需要复查
+```
+
+### 22.4 顺带说明：这两个文件为何缺了会崩
+
+`tsconfig.json` 的 `include` 是 `["**/*.ts", "**/*.tsx", "**/*.vue", "**/*.d.ts", ...]`，
+即**所有 `.d.ts` 都在类型检查范围内**。而 `types/auto/auto-imports.d.ts`
+正是 `ref` / `computed` / `defineStore` / `watchEffect` 等**自动导入符号的声明来源**，
+由 `vite.config.ts:187` 的 `AutoImport({ dts: "types/auto/auto-imports.d.ts" })` 生成。
+
+⇒ 缺了它，TS 不知道那些全局符号存在 ⇒ 全仓 613 处报错。
+**生成器配了 `dts` 路径，就意味着产物必须提交**（同 `vite-env.d.ts` 的道理）。

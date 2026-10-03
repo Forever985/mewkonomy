@@ -665,6 +665,36 @@ run("git", ["config", "core.safecrlf", "false"], { cwd: work })
 但**只有 48 个内容真会变**（39 CRLF + 9 mixed），其余 296 个只是被列出。
 用户选「最小变更」⇒ 那 48 个继续以 CRLF/mixed 存索引，**若要归一单独提一个 commit**。
 
+
+### 2.25 `types/auto/*.d.ts` 变了：先查组件增删，别直接还原（2026-10-03)
+
+`unplugin-vue-components` / `unplugin-auto-import` 每次构建会重写
+`types/auto/components.d.ts` 与 `auto-imports.d.ts`。
+
+**实测结论**：
+
+| 检查 | 结果 |
+| --- | --- |
+| 移走这两个文件后跑 `vue-tsc` | **613 个错误** ⇒ **不能 gitignore** |
+| 跑 `vite build` / `vue-tsc` / `vitest` | **一律 0 改动** ⇒ 跑命令不会弄脏它 |
+| 什么时候会变 | **只有增删组件时**（删组件 −1 行、新增组件 +1 行） |
+| 行尾 | 加 `.gitattributes`（`eol=lf`）后 `i/lf w/lf`，**零 churn** |
+
+⇒ **它是类型声明同步，不是噪声。还原它 = 丢掉正确的同步。**
+
+提交前的判断：
+
+```bash
+git diff -- types/auto/components.d.ts
+# 变更行与本轮增删的组件对得上 → 一起提交（正确）
+# 对不上 → 才需要复查是不是残留
+```
+
+**为什么缺了会崩**：`tsconfig.json` 的 `include` 含 `"**/*.d.ts"`，
+而 `auto-imports.d.ts` 是 `ref` / `computed` / `defineStore` / `watchEffect`
+等**自动导入符号的声明来源**（`vite.config.ts:187` 的
+`AutoImport({ dts: ... })` 生成）。生成器配了 `dts` 路径 ⇒ 产物**必须提交**。
+
 ## 三、测试
 
 - 框架：**vitest + happy-dom**（`pnpm test`）。测试文件在 `tests/` 下。
