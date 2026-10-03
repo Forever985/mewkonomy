@@ -60,11 +60,17 @@ pnpm build
 - `src/router/routes/private.ts` - 私有路由配置
 - `src/router/index.ts` - 根据构建模式动态组合路由
 
-### 构建优化
+### 构建优化（2026-10-01 校正）
 
-- Vite 插件在公开版本构建时排除私有页面文件
-- 条件编译确保私有代码不会被打包到公开版本
-- Tree shaking 移除未使用的代码
+- ⚠️ **实际并没有「排除私有页面」这一步**：`vite.config.ts` 里负责该功能的 `remove-private-code` 插件
+  **整段处于注释状态**。当前 `VITE_BUILD_MODE` 只影响 title、`VITE_PUBLIC_PATH` 与是否移除
+  `console`/`debugger`（`pure: ["console.log"]` + `drop: ["debugger"]`，仅 public 模式）。
+- 也就是说：**路由与页面始终全部打包**，公开版与私有版的产物只差标题与公共路径。
+  私有页仅靠侧边栏权限 + freeze 守卫控制可见性，`checkSecret()` 已恒返回 `true`。
+- 这是**有意的「非安全隔离」**（见 [docs/AI_CONTEXT.md](./docs/AI_CONTEXT.md) §4 与
+  [docs/DEVELOPER_GUIDE.md](./docs/DEVELOPER_GUIDE.md) §1.4）：**不要把敏感逻辑放在前端**。
+- 若要真正恢复构建期裁剪，解除该插件注释即可；但其做法是把 `routes/private.ts` 替换为空导出、
+  把若干 `pages/*` 替换为空组件，仍属「裁剪」而非「隔离」，同样不能用于承载秘密。
 
 ### 私有页面列表
 

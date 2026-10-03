@@ -26,3 +26,10 @@ __pycache__/
 # Use the pnpm
 package-lock.json
 # yarn.lock
+
+# 根目录的构建产物与 Vite 依赖缓存
+# 说明：这两个目录曾被一次 deploy 提交（6bacb36）误跟踪进仓库——assets/ 里是 62 个压缩后的
+# 构建产物（约 2.5MB）。它们不参与 src/ 的开发，也不被 index.html 引用（index.html 指向 /src/main.ts），
+# 真正的构建输出是 dist/。已用 `git rm -r --cached` 从索引移除，此处补上忽略规则防止再次被提交。
+/assets/
+/.vite/

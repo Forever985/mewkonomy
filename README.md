@@ -5,9 +5,15 @@
 
 ## 介绍
 
-牛牛放置利润计算
+牛牛放置利润计算 —— Milky Way Idle（银河放置）玩家自用的**利润计算工具**。
 
-本项目因个人原因已停止维护
+- 纯前端 SPA：无后端、无账号、不收集任何数据；数据来自游戏官方的静态数据与市场快照。
+- 使用方式与逐页功能说明：[docs/USER_GUIDE.md](./docs/USER_GUIDE.md)
+- 开发规范与架构说明：[docs/DEVELOPER_GUIDE.md](./docs/DEVELOPER_GUIDE.md)
+- AI 接手上下文（最短路径）：[docs/AI_CONTEXT.md](./docs/AI_CONTEXT.md)
+
+> 原项目 Milkonomy（作者 [luyh7](https://github.com/luyh7)）已因个人原因停止维护；
+> 本仓库是它的 fork（改名 **MewKonomy**），继续维护自用。仅供个人学习与自用，非商用。
 
 ## 数据更新
 
