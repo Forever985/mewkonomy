@@ -39,7 +39,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
   - 私有页（`private.ts` 的 `PRIVATE_ROUTES_START/END` 之间，六大分组）：利润检索（`/dashboard`、`/marketvolume`、`/docs`、`/sponsor`）、强化（`/enhancer`、`/enhancest`、`/enhanceexp`）、强化分解（`/enhanposer`、`/enhanposest`）、生产炼金（`/manualchemy`、`/chainbuilder`、`/charmtransform`）、打野（`/jungle`、`/junglest`、`/junglerit`、`/inherit`、`/decompose`、`/pickout`）、`/demo/**`（hidden）。
   - `src/pages/` 实有 **18 个一级目录，全部有路由引用**，无「未挂路由」的业务目录。
   - 历史下线：英灵殿/埋骨地（`burial`/`valhalla`）——路由、词条与 **`src/pages/burial`、`src/pages/valhalla` 目录均已清理完毕**（2026-10-01 复核：两目录不存在）。仅 `common/config/announcement.ts`、`common/config/freeze.ts` 驱动的旧公告文案里还提到「英灵殿」，属历史文案，且 `freezeConfig` 的有效期是 2025-10-28 ~ 2025-11-04，当前不生效。
-- **测试清单**（`tests/`，vitest + happy-dom）：**实测 30 个测试文件 / 182 个用例，全绿**（2026-10-03）。其中市场监控相关占 12 个（`marketvolume-cache`、`-history`、`-history-format`、`-rolling-volume`、`-shard`、`-sort`、`-tiers`、`-verify`、`-volume-rate`，以及提醒的 `-alerts`（21 用例）与 `-alerts-integration`（6 用例）、筛选/收藏/过滤设置的 `-filters`（30 用例））；另有 `price-status-tiers`（7 用例，价格档位口径）、`price-solve`（9 用例，目标时薪反解）、`profit-form`（9 用例，**填表计算利润**：手算样例 + 默认值必须复现计算器 + 动作枚举闭环）、`ban-filter-independence`（2 用例，三开关独立）；其余为 `artisan-tea-level-bonus`、`bigset-c-verify`、`chainbuilder-verify`、`charmtransform-verify`、`condition-level-range`、`cross-project-tail-verify`（+`extended`）、`enhanceexp-profitable`、`handle-best-per-item`、`price-fallback-verify`、`search-panel-checkbox`、`sort-priority`、`demo`、`components/Notify`、`utils/validate`。
+- **测试清单**（`tests/`，vitest + happy-dom）：**实测 30 个测试文件 / 188 个用例，全绿**（2026-10-03）。其中市场监控相关占 12 个（`marketvolume-cache`、`-history`、`-history-format`、`-rolling-volume`、`-shard`、`-sort`、`-tiers`、`-verify`、`-volume-rate`，以及提醒的 `-alerts`（21 用例）与 `-alerts-integration`（6 用例）、筛选/收藏/过滤设置的 `-filters`（30 用例））；另有 `price-status-tiers`（7 用例，价格档位口径）、`price-solve`（15 用例，目标时薪反解：手算样例、线性模型校验、**时薪/日薪两种口径**、**输入框留空与 0 的边界**）、`profit-form`（9 用例，**填表计算利润**：手算样例 + 默认值必须复现计算器 + 动作枚举闭环）、`ban-filter-independence`（2 用例，三开关独立）；其余为 `artisan-tea-level-bonus`、`bigset-c-verify`、`chainbuilder-verify`、`charmtransform-verify`、`condition-level-range`、`cross-project-tail-verify`（+`extended`）、`enhanceexp-profitable`、`handle-best-per-item`、`price-fallback-verify`、`search-panel-checkbox`、`sort-priority`、`demo`、`components/Notify`、`utils/validate`。
   - ⚠️ 跑全量测试时若看到 `Test Files` 数量**少于磁盘上的文件数**、且伴随 `Unhandled Error: EPERM ... open '<TEMP>\...\web\<hash>'`，那是运行器往临时目录写缓存被拒（沙箱限制），会**静默丢掉一整个测试文件**（vitest 自己也会警告 "This might cause false positive tests"）。此时把 `TEMP`/`TMPDIR` 指到工程内可写目录再跑即可恢复。**看到 `Errors 1 error` 就不要只信 `Test Files xx passed`。**
 
 ## 4. 核心架构速记
@@ -181,7 +181,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 - **迷宫（重要）**：`data.json` 已从 `v1.20250818.0` 升到 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。原「无迷宫玩法、无需开发」的结论**已失效**。
 - **市场历史归档**：已从 v1 单文件升级为 **v2 分片**（`market_history_<UTC日>T<HH>.json`，UTC 6 小时一块、字典编码、7 天 / 168 点，按窗口按需拉 1~2 片）。
 - **`game.ts` 规模**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 30 文件 / 182 用例**）。
+- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 30 文件 / 188 用例**）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 8.4 本次改动后的验证（实测）
@@ -610,7 +610,7 @@ profitPH = incomePH − costPH
 档位价由 `getPriceOf` 按各档位口径算出，与别处显示的价格同源。
 
 ### 15.4 验证（实测）
-- `vue-tsc` 通过；`vitest` **29 文件 / 173 用例全绿**；`vite build` public/private 均成功；
+- `vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` public/private 均成功；
   dev server 下 `ActionSolveCard.vue` / `price-solve.ts` / `ActionDetail.vue` 三个模块均能被 Vite 正常编译。
 - `tests/price-solve.test.ts` 分两层：
   1. **手算样例**（完全可控的假计算器）：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
@@ -628,6 +628,27 @@ profitPH = incomePH − costPH
 （写测试时踩过：不调 `run()` 会拿到 `undefined`）。
 
 ---
+
+### 时薪 / 日薪两种口径（同日改进）
+
+- **内部只保留「时薪」一个口径**。`price-solve.ts` 新增
+  `SolveUnit` / `HOURS_PER_DAY = 24` / `toProfitPHOf` / `fromProfitPHOf` / `resolveTargetProfitPH`。
+  日薪**沿用项目既有定义**（`Calculator.run()` 里的 `profitPDFormat = Format.money(profitPH * 24)`），
+  不另立标准。输入框只负责换算单位，因此**两种模式解出的临界价必然完全一致**——已写成单测。
+- 面板加了「口径」切换（时薪 / 日薪）；标题、标签、单位、步长随之变化
+  （日薪量级是 24 倍，步长从 1 万放大到 24 万）。切换时把输入框里的数额换算过去，
+  **保持目标收益不变**。用 `watch(unit)` 而非 `@change`——v-model 与 change 的先后顺序不可靠。
+- ⚠️ **修掉一个真实 bug：输入框一清空，整张面板连输入框自己一起消失。**
+  `el-input-number` 被清空时把 v-model 置为 `undefined`，而面板根节点是
+  `v-if="... && solveResult"`，于是整块从 DOM 消失，用户**想重新填数字都没有地方填**。
+  改法：留空时**回落到当前收益**（并在面板上给出提示），面板不再消失。
+  配套注意：**判空必须用 `== null` 而不是 falsy 判断**——
+  `0` 是有效目标（解出「不亏本」的临界价），一旦被误当成空就会悄悄回落到当前时薪。
+  这条规则已抽成纯函数 `resolveTargetProfitPH` 并单测锁住。
+- 文案：本节标题/标签随口径切换（`目标时薪反解` ↔ `目标日薪反解`、`金币/小时` ↔ `金币/天`），
+  因此原来的「不可达」「说明」两条提示改成中性措辞（不再写死「时薪」）；
+  被换掉的中文 key 已从 `en.ts` / `zh-tw.ts` 中删除，不留孤儿键。
+
 
 ## 16. 填表计算利润（非实时）（2026-10-03）
 
@@ -677,7 +698,7 @@ profitPH = incomePH − costPH
 表现成**"选择器列得出物品、却被判定不支持该动作"**。这个坑是测试抓出来的（见 16.5 第 3 条）。
 
 ### 16.5 验证（实测）
-- `vue-tsc` 通过；`vitest` **30 文件 / 182 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` 双模式成功；
   dev server 下 3 个新模块均编译通过。
 - **默认值复现**（真实计算器）：decompose 的成本 `2239964909.22` 对 `2239964909.22`、
   收入与利润同样精确相等，**总耗时 = 1.000000 小时**；transmute 同样精确。

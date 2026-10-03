@@ -160,3 +160,75 @@ describe("反解：真实计算器的线性模型校验", () => {
     )
   })
 })
+
+describe("反解：时薪 / 日薪两种口径", () => {
+  it("日薪 = 时薪 × 24，且与项目既有的 profitPDFormat 口径一致", async () => {
+    const { HOURS_PER_DAY, fromProfitPHOf, toProfitPHOf } = await import("@/common/utils/price-solve")
+    expect(HOURS_PER_DAY, "一天的小时数").toBe(24)
+    for (const ph of [0, 1, 760, 2239964909.2155, -12.5]) {
+      expect(toProfitPHOf(fromProfitPHOf(ph, "day"), "day")).toBeCloseTo(ph, 8)
+      expect(fromProfitPHOf(ph, "day")).toBeCloseTo(ph * 24, 8)
+      // 时薪口径是恒等变换
+      expect(toProfitPHOf(ph, "hour")).toBe(ph)
+      expect(fromProfitPHOf(ph, "hour")).toBe(ph)
+    }
+  })
+
+  it("核心不变量：同一目标收益下，日薪模式与时薪模式解出的临界价完全相同", async () => {
+    const { solveCandidatesOf, solvePriceForTarget, toProfitPHOf, HOURS_PER_DAY } = await import(
+      "@/common/utils/price-solve"
+    )
+    for (const cand of solveCandidatesOf(SAMPLE as any)) {
+      for (const targetPH of [0, 500, 760, 5000]) {
+        const byHour = solvePriceForTarget(760, cand, targetPH)!
+        // 同一个目标，改用「日薪」这个数额来写（×24），换算回来必须完全一致
+        const byDay = solvePriceForTarget(760, cand, toProfitPHOf(targetPH * HOURS_PER_DAY, "day"))!
+        expect(byDay.criticalPrice, `${cand.key} 目标时薪 ${targetPH}`).toBeCloseTo(byHour.criticalPrice, 8)
+        expect(byDay.impossible, `${cand.key} 目标时薪 ${targetPH} 的可达性`).toBe(byHour.impossible)
+      }
+    }
+  })
+
+  it("输入框留空 → 回落到当前时薪（面板不能因此消失）", async () => {
+    const { resolveTargetProfitPH } = await import("@/common/utils/price-solve")
+    // el-input-number 清空时给的是 undefined；也要兜住 null 与 NaN
+    for (const blank of [undefined, null, Number.NaN]) {
+      expect(resolveTargetProfitPH(760, blank, "hour"), "留空=按当前时薪").toBe(760)
+      expect(resolveTargetProfitPH(760, blank, "day"), "留空=按当前时薪（换口径后仍是 760）").toBe(760)
+    }
+  })
+
+  it("输入框填 0 是有效目标，不能被当成空", async () => {
+    const { resolveTargetProfitPH } = await import("@/common/utils/price-solve")
+    // 这是最容易写错的一处：若用 `!input` 判空，0 会被误当成"没填"而回落到当前时薪
+    expect(resolveTargetProfitPH(760, 0, "hour")).toBe(0)
+    expect(resolveTargetProfitPH(760, 0, "day")).toBe(0)
+  })
+
+  it("日薪口径下输入框的数额会换算成时薪", async () => {
+    const { resolveTargetProfitPH } = await import("@/common/utils/price-solve")
+    expect(resolveTargetProfitPH(760, 700, "hour")).toBe(700)
+    expect(resolveTargetProfitPH(760, 16_800, "day"), "日薪 16800 = 时薪 700").toBe(700)
+  })
+
+  it("目标为 0 时解出的是「不亏本」的临界价（不是不可能）", async () => {
+    const { solveCandidatesOf, solvePriceForTarget } = await import("@/common/utils/price-solve")
+    // 样例自身是自洽的：材料 2 个/h @100、成本 200；成品 1 个/h @500、收入 500×0.96=480
+    // ⇒ 当前时薪 = 480 − 200 = 280
+    const sample = {
+      ingredientListWithPrice: [{ hrid: "/items/x", count: 2, countPH: 2, price: 100, marketPrice: 100 }],
+      productListWithPrice: [{ hrid: "/items/y", count: 1, countPH: 1, rate: 1, price: 500, marketPrice: 500 }],
+      consumePH: 1
+    }
+    const cand = solveCandidatesOf(sample as any)[0]
+    const currentPH = 500 * 0.96 - 2 * 100
+    expect(currentPH, "样例当前时薪").toBeCloseTo(280, 8)
+
+    const r = solvePriceForTarget(currentPH, cand, 0)!
+    expect(r.impossible, "目标 0 是可达的（不亏本即可）").toBe(false)
+    // 材料买价涨到 240 时：成本 480、收入 480 ⇒ 利润恰好 0
+    expect(r.criticalPrice).toBeCloseTo(240, 8)
+    const back = currentPH + cand.coefficient * (r.criticalPrice - cand.price)
+    expect(back, "代回线性模型应恰好为 0").toBeCloseTo(0, 8)
+  })
+})

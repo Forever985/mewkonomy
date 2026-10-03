@@ -329,7 +329,7 @@ AIGC:
 - **迷宫（重要）**：`data.json` 已是 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。§八「功能D：卷轴排查结论」里「当前 data.json 无迷宫玩法」的判断**基于旧版本，已失效**。
 - **市场历史（§12 的补充）**：归档已从 v1 单文件 `market_history.json` 升级为 **v2 分片** `market_history_<UTC日>T<HH>.json`（UTC 6 小时一块、字典编码、滚动 7 天 / 168 点；前端按窗口**按需只拉 1~2 片**，取不到才回退 v1 文件）。§12.2 中「上限 520 点」「前端按 `<BASE_URL>data/market_history.json` 拉取」已不适用于 v2。
 - **`game.ts` 行数**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 30 文件 / 182 用例**，见 §二十一）。
+- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 30 文件 / 188 用例**，见 §二十一）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 13.3 有意不改的项
@@ -340,7 +340,7 @@ AIGC:
 
 ```bash
 npx vue-tsc --noEmit   # 通过，无输出
-npx vitest run         # 24 个测试文件 / 100 个用例，全绿（§13 审计当时；当前 30 / 182，见 §二十一）
+npx vitest run         # 24 个测试文件 / 100 个用例，全绿（§13 审计当时；当前 30 / 188，见 §二十一）
 npx eslint .           # 仅剩排版类问题（构建产物造成的 21.6 万条误报已消除）
 ```
 
@@ -637,7 +637,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 - `ActionDetail.vue` 底部挂载（所有检索页共用该弹窗，一处接入全站可用）。
 
 ### 20.4 验证
-- `vue-tsc` 通过；`vitest` **29 文件 / 173 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` 双模式成功；
   dev server 下三个新/改模块均可被 Vite 正常编译。
 - 手算样例验算：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
   目标 500 → 材料临界价 230、成品临界价 729.1667，代回利润均精确等于 500 ✓
@@ -649,6 +649,25 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 ⚠️ 构造计算器后必须调 `run()`，`result`（含 `profitPH`）由它填充。
 
 ---
+
+### 20.2 同日改进：时薪 / 日薪切换 + 修掉「输入框清空则面板消失」
+
+用户反馈两点：（1）**重要** 时薪输入框一清零，整张面板就消失；（2）希望有时薪/日薪切换。
+
+- **bug 根因**：`el-input-number` 清空时把 v-model 置为 `undefined`，而面板根节点是
+  `v-if="... && solveResult"` ⇒ 整块从 DOM 消失，用户没法重新填。
+  改法：**留空回落到当前收益**并给出提示。配套注意判空要用 `== null` 而非 falsy
+  ——`0` 是有效目标（解「不亏本」的临界价）。
+- **日薪口径**沿用项目既有定义 `profitPDFormat = profitPH × 24`（`Calculator.run()`），
+  **内部只以时薪计算**，输入框仅做单位换算，因此两种模式解出的临界价**必然完全一致**。
+  新增纯函数 `SolveUnit` / `HOURS_PER_DAY` / `toProfitPHOf` / `fromProfitPHOf` / `resolveTargetProfitPH`。
+- 测试从 9 个用例增到 **15 个**：新增「日薪 = 时薪 × 24 与往返一致」「两种口径解出的临界价相同」
+  「留空回落当前值」「**0 是有效目标**」「日薪数额换算成时薪」5 项。
+- 验证：`vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` public/private 均成功；
+  dev server 下两个模块均编译通过；lint 非风格问题 0。
+- 顺带：`i18n` 的 key 就是中文原文，所以改中文文案等于**换 key**——
+  新键已补进 `en.ts` / `zh-tw.ts`，被替换的旧键同时删除（不留孤儿键）。
+
 
 ## 二十一、填表算利润（非实时，2026-10-03）
 
@@ -691,7 +710,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 需由物品反推 action）。
 
 ### 21.5 验证
-- `vue-tsc` 通过；`vitest` **30 文件 / 182 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
+- `vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
 - 默认值复现：decompose 成本 `2239964909.22` 对 `2239964909.22`、总耗时 **1.000000 小时**；transmute 同。
 - 枚举闭环：6 个动作样本全部 `available = true`；制造样本反推为 `tailoring`、采集为 `foraging`。
   数量：强化 532 / 分解 742 / 转化 622 / 点金 889 / 制造 647 / 采集 26。

@@ -470,6 +470,17 @@ r.impossible     // 临界价 ≤ 0 = 即使白送也达不到
    断言 `Σ countPH×price ≈ calc.result.costPH`、`Σ 系数×countPH×price ≈ calc.result.incomePH`
    （应精确到 1e-9 量级）。只验"临界价代回等于目标"是自证循环，证明不了什么。
 
+4. **加「时薪 / 日薪」这类单位切换时，内部只保留一个口径。** 本模块的
+   `toProfitPHOf` / `fromProfitPHOf` / `resolveTargetProfitPH` 就是干这个的：
+   内部一律按 `HOURS_PER_DAY = 24` 换算（与 `Calculator.run()` 里 `profitPDFormat` 同口径，
+   **别自己另立标准**），于是两种模式解出的临界价必然一致——这条已单测。
+5. ⚠️ **`el-input-number` 被清空时会把 v-model 置为 `undefined`。**
+   如果面板根节点是 `v-if="... && 目标值"`，**整张卡片连输入框自己会一起从 DOM 消失**，
+   用户想重新填数字都没有地方填。正确做法是**留空回落到当前值**；
+   并且**判空必须用 `== null` 而不是 falsy 判断**——`0` 是有效目标
+   （解「不亏本」的临界价），被当成空就会悄悄显示成当前值。
+
+
 ### 2.18 「填表算利润」页：新增动作或改表单时看这里
 
 页面在 `pages/profitform/index.vue`，算钱的逻辑在 `common/utils/profit-form.ts`（纯函数）。
@@ -498,9 +509,9 @@ r.impossible     // 临界价 ≤ 0 = 即使白送也达不到
 
 - 框架：**vitest + happy-dom**（`pnpm test`）。测试文件在 `tests/` 下。
 - **Mock 策略**：用 `vi` 控制模块（`vi.resetModules()` + 动态 `import` 重新加载 store / 模块，见 `marketvolume-cache.test.ts`、`marketvolume-history.test.ts`）；纯计算逻辑（calculator）可直接断言数值；涉及 localStorage 的用例先 `localStorage.clear()`。
-- 既有测试清单（`tests/`，2026-10-03 实测：**30 个文件 / 182 个用例，全部通过**）：
+- 既有测试清单（`tests/`，2026-10-03 实测：**30 个文件 / 188 个用例，全部通过**）：
   - 市场监控家族（12 个，当前测试重心）：`marketvolume-cache`（旧缓存结构兼容）、`marketvolume-history`（涨跌历史：本地采样节流/强制、无历史空 map、时间窗涨跌百分比、基准/当前价缺失过滤）、`marketvolume-history-format`、`marketvolume-rolling-volume`、`marketvolume-shard`（Python 编码 → TS 解码的**跨语言**防漂移断言）、`marketvolume-sort`、`marketvolume-tiers`、`marketvolume-verify`、`marketvolume-volume-rate`、`marketvolume-alerts`（**提醒纯函数语义**：绝对值/相对排行、范围与 onlyActive、多规则去重与优先级、非法参数与零基准边界）、`marketvolume-alerts-integration`（**列表→预置规则→命中**的真实链路）、`marketvolume-filters`（**区间筛选语义**：端点包含、阈值留空=不筛选、填反自动对调、null/-1 值处理、多条件叠加；外加收藏 store 的持久化与坏数据归一化）
-  - 业务校验：`bigset-c-verify`（大批量组合检索）、`ban-filter-independence`（**排除装备/首饰/护符三开关互相独立**）、`chainbuilder-verify`（手动产业链）、`charmtransform-verify`（护符转化）、`cross-project-tail-verify`（及 `extended`，跨项目尾段）、`handle-best-per-item`（每物品最优方案）、`enhanceexp-profitable`（仅看赚钱方案）、`condition-level-range`（按行限定要求等级区间）、`artisan-tea-level-bonus`（工匠茶 +5）、`price-fallback-verify`（价格兜底）、`price-status-tiers`（**价格档位口径**：6 个口径递增性、0.366% 与强化 ×5 的幅度、低价保底 1 金、无价保持 -1）、`price-solve`（**目标时薪反解**：手算样例验符号、真实计算器验线性模型精确到 1e-9）、`profit-form`（**填表算利润**：手算样例、默认值必须精确复现计算器的 costPH/incomePH/profitPH、动作枚举的**可用性闭环**）、`sort-priority`、`search-panel-checkbox`
+  - 业务校验：`bigset-c-verify`（大批量组合检索）、`ban-filter-independence`（**排除装备/首饰/护符三开关互相独立**）、`chainbuilder-verify`（手动产业链）、`charmtransform-verify`（护符转化）、`cross-project-tail-verify`（及 `extended`，跨项目尾段）、`handle-best-per-item`（每物品最优方案）、`enhanceexp-profitable`（仅看赚钱方案）、`condition-level-range`（按行限定要求等级区间）、`artisan-tea-level-bonus`（工匠茶 +5）、`price-fallback-verify`（价格兜底）、`price-status-tiers`（**价格档位口径**：6 个口径递增性、0.366% 与强化 ×5 的幅度、低价保底 1 金、无价保持 -1）、`price-solve`（**目标时薪反解**：手算样例验符号、真实计算器验线性模型精确到 1e-9、**时薪/日薪两种口径解出的临界价必须一致**、**输入框留空回落当前值而 0 仍是有效目标**）、`profit-form`（**填表算利润**：手算样例、默认值必须精确复现计算器的 costPH/incomePH/profitPH、动作枚举的**可用性闭环**）、`sort-priority`、`search-panel-checkbox`
   - 基础：`demo`、`components/Notify`、`utils/validate`
 - **改动涉及缓存/价格/过滤逻辑时，建议补充对应 verify 测试**，与既有命名风格保持一致。
 - **纯逻辑与集成分开写**：像市场提醒那样，把「可单测的纯函数」（`alerts.ts`）与「接线后才有意义的部分」拆成两个文件——前者断言语义，后者用 `vi.mock` 注入真实形状的数据走完整条链路。只写后者会因数据构造复杂而漏掉边界；只写前者会漏掉"两块拼起来才暴露"的问题。
