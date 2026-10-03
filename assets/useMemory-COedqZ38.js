@@ -1,0 +1,1 @@
+import{r as s,ax as i,w as u}from"./vue-B9IM5MU8.js";function m(t,r,a=500){const o=s((()=>{try{const e=localStorage.getItem(t);return e?JSON.parse(e):r}catch{return r}})()),c=i(e=>{try{localStorage.setItem(t,JSON.stringify(e))}catch(n){console.error("LocalStorage 保存失败:",n)}},a);return u(o,c,{deep:!0}),o}export{m as u};
