@@ -39,7 +39,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
   - 私有页（`private.ts` 的 `PRIVATE_ROUTES_START/END` 之间，六大分组）：利润检索（`/dashboard`、`/marketvolume`、`/docs`、`/sponsor`）、强化（`/enhancer`、`/enhancest`、`/enhanceexp`）、强化分解（`/enhanposer`、`/enhanposest`）、生产炼金（`/manualchemy`、`/chainbuilder`、`/charmtransform`）、打野（`/jungle`、`/junglest`、`/junglerit`、`/inherit`、`/decompose`、`/pickout`）、`/demo/**`（hidden）。
   - `src/pages/` 实有 **18 个一级目录，全部有路由引用**，无「未挂路由」的业务目录。
   - 历史下线：英灵殿/埋骨地（`burial`/`valhalla`）——路由、词条与 **`src/pages/burial`、`src/pages/valhalla` 目录均已清理完毕**（2026-10-01 复核：两目录不存在）。仅 `common/config/announcement.ts`、`common/config/freeze.ts` 驱动的旧公告文案里还提到「英灵殿」，属历史文案，且 `freezeConfig` 的有效期是 2025-10-28 ~ 2025-11-04，当前不生效。
-- **测试清单**（`tests/`，vitest + happy-dom）：**实测 30 个测试文件 / 188 个用例，全绿**（2026-10-03）。其中市场监控相关占 12 个（`marketvolume-cache`、`-history`、`-history-format`、`-rolling-volume`、`-shard`、`-sort`、`-tiers`、`-verify`、`-volume-rate`，以及提醒的 `-alerts`（21 用例）与 `-alerts-integration`（6 用例）、筛选/收藏/过滤设置的 `-filters`（30 用例））；另有 `price-status-tiers`（7 用例，价格档位口径）、`price-solve`（15 用例，目标时薪反解：手算样例、线性模型校验、**时薪/日薪两种口径**、**输入框留空与 0 的边界**）、`profit-form`（9 用例，**填表计算利润**：手算样例 + 默认值必须复现计算器 + 动作枚举闭环）、`ban-filter-independence`（2 用例，三开关独立）；其余为 `artisan-tea-level-bonus`、`bigset-c-verify`、`chainbuilder-verify`、`charmtransform-verify`、`condition-level-range`、`cross-project-tail-verify`（+`extended`）、`enhanceexp-profitable`、`handle-best-per-item`、`price-fallback-verify`、`search-panel-checkbox`、`sort-priority`、`demo`、`components/Notify`、`utils/validate`。
+- **测试清单**（`tests/`，vitest + happy-dom）：**实测 32 个测试文件 / 209 个用例，全绿**（2026-10-03）。其中市场监控相关占 12 个（`marketvolume-cache`、`-history`、`-history-format`、`-rolling-volume`、`-shard`、`-sort`、`-tiers`、`-verify`、`-volume-rate`，以及提醒的 `-alerts`（21 用例）与 `-alerts-integration`（6 用例）、筛选/收藏/过滤设置的 `-filters`（30 用例））；另有 `price-status-tiers`（7 用例，价格档位口径）、`price-solve`（15 用例，目标时薪反解：手算样例、线性模型校验、**时薪/日薪两种口径**、**输入框留空与 0 的边界**）、`profit-form`（9 用例，**填表计算利润**：手算样例 + 默认值必须复现计算器 + 动作枚举闭环）、`ban-filter-independence`（2 用例，三开关独立）、`price-fallback-strategies`（17 用例，**兜底策略矩阵**：穷举 360 组断言「标了来源就一定取到价」）、`price-fallback-integration`（4 用例，**真实数据上来源与价格必须一致**，含 level>0 与「同一 tick 切换设置」回归）；其余为 `artisan-tea-level-bonus`、`bigset-c-verify`、`chainbuilder-verify`、`charmtransform-verify`、`condition-level-range`、`cross-project-tail-verify`（+`extended`）、`enhanceexp-profitable`、`handle-best-per-item`、`price-fallback-verify`、`search-panel-checkbox`、`sort-priority`、`demo`、`components/Notify`、`utils/validate`。
   - ⚠️ 跑全量测试时若看到 `Test Files` 数量**少于磁盘上的文件数**、且伴随 `Unhandled Error: EPERM ... open '<TEMP>\...\web\<hash>'`，那是运行器往临时目录写缓存被拒（沙箱限制），会**静默丢掉一整个测试文件**（vitest 自己也会警告 "This might cause false positive tests"）。此时把 `TEMP`/`TMPDIR` 指到工程内可写目录再跑即可恢复。**看到 `Errors 1 error` 就不要只信 `Test Files xx passed`。**
 
 ## 4. 核心架构速记
@@ -181,7 +181,7 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
 - **迷宫（重要）**：`data.json` 已从 `v1.20250818.0` 升到 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。原「无迷宫玩法、无需开发」的结论**已失效**。
 - **市场历史归档**：已从 v1 单文件升级为 **v2 分片**（`market_history_<UTC日>T<HH>.json`，UTC 6 小时一块、字典编码、7 天 / 168 点，按窗口按需拉 1~2 片）。
 - **`game.ts` 规模**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 30 文件 / 188 用例**）。
+- **测试规模**：**24 个文件 / 100 个用例**（本节审计时的数据；**当前基线见 §3 —— 32 文件 / 209 用例**）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 8.4 本次改动后的验证（实测）
@@ -610,7 +610,7 @@ profitPH = incomePH − costPH
 档位价由 `getPriceOf` 按各档位口径算出，与别处显示的价格同源。
 
 ### 15.4 验证（实测）
-- `vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` public/private 均成功；
+- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` public/private 均成功；
   dev server 下 `ActionSolveCard.vue` / `price-solve.ts` / `ActionDetail.vue` 三个模块均能被 Vite 正常编译。
 - `tests/price-solve.test.ts` 分两层：
   1. **手算样例**（完全可控的假计算器）：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
@@ -698,7 +698,7 @@ profitPH = incomePH − costPH
 表现成**"选择器列得出物品、却被判定不支持该动作"**。这个坑是测试抓出来的（见 16.5 第 3 条）。
 
 ### 16.5 验证（实测）
-- `vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` 双模式成功；
   dev server 下 3 个新模块均编译通过。
 - **默认值复现**（真实计算器）：decompose 的成本 `2239964909.22` 对 `2239964909.22`、
   收入与利润同样精确相等，**总耗时 = 1.000000 小时**；transmute 同样精确。
@@ -709,6 +709,58 @@ profitPH = incomePH − costPH
 - 手算样例：材料 2 个 @100、成品 1 个 @1000、税率 4% → 成本 200、收入 960、利润 760、
   时薪 760、利润率 3.8；把材料改成 230 → 利润恰为 500
   （与「目标时薪反解」里 760→500 的临界价 230 互为佐证）。
+
+## 17. 无市价兜底：左右解耦的优先级链（2026-10-03）
+
+### 17.1 为什么要改：旧的三档是「一个枚举控制两侧」
+
+旧实现只有 `priceFallbackMode: "A" | "B" | "C"` 一档，**同时**决定左价与右价怎么兜底。
+用户要的能力（"需要右价时没右价就用左价、需要左价时没左价就用右价、两端都没有就用大全套、
+还能手动强制用大全套"）在旧模型里无法表达——加档位就会组合爆炸，且改一档必然影响另一侧。
+
+### 17.2 新模型：每侧一条独立的优先级链
+
+```
+正常市价 →（可选）借用另一端的市价 →（可选）商店价 / 大全套（自产成本）→ 无价 -1
+```
+
+`src/common/utils/price-fallback.ts`（**纯函数、零依赖**）：
+
+| 导出 | 作用 |
+| --- | --- |
+| `FallbackSide { cross, then }` | 单侧策略：`cross` = 是否借另一端；`then` = 借不到时用 `none`/`shop`/`bigset` |
+| `PriceFallbackSettings { ask, bid, forceBigSet }` | 左右各一条 + 全局「强制大全套」 |
+| `resolvePriceSides(input, settings)` | 纯解析：输入原始 ask/bid + 商店价 + 大全套价，输出最终 ask/bid **与各自来源** |
+| `priceFallbackSignature(settings)` | 缓存 key 用；**切换设置自然 miss 缓存** |
+| `migrateLegacyMode` / `normalizePriceFallback` | 旧 A/B/C 迁移、脏数据归一 |
+
+默认配置 = `ask: {cross:true, then:"bigset"}`、`bid: {cross:true, then:"bigset"}`（用户要的那条链）。
+旧 A/B/C 仍可无损回退：`tests/utils/price-fallback.ts` 里的 `LEGACY_FALLBACK` 保留了三档的等价配置。
+
+### 17.3 顺带修掉的两个真实缺陷
+
+1. **level>0 的来源标记与实际价格漂移**：旧实现 level>0 单独写了兜底判定，条件与 level=0 不一致
+   （ask 多要求 `!marketItem`，来源却对 ask 也返回 `shop`），于是 UI 出现「价格 -1 却标成【商店】/【自产】」。
+   实测旧实现：模式 B **1402 条**、模式 C **1404 条**（bid 端 0 条）。
+   现在 `getPriceOf` 与 `getPriceSourceOf` **共用 `resolvePriceOf`**，
+   价格与来源一次产出，**结构上不可能漂移**；回归由 `tests/price-fallback-integration.test.ts` 守着。
+2. **切换设置后同一 tick 读到旧结果**：旧实现的 `_priceResolutionCache` key 只有 hrid，
+   清缓存依赖异步 watch。现在**兜底设置签名进了缓存 key**，不再依赖清缓存时机。
+
+### 17.4 来源枚举多了 `cross`
+
+`PriceSource` 现为 `market / cross / shop / selfcraft / none`。
+`cross` = 借用了另一端的市价——**数字来自真实成交，但方向相反**，UI 标注为【借另一端】并给出提示。
+
+### 17.5 测试
+
+`tests/price-fallback-strategies.test.ts`（17 用例，纯函数）：四种兜底手段的行为、左右解耦、
+强制大全套、签名唯一性、旧档位迁移、脏数据归一，以及**穷举 360 组策略 × 市场形态断言
+「标了来源就必须取到价、标 none 就必须是 -1」**。
+`tests/price-fallback-integration.test.ts`（4 用例，真实数据）：全物品 × 多等级的来源一致性、
+「借另一端」确实取到的是另一端**原始市价**、同一 tick 切换设置、强制大全套。
+
+验证：`vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` public/private 均成功。
 
 ---
 

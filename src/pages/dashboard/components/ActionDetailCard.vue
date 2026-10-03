@@ -17,6 +17,7 @@ const { t } = useI18n()
 /** 非真实市价的来源标注（不打扰正常市场价，仅对兜底/自定义/内部流转出标） */
 function priceSourceLabel(source?: PriceSourceWithState) {
   switch (source) {
+    case "cross": return t("借另一端")
     case "selfcraft": return t("自产")
     case "shop": return t("商店")
     case "none": return t("无价")
@@ -27,6 +28,7 @@ function priceSourceLabel(source?: PriceSourceWithState) {
 }
 function priceSourceTip(source?: PriceSourceWithState) {
   switch (source) {
+    case "cross": return t("该侧市场无价，借用了另一端的市价（方向相反，仅供参考）")
     case "selfcraft": return t("市场无价，按大全套自产成本估值（非真实成交价）")
     case "shop": return t("市场无价，按商店价格兜底（非真实成交价）")
     case "none": return t("无价（-1），暂无法定价")
@@ -37,6 +39,7 @@ function priceSourceTip(source?: PriceSourceWithState) {
 }
 function priceSourceTagType(source?: PriceSourceWithState) {
   switch (source) {
+    case "cross": return "info"
     case "selfcraft": return "warning"
     case "shop": return "info"
     case "none": return "danger"

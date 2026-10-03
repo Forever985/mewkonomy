@@ -1,5 +1,6 @@
 import { describe, it, beforeAll } from "vitest"
 import { loadTestGameData } from "./utils/load-game-data"
+import { applyFallback, LEGACY_FALLBACK } from "./utils/price-fallback"
 
 describe("模式C 大全套价格兜底验证（聚焦兜底对象）", () => {
   beforeAll(async () => {
@@ -10,7 +11,7 @@ describe("模式C 大全套价格兜底验证（聚焦兜底对象）", () => {
     const { getPriceOf, isPriceFallbackOf } = await import("@/common/apis/game")
     const { useGameStoreOutside } = await import("@/pinia/stores/game")
     const store = useGameStoreOutside()
-    store.setPriceFallbackMode("B")
+    applyFallback(LEGACY_FALLBACK.shop)
 
     const { getGameDataApi } = await import("@/common/apis/game")
     const itemMap = getGameDataApi().itemDetailMap
@@ -34,7 +35,7 @@ describe("模式C 大全套价格兜底验证（聚焦兜底对象）", () => {
     const { getPriceOf, isPriceFallbackOf, getGameDataApi } = await import("@/common/apis/game")
     const { useGameStoreOutside } = await import("@/pinia/stores/game")
     const store = useGameStoreOutside()
-    store.setPriceFallbackMode("C")
+    applyFallback(LEGACY_FALLBACK.bigset)
 
     const itemMap = getGameDataApi().itemDetailMap
     let fallbackObjects = 0
@@ -66,7 +67,7 @@ describe("模式C 大全套价格兜底验证（聚焦兜底对象）", () => {
     const { isPriceFallbackOf, getGameDataApi } = await import("@/common/apis/game")
     const { useGameStoreOutside } = await import("@/pinia/stores/game")
     const store = useGameStoreOutside()
-    store.setPriceFallbackMode("A")
+    applyFallback(LEGACY_FALLBACK.off)
     const itemMap = getGameDataApi().itemDetailMap
     let flagged = 0
     for (const hrid in itemMap) {

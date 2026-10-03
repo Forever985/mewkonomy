@@ -505,13 +505,44 @@ r.impossible     // 临界价 ≤ 0 = 即使白送也达不到
 
 ---
 
+### 2.19 改「无市价兜底」前必读：模型、优先级与那条不变量
+
+逻辑全部在 `common/utils/price-fallback.ts`（**纯函数、零运行时依赖**），设置在 `game store.priceFallback`。
+
+**模型：左右两侧各一条独立优先级链**
+
+```
+正常市价 →（可选）借用另一端的市价 →（可选）商店价 / 大全套 → 无价 -1
+```
+
+- `PriceFallbackSettings.ask` / `.bid`：各含 `cross`（是否借另一端）与 `then`（借不到时用
+  `none` / `shop` / `bigset`）。
+- `forceBigSet`：无视市价，一律按大全套（自产成本）算。
+- 解析只有 `resolvePriceSides` 一个出口，**不要在别处再写一套判定**。
+
+**必须守住的不变量：来源与价格永远一致。**
+`source === "none"` ⇔ `price === -1`；其余来源都必须真的取到了数。
+这条以前在 level>0 上不成立（旧实现两套判定条件不一致，实测漂移 1402~1404 条，UI 出现
+「-1 却标成【商店】/【自产】」）。现在 `getPriceOf` 与 `getPriceSourceOf` 共用 `resolvePriceOf`，
+价格与来源一次产出。**改动解析逻辑时，务必跑 `tests/price-fallback-integration.test.ts`**，
+它会在全物品 × 多等级上把这条不变量扫一遍。
+
+**加新兜底手段时**：在 `FallbackSide.then` 里加枚举值 → 在 `pickSide` 里加分支 →
+在 `tests/price-fallback-strategies.test.ts` 的市场形态表里加一种组合。
+矩阵测试会自动覆盖新手段，**不需要手写新用例**。
+
+**换设置后不要指望「缓存被清了」**：价格缓存的 key 里含 `priceFallbackSignature(settings)`，
+所以切换会自然 miss。旧实现只靠异步 watch 清 `_priceResolutionCache`，
+曾导致同一 tick 内切模式读到旧结果（`tests/price-fallback-integration.test.ts` 守着这条）。
+
+
 ## 三、测试
 
 - 框架：**vitest + happy-dom**（`pnpm test`）。测试文件在 `tests/` 下。
 - **Mock 策略**：用 `vi` 控制模块（`vi.resetModules()` + 动态 `import` 重新加载 store / 模块，见 `marketvolume-cache.test.ts`、`marketvolume-history.test.ts`）；纯计算逻辑（calculator）可直接断言数值；涉及 localStorage 的用例先 `localStorage.clear()`。
-- 既有测试清单（`tests/`，2026-10-03 实测：**30 个文件 / 188 个用例，全部通过**）：
+- 既有测试清单（`tests/`，2026-10-03 实测：**32 个文件 / 209 个用例，全部通过**）：
   - 市场监控家族（12 个，当前测试重心）：`marketvolume-cache`（旧缓存结构兼容）、`marketvolume-history`（涨跌历史：本地采样节流/强制、无历史空 map、时间窗涨跌百分比、基准/当前价缺失过滤）、`marketvolume-history-format`、`marketvolume-rolling-volume`、`marketvolume-shard`（Python 编码 → TS 解码的**跨语言**防漂移断言）、`marketvolume-sort`、`marketvolume-tiers`、`marketvolume-verify`、`marketvolume-volume-rate`、`marketvolume-alerts`（**提醒纯函数语义**：绝对值/相对排行、范围与 onlyActive、多规则去重与优先级、非法参数与零基准边界）、`marketvolume-alerts-integration`（**列表→预置规则→命中**的真实链路）、`marketvolume-filters`（**区间筛选语义**：端点包含、阈值留空=不筛选、填反自动对调、null/-1 值处理、多条件叠加；外加收藏 store 的持久化与坏数据归一化）
-  - 业务校验：`bigset-c-verify`（大批量组合检索）、`ban-filter-independence`（**排除装备/首饰/护符三开关互相独立**）、`chainbuilder-verify`（手动产业链）、`charmtransform-verify`（护符转化）、`cross-project-tail-verify`（及 `extended`，跨项目尾段）、`handle-best-per-item`（每物品最优方案）、`enhanceexp-profitable`（仅看赚钱方案）、`condition-level-range`（按行限定要求等级区间）、`artisan-tea-level-bonus`（工匠茶 +5）、`price-fallback-verify`（价格兜底）、`price-status-tiers`（**价格档位口径**：6 个口径递增性、0.366% 与强化 ×5 的幅度、低价保底 1 金、无价保持 -1）、`price-solve`（**目标时薪反解**：手算样例验符号、真实计算器验线性模型精确到 1e-9、**时薪/日薪两种口径解出的临界价必须一致**、**输入框留空回落当前值而 0 仍是有效目标**）、`profit-form`（**填表算利润**：手算样例、默认值必须精确复现计算器的 costPH/incomePH/profitPH、动作枚举的**可用性闭环**）、`sort-priority`、`search-panel-checkbox`
+  - 业务校验：`bigset-c-verify`（大批量组合检索）、`ban-filter-independence`（**排除装备/首饰/护符三开关互相独立**）、`chainbuilder-verify`（手动产业链）、`charmtransform-verify`（护符转化）、`cross-project-tail-verify`（及 `extended`，跨项目尾段）、`handle-best-per-item`（每物品最优方案）、`enhanceexp-profitable`（仅看赚钱方案）、`condition-level-range`（按行限定要求等级区间）、`artisan-tea-level-bonus`（工匠茶 +5）、`price-fallback-verify`（价格兜底回归）、`price-fallback-strategies`（**兜底策略矩阵**：6 种单侧策略 × 左右组合 × 强制开关，穷举 360 组断言「标了来源就一定取到价」）、`price-fallback-integration`（**真实数据上来源与价格必须一致**，含 level>0 与「同一 tick 切换设置」）、`price-status-tiers`（**价格档位口径**：6 个口径递增性、0.366% 与强化 ×5 的幅度、低价保底 1 金、无价保持 -1）、`price-solve`（**目标时薪反解**：手算样例验符号、真实计算器验线性模型精确到 1e-9、**时薪/日薪两种口径解出的临界价必须一致**、**输入框留空回落当前值而 0 仍是有效目标**）、`profit-form`（**填表算利润**：手算样例、默认值必须精确复现计算器的 costPH/incomePH/profitPH、动作枚举的**可用性闭环**）、`sort-priority`、`search-panel-checkbox`
   - 基础：`demo`、`components/Notify`、`utils/validate`
 - **改动涉及缓存/价格/过滤逻辑时，建议补充对应 verify 测试**，与既有命名风格保持一致。
 - **纯逻辑与集成分开写**：像市场提醒那样，把「可单测的纯函数」（`alerts.ts`）与「接线后才有意义的部分」拆成两个文件——前者断言语义，后者用 `vi.mock` 注入真实形状的数据走完整条链路。只写后者会因数据构造复杂而漏掉边界；只写前者会漏掉"两块拼起来才暴露"的问题。

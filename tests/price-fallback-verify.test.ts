@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeAll } from "vitest"
 import { loadTestGameData } from "./utils/load-game-data"
+import { applyFallback, LEGACY_FALLBACK } from "./utils/price-fallback"
 
 /**
  * 价格兜底回归测试（覆盖两个曾经真实存在的利润正确性缺陷）
@@ -26,8 +27,8 @@ describe("价格兜底回归", () => {
     const store = useGameStoreOutside()
     const itemMap = getGameDataApi().itemDetailMap
 
-    for (const mode of ["B", "C"] as const) {
-      store.setPriceFallbackMode(mode)
+    for (const settings of [LEGACY_FALLBACK.shop, LEGACY_FALLBACK.bigset]) {
+      applyFallback(settings)
       const contradictions: string[] = []
       for (const hrid in itemMap) {
         const p = getPriceOf(hrid, 0)
@@ -36,17 +37,17 @@ describe("价格兜底回归", () => {
           contradictions.push(`${itemMap[hrid].name}(ask=${p.ask},bid=${p.bid})`)
         }
       }
-      expect(contradictions, `模式${mode} 存在「有 ask 无 bid」的矛盾项：${contradictions.slice(0, 5).join(", ")}`).toEqual([])
+      expect(contradictions, `该配置下存在「有 ask 无 bid」的矛盾项：${contradictions.slice(0, 5).join(", ")}`).toEqual([])
     }
 
-    store.setPriceFallbackMode("C")
+    applyFallback(LEGACY_FALLBACK.bigset)
   })
 
   it("价格来源与实际取值一致：取自商店就不能标成市场", async () => {
     const { getPriceOf, getPriceSourceOf, getGameDataApi } = await import("@/common/apis/game")
     const { useGameStoreOutside } = await import("@/pinia/stores/game")
     const store = useGameStoreOutside()
-    store.setPriceFallbackMode("B")
+    applyFallback(LEGACY_FALLBACK.shop)
     const itemMap = getGameDataApi().itemDetailMap
 
     for (const hrid in itemMap) {
@@ -68,7 +69,7 @@ describe("价格兜底回归", () => {
     const { getPriceOf, isPriceFallbackOf, getPriceSourceOf, getGameDataApi } = await import("@/common/apis/game")
     const { useGameStoreOutside } = await import("@/pinia/stores/game")
     const store = useGameStoreOutside()
-    store.setPriceFallbackMode("A")
+    applyFallback(LEGACY_FALLBACK.off)
 
     const itemMap = getGameDataApi().itemDetailMap
     for (const hrid in itemMap) {
@@ -88,6 +89,6 @@ describe("价格兜底回归", () => {
       }
     }
 
-    store.setPriceFallbackMode("C")
+    applyFallback(LEGACY_FALLBACK.bigset)
   })
 })

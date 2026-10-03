@@ -15,6 +15,7 @@ function sourceOf(row: { hrid: string; level?: number }, type: "ask" | "bid"): P
 }
 function sourceLabel(s?: PriceSource) {
   switch (s) {
+    case "cross": return "借另一端"
     case "selfcraft": return "自产"
     case "shop": return "商店"
     case "none": return "无价"
@@ -23,6 +24,7 @@ function sourceLabel(s?: PriceSource) {
 }
 function sourceTip(s?: PriceSource) {
   switch (s) {
+    case "cross": return t("该侧市场无价，借用了另一端的市价（方向相反，仅供参考）")
     case "selfcraft": return t("市场无价，按大全套自产成本估值（非真实成交价）")
     case "shop": return "市场无价，按商店价格兜底（非真实成交价）"
     case "none": return "无价（-1），暂无法定价"

@@ -1,6 +1,7 @@
 import { PRICE_STATUS_LIST, PriceStatus, useGameStoreOutside } from "@/pinia/stores/game"
 import { beforeAll, describe, expect, it } from "vitest"
 import { loadTestGameData } from "./utils/load-game-data"
+import { applyFallback, LEGACY_FALLBACK } from "./utils/price-fallback"
 
 /**
  * 价格「档位」口径（左/右 × `-` / 原价 / `+` 共 6 个）的测试。
@@ -135,15 +136,15 @@ describe("价格档位：档位换算", () => {
 
   it("无价（该档位市场无报价）时任何口径都保持 -1，不虚构价格", () => {
     const store = useGameStoreOutside()
-    const previous = store.priceFallbackMode
-    // A 模式 = 完全不做兜底，避免 sellPrice / 大全套把 -1 填掉
-    store.priceFallbackMode = "A"
+    const previous = { ...store.priceFallback, ask: { ...store.priceFallback.ask }, bid: { ...store.priceFallback.bid } }
+    // 完全不做兜底，避免 sellPrice / 大全套 / 借另一端把 -1 填掉
+    applyFallback(LEGACY_FALLBACK.off)
     try {
       const p = getPriceOf(EQUIP, 7, PriceStatus.ASK_HIGH, PriceStatus.BID_LOW)
       expect(p.ask).toBe(-1)
       expect(p.bid).toBe(-1)
     } finally {
-      store.priceFallbackMode = previous
+      applyFallback(previous)
     }
   })
 })

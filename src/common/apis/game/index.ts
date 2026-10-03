@@ -1,6 +1,8 @@
 import type { EnhancelateResult } from "@/calculator/enhance"
+import type { FallbackSource } from "@/common/utils/price-fallback"
 import type { ActionDetail, CommunityBuffDetail, DropTableItem, GameData, ItemDetail, PersonalBuffDetail } from "~/game"
 import type { MarketData, MarketItemPrice } from "~/market"
+import { priceFallbackSignature, resolvePriceSides } from "@/common/utils/price-fallback"
 import deepFreeze from "deep-freeze-strict"
 import { COIN_HRID, PriceStatus, useGameStoreOutside } from "@/pinia/stores/game"
 
@@ -17,8 +19,11 @@ const _personalBuffTypeDetailMapCache: Record<string, PersonalBuffDetail> = {}
 let _processingProductMap: Record<string, string> = {}
 let _priceCache = {} as Record<string, MarketItemPrice>
 /**
- * level=0 的「裸价解析」缓存：只做一次市场/商店/兜底判定，
- * 之后由 getPriceOf 转成买卖状态、由 getPriceSourceOf 读来源，避免两处判定逻辑漂移。
+ * 「裸价解析」缓存：只做一次市场/商店/兜底判定，之后由 `getPriceOf` 转成买卖状态、
+ * 由 `getPriceSourceOf` 读来源。
+ *
+ * key 里带**兜底设置签名**，所以切换设置会自然 miss，不依赖「异步 watch 清缓存」那个
+ * 有时序窗口的方案；`level` 也在 key 里，于是 level>0 与 level=0 共用同一条解析路径。
  */
 let _priceResolutionCache = {} as Record<string, {
   ask: number
@@ -55,7 +60,9 @@ watch([() => useGameStoreOutside().buyStatus, () => useGameStoreOutside().sellSt
   _priceCache = {}
 }, { immediate: true })
 
-watch(() => useGameStoreOutside().priceFallbackMode, () => {
+// 兜底设置变了就清缓存。**注意这只是省内存**：价格缓存的 key 里含设置签名，
+// 所以即使这个异步 watch 还没跑，新设置也不会命中旧值（旧实现就栽在这一点上）。
+watch(() => useGameStoreOutside().priceFallback, () => {
   _priceCache = {}
   _priceResolutionCache = {}
 }, { immediate: true })
@@ -172,6 +179,66 @@ function priceStepOf(price: number, high: boolean = true, enhanced = false) {
   return Math.max(1, stepped)
 }
 
+/**
+ * 统一的价格解析：**level 0 与 level>0 走同一条路径**。
+ *
+ * 这条统一本身就是一个修复。早期 level>0 单独实现了一套兜底判定，条件与 level=0 不一致：
+ * ask 兜底多了一个 `!marketItem` 门槛（要求该物品在市场**完全**无记录），
+ * 而来源判定既没有这个门槛、又对 ask 也返回 `shop`
+ * （可 level>0 的 ask 端根本不存在商店价路径）。
+ * 于是 UI 出现过「价格是 -1 却被标成【商店】/【自产】」——
+ * 实测模式 B 1402 条、模式 C 1404 条（bid 端 0 条）。
+ *
+ * 现在两侧共用 `resolvePriceSides`，价格与来源一次产出，**结构上不可能漂移**。
+ */
+function resolvePriceOf(hrid: string, level: number) {
+  const settings = useGameStoreOutside().priceFallback
+  // key 里带兜底设置签名：切换设置会自然 miss，不依赖「异步 watch 清缓存」那个有时序窗口的方案
+  const key = `${hrid}|${level}|${priceFallbackSignature(settings)}`
+  const cached = _priceResolutionCache[key]
+  if (cached) {
+    return cached
+  }
+
+  // 特殊定价（牛铃按 10 个一包折算、金币恒 1）与开包折算都视为市价，不参与兜底
+  if (!level) {
+    if (SPECIAL_PRICE[hrid]) {
+      const special = SPECIAL_PRICE[hrid]()
+      const result = { ask: special.ask, bid: special.bid, askSource: "market" as PriceSource, bidSource: "market" as PriceSource }
+      _priceResolutionCache[key] = result
+      return result
+    }
+    if (isLoot(hrid) && hrid !== "/items/bag_of_10_cowbells") {
+      const loot = getLootPrice(hrid)
+      const result = { ask: loot.ask, bid: loot.bid, askSource: "market" as PriceSource, bidSource: "market" as PriceSource }
+      _priceResolutionCache[key] = result
+      return result
+    }
+  }
+
+  // 原始市价。注意：必须拷贝，不能直接改 getMarketDataApi() 的冻结快照
+  const priceItem = level
+    ? game.marketData?.marketData[hrid]?.[level]
+    : getMarketDataApi().marketData[hrid]?.[0]
+  const raw: MarketItemPrice = { ask: priceItem?.ask ?? -1, bid: priceItem?.bid ?? -1 }
+
+  const item = getItemDetailOf(hrid)
+  // 商店价：买入端是「花金币直接买」的真实可达价（只有 level 0 有，商店不卖强化品）；
+  //         卖出端是回收价 sellPrice
+  const shopAsk = level ? -1 : shopCoinCostOf(hrid)
+  const shopBid = (item.sellPrice ?? 0) > 0 ? (item.sellPrice as number) : -1
+
+  // 大全套（自产）价格不便宜，且 memo 缓存会被数据刷新清掉 —— 只在「确实可能用到」时才去算
+  const someMissing = raw.ask === -1 || raw.bid === -1
+  const needBigSet = settings.forceBigSet
+    || (someMissing && (settings.ask.then === "bigset" || settings.bid.then === "bigset"))
+  const bigSet = needBigSet ? getBigSetPriceOf(item.hrid) : -1
+
+  const result = resolvePriceSides({ ask: raw.ask, bid: raw.bid, shopAsk, shopBid, bigSet }, settings)
+  _priceResolutionCache[key] = result
+  return result
+}
+
 export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStatus = currentBuyStatus, sellStatus: PriceStatus = currentSellStatus): MarketItemPrice {
   if (!hrid) {
     return {
@@ -179,169 +246,44 @@ export function getPriceOf(hrid: string, level: number = 0, buyStatus: PriceStat
       bid: -1
     }
   }
-  const item = getItemDetailOf(hrid)
-  if (level) {
-    const marketItem = game.marketData?.marketData[hrid]
-    const priceItem = marketItem ? marketItem[level] : undefined
-
-    const price = {
-      ask: priceItem?.ask || -1,
-      bid: priceItem?.bid || -1
-    }
-    // 该物品在市场完全没有交易记录时（如披风等稀有掉落装备）兜底：
-    // - 卖出端(bid)：卖商店价(sellPrice)真实可达，始终保底（B/C 模式）
-    // - 买入端(ask)：模式C 用大全套（自产，含炼金折算）成本替代；模式B 保持 -1（买不到不虚报）
-    // 高等级（level>0）的兜底：买卖两端**独立**判定，避免「补了 ask 就不补 bid」的耦合缺陷。
-    // - 卖出端(bid)：卖商店价(sellPrice)真实可达，始终保底（B/C 模式）
-    // - 买入端(ask)：模式C 下该等级市场完全无记录时用大全套（自产）成本替代；
-    //   模式B 保持 -1（买不到不虚报）
-    if (isFallbackEnabled()) {
-      if ((item.sellPrice ?? 0) > 0 && price.bid === -1) {
-        price.bid = item.sellPrice
-      }
-      if (price.ask === -1 && !marketItem && useGameStoreOutside().priceFallbackMode === "C") {
-        const bigSetPrice = getBigSetPriceOf(item.hrid)
-        if (bigSetPrice >= 0) {
-          price.ask = bigSetPrice
-        }
-      }
-    }
-    // level > 0 即强化物品（+1 及以上），档位增量大 5 倍
-    return convertPriceOfStatus(price, buyStatus, sellStatus, true)
-  }
-
-  // 缓存 key 含价格模式与买卖状态：切换模式/状态后即使 watch 异步清缓存，也不会命中旧值
-  const cacheKey = `${hrid}|${useGameStoreOutside().priceFallbackMode}|${buyStatus}|${sellStatus}`
+  // 缓存 key 含兜底设置签名与买卖状态：切换设置/状态后即使 watch 异步清缓存，也不会命中旧值
+  const cacheKey = `${hrid}|${level}|${priceFallbackSignature(useGameStoreOutside().priceFallback)}|${buyStatus}|${sellStatus}`
   if (_priceCache[cacheKey]) {
     return _priceCache[cacheKey]
   }
-  const resolved = resolveLevel0Price(hrid)
-  _priceCache[cacheKey] = convertPriceOfStatus({ ask: resolved.ask, bid: resolved.bid }, buyStatus, sellStatus, false)
-  return _priceCache[cacheKey]
+  const resolved = resolvePriceOf(hrid, level)
+  // level > 0 即强化物品（+1 及以上），档位增量大 5 倍
+  const converted = convertPriceOfStatus({ ask: resolved.ask, bid: resolved.bid }, buyStatus, sellStatus, level > 0)
+  _priceCache[cacheKey] = converted
+  return converted
 }
 
 /**
- * level=0 的裸价解析（不做买卖状态转换）。
- *
- * 修复了两个会直接影响利润正确性的缺陷：
- * 1. **兜底耦合**：早期实现把 ask/bid 的兜底写在同一个 `if (ask === -1 && bid === -1)` 里，
- *    导致「模式C 已用大全套成本补上 ask」之后就再也不会用 sellPrice 兜 bid，
- *    出现「有买入价、却卖不出去(-1)」的自相矛盾状态（实测 60 件装备）。
- *    `Calculator.valid` 会把 bid = -1 的方案整条判为无效，直接污染强化/分解排名。
- * 2. **来源误标**：商店金币价会先把 ask 从 -1 改成商店价，而 getPriceSourceOf 看到 ask !== -1
- *    就判定为「市场真实成交价」，于是 14 件只能从商店买的基础装备被标成市价。
- *    现在来源在同一个函数里一次性确定，两处结果不可能再漂移。
- */
-function resolveLevel0Price(hrid: string) {
-  const cached = _priceResolutionCache[hrid]
-  if (cached) {
-    return cached
-  }
-
-  const item = getItemDetailOf(hrid)
-  const fallback = isFallbackEnabled()
-  const mode = useGameStoreOutside().priceFallbackMode
-
-  // 特殊定价（牛铃按 10 个一包折算、金币恒 1）
-  if (SPECIAL_PRICE[hrid]) {
-    const special = SPECIAL_PRICE[hrid]()
-    const result = { ask: special.ask, bid: special.bid, askSource: "market" as PriceSource, bidSource: "market" as PriceSource }
-    _priceResolutionCache[hrid] = result
-    return result
-  }
-
-  // 开包（loot）：按掉落表期望折算，视为市价
-  if (isLoot(hrid) && hrid !== "/items/bag_of_10_cowbells") {
-    const loot = getLootPrice(hrid)
-    const result = { ask: loot.ask, bid: loot.bid, askSource: "market" as PriceSource, bidSource: "market" as PriceSource }
-    _priceResolutionCache[hrid] = result
-    return result
-  }
-
-  // 注意：必须拷贝，不能直接改 getMarketDataApi() 的冻结快照
-  const market = getMarketDataApi().marketData[item.hrid]?.[0]
-  let ask = market?.ask ?? -1
-  let bid = market?.bid ?? -1
-  let askSource: PriceSource = ask !== -1 ? "market" : "none"
-  let bidSource: PriceSource = bid !== -1 ? "market" : "none"
-
-  // 卖出端兜底：卖商店价真实可达，与买入端无关（B/C 模式）
-  if (fallback && bid === -1 && (item.sellPrice ?? 0) > 0) {
-    bid = item.sellPrice
-    bidSource = "shop"
-  }
-
-  // 买入端：商店可金币购买时，取「市场价与商店价中更便宜的一个」
-  const shopCost = shopCoinCostOf(hrid)
-  if (shopCost >= 0 && (ask === -1 || shopCost < ask)) {
-    ask = shopCost
-    askSource = "shop"
-  }
-
-  // 买入端兜底：模式C 用大全套（自产）成本替代；模式B 保持 -1（买不到不虚报）
-  if (fallback && ask === -1 && mode === "C") {
-    const bigSetPrice = getBigSetPriceOf(item.hrid)
-    if (bigSetPrice >= 0) {
-      ask = bigSetPrice
-      askSource = "selfcraft"
-    }
-  }
-
-  const result = { ask, bid, askSource, bidSource }
-  _priceResolutionCache[hrid] = result
-  return result
-}
-
-function isFallbackEnabled() {
-  return useGameStoreOutside().priceFallbackMode !== "A"
-}
-
-/**
- * 价格来源（运行时实时判定，随 marketData / 兜底模式动态变化，不写死任何物品）：
+ * 价格来源（运行时实时判定，随 marketData / 兜底设置动态变化，不写死任何物品）：
  * - market：市场有真实成交记录（含开包折算、特殊定价）
- * - shop：市场无记录，价格来自商店（卖出端 bid 用 sellPrice 兜底 或 买入端商店金币购买价）
- * - selfcraft：仅买入端(ask)：市场无记录，被大全套（自产）成本兜底（模式C）
- * - none：市场无记录、无商店价、不可自产 → -1（无价）
+ * - cross：**借用另一端**的市价（左价借右价 / 右价借左价）—— 数字来自真实成交，但方向是反的
+ * - shop：商店价（买入端 = 花金币直接买；卖出端 = 回收价）
+ * - selfcraft：大全套（自产）成本估值
+ * - none：确实无价 → -1
  */
-export type PriceSource = "market" | "shop" | "selfcraft" | "none"
+export type PriceSource = FallbackSource
 
-/** 该物品当前价格的真实来源（ask=买入端 / bid=卖出端）；用于 UI 标注「非真实市场价」的场景，杜绝把兜底价误当市价。 */
+/** 该物品当前价格的来源（ask=买入端 / bid=卖出端）；用于 UI 标注「非真实市价」，杜绝把兜底价误当市价。 */
 export function getPriceSourceOf(hrid: string, level: number = 0, type: "ask" | "bid" = "ask"): PriceSource {
   if (!hrid) {
     return "none"
   }
-  const item = getItemDetailOf(hrid)
-  if (level) {
-    const priceItem = game.marketData?.marketData[hrid]?.[level]
-    if (priceItem && (type === "bid" ? priceItem.bid !== -1 : priceItem.ask !== -1)) {
-      return "market"
-    }
-    // 市场无该等级记录：卖出端用 sellPrice 兜底（B/C）；买入端模式C 用大全套（含炼金折算）兜底
-    if (isFallbackEnabled()) {
-      if (type === "ask" && useGameStoreOutside().priceFallbackMode === "C" && getBigSetPriceOf(item.hrid) >= 0) {
-        return "selfcraft"
-      }
-      if ((item.sellPrice ?? 0) > 0) {
-        return "shop"
-      }
-    }
-    return "none"
-  }
-  if (SPECIAL_PRICE[hrid] || (isLoot(hrid) && hrid !== "/items/bag_of_10_cowbells")) {
-    return "market"
-  }
-  // 与 getPriceOf 共用同一套解析结果，杜绝「价格取自商店、来源却标成市场」的漂移
-  const resolved = resolveLevel0Price(hrid)
+  const resolved = resolvePriceOf(hrid, level)
   return type === "bid" ? resolved.bidSource : resolved.askSource
 }
 
-/** 该物品当前是否正被兜底（价格来源非市场价）。方案A下恒为 false。 */
-export function isPriceFallbackOf(hrid: string, level: number = 0): boolean {
-  if (!isFallbackEnabled()) {
-    return false
-  }
-  const source = getPriceSourceOf(hrid, level)
-  return source === "shop" || source === "selfcraft"
+/**
+ * 该物品当前是否正被兜底（来源不是真实市价）。
+ * 两侧独立判定 —— 旧版固定只看 ask，会把「只有右价被兜底」的情况说成没兜底。
+ */
+export function isPriceFallbackOf(hrid: string, level: number = 0, type: "ask" | "bid" = "ask"): boolean {
+  const source = getPriceSourceOf(hrid, level, type)
+  return source === "cross" || source === "shop" || source === "selfcraft"
 }
 
 // #region 大全套价格（模式C：市场无价物品用自产成本兜底）

@@ -329,7 +329,7 @@ AIGC:
 - **迷宫（重要）**：`data.json` 已是 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。§八「功能D：卷轴排查结论」里「当前 data.json 无迷宫玩法」的判断**基于旧版本，已失效**。
 - **市场历史（§12 的补充）**：归档已从 v1 单文件 `market_history.json` 升级为 **v2 分片** `market_history_<UTC日>T<HH>.json`（UTC 6 小时一块、字典编码、滚动 7 天 / 168 点；前端按窗口**按需只拉 1~2 片**，取不到才回退 v1 文件）。§12.2 中「上限 520 点」「前端按 `<BASE_URL>data/market_history.json` 拉取」已不适用于 v2。
 - **`game.ts` 行数**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 30 文件 / 188 用例**，见 §二十一）。
+- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 32 文件 / 209 用例**，见 §二十一）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 13.3 有意不改的项
@@ -340,7 +340,7 @@ AIGC:
 
 ```bash
 npx vue-tsc --noEmit   # 通过，无输出
-npx vitest run         # 24 个测试文件 / 100 个用例，全绿（§13 审计当时；当前 30 / 188，见 §二十一）
+npx vitest run         # 24 个测试文件 / 100 个用例，全绿（§13 审计当时；当前 32 / 209，见 §二十一）
 npx eslint .           # 仅剩排版类问题（构建产物造成的 21.6 万条误报已消除）
 ```
 
@@ -637,7 +637,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 - `ActionDetail.vue` 底部挂载（所有检索页共用该弹窗，一处接入全站可用）。
 
 ### 20.4 验证
-- `vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` 双模式成功；
   dev server 下三个新/改模块均可被 Vite 正常编译。
 - 手算样例验算：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
   目标 500 → 材料临界价 230、成品临界价 729.1667，代回利润均精确等于 500 ✓
@@ -663,7 +663,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
   新增纯函数 `SolveUnit` / `HOURS_PER_DAY` / `toProfitPHOf` / `fromProfitPHOf` / `resolveTargetProfitPH`。
 - 测试从 9 个用例增到 **15 个**：新增「日薪 = 时薪 × 24 与往返一致」「两种口径解出的临界价相同」
   「留空回落当前值」「**0 是有效目标**」「日薪数额换算成时薪」5 项。
-- 验证：`vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` public/private 均成功；
+- 验证：`vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` public/private 均成功；
   dev server 下两个模块均编译通过；lint 非风格问题 0。
 - 顺带：`i18n` 的 key 就是中文原文，所以改中文文案等于**换 key**——
   新键已补进 `en.ts` / `zh-tw.ts`，被替换的旧键同时删除（不留孤儿键）。
@@ -710,7 +710,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 需由物品反推 action）。
 
 ### 21.5 验证
-- `vue-tsc` 通过；`vitest` **30 文件 / 188 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
+- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
 - 默认值复现：decompose 成本 `2239964909.22` 对 `2239964909.22`、总耗时 **1.000000 小时**；transmute 同。
 - 枚举闭环：6 个动作样本全部 `available = true`；制造样本反推为 `tailoring`、采集为 `foraging`。
   数量：强化 532 / 分解 742 / 转化 622 / 点金 889 / 制造 647 / 采集 26。
@@ -744,3 +744,46 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ⚠️ 另有历史遗留的 git 对象损坏（`assets/vue-8ikB7t_e.js` 的 blob，`git fsck` 报 `missing blob`），
 已从当前树删除但旧提交仍引用，`git fetch` 收尾的 `geometric-repack` 会因此报错。
+
+## 二十三、无市价兜底重做：从 A/B/C 三档改为左右解耦的优先级链（2026-10-03）
+
+起因：用户要求「需要右价时没右价就用左价、需要左价时没左价就用右价、两端都没有就用大全套、
+还能手动强制用大全套」，要**灵活、自由度高、可选解耦**。旧的一个枚举同时管两侧，表达不了这些组合。
+
+### 23.1 新模型
+
+| 位置 | 内容 |
+| --- | --- |
+| `src/common/utils/price-fallback.ts`（新增，纯函数） | `resolvePriceSides` 是唯一解析出口；另有 `priceFallbackSignature`（进缓存 key）、`migrateLegacyMode`、`normalizePriceFallback` |
+| `src/pinia/stores/game.ts` | `priceFallbackMode` → `priceFallback: PriceFallbackSettings`（左右各一条链 + `forceBigSet`）；localStorage key 由 `price-fallback-mode` 迁到 `price-fallback`（**旧 key 保留**，可回退） |
+| `src/common/apis/game/index.ts` | `resolveLevel0Price` + level>0 内联分支 → **统一为 `resolvePriceOf(hrid, level)`**，`getPriceOf` 与 `getPriceSourceOf` 共用 |
+| `src/pages/dashboard/components/GameInfo.vue` | 原「三档下拉」→ 弹出式设置：**左价 / 右价各自独立**的「借另一端」开关 + 「仍无着落时用啥」下拉，外加「强制大全套」与「恢复默认」 |
+
+默认链 = `ask: {cross:true, then:"bigset"}`、`bid: {cross:true, then:"bigset"}`。
+商店价保留为可选手段（`then: "shop"`），**并且**保留旧实现里"商店比市价便宜时改用商店价"这个
+真实可达买价的优化（现在是可选项，不是默认行为）。
+
+### 23.2 顺带修掉的两个真实缺陷（都是这次调查实测出来的）
+
+1. **level>0 来源标记与价格漂移**：旧实现 level>0 单独写判定，条件与 level=0 不一致
+   （ask 兜底多要求 `!marketItem`；来源却对 ask 也返回 `shop`，而 level>0 的 ask 根本不存在商店价路径）。
+   实测：**模式 B 1402 条、模式 C 1404 条**（bid 端 0 条），UI 表现为「-1 却标成【商店】/【自产】」。
+   数字本身是对的（走 `getPriceOf`），且 `selfProduceStat` 有 `ing.price <= 0 → continue` 守卫，
+   所以**只是标签问题**。现在两侧共用一个解析函数，结构上不可能再漂移。
+2. **切换设置后同一 tick 读到旧结果**：旧 `_priceResolutionCache` 的 key 只有 hrid，
+   清缓存靠异步 watch。现在兜底设置签名进了 key。
+
+`PriceSource` 相应增加 `cross`（借用另一端），UI 标注【借另一端】并提示「方向相反，仅供参考」。
+
+### 23.3 验证
+
+- `vue-tsc` 通过；`vitest` **32 文件 / 209 用例全绿**
+- 新增 `tests/price-fallback-strategies.test.ts`（17 用例，纯函数，含 **360 组策略矩阵**不变量断言）
+  与 `tests/price-fallback-integration.test.ts`（4 用例，真实数据）
+- 实测：全物品 × 多等级共 **2163 个组合，来源与价格 0 漂移**；来源分布
+  `market 1306 / selfcraft 2506 / cross 76 / none 438`
+- 旧 A/B/C 行为**无损保留**：`bigset-c-verify` 在新预设下仍为「兜底对象 144 件、ask 全被大全套覆盖、
+  bid=sellPrice」；「模式 A 无任何兜底」仍为 0
+- `vite build` public/private 均成功；lint 非风格问题 0（`ActionPrice.vue` 那条 `define-macros-order` 是既有问题）
+- i18n：新增 19~22 个键，并**删掉 8 个因 A/B/C 下线而失效的旧键**
+  （用全仓扫描 `t("...")` 确认无引用，不靠印象）

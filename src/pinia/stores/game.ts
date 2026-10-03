@@ -4,8 +4,10 @@ import type { EnhanceCalculator } from "@/calculator/enhance"
 import type { ManufactureCalculator } from "@/calculator/manufacture"
 
 import type { WorkflowCalculator } from "@/calculator/workflow"
+import type { FallbackSide, PriceFallbackSettings } from "@/common/utils/price-fallback"
 import type { Action, GameData, NoncombatStatsKey } from "~/game"
 import type { Market, MarketData, MarketDataPlain, MarketItemPrice } from "~/market"
+import { DEFAULT_PRICE_FALLBACK, migrateLegacyMode, normalizePriceFallback } from "@/common/utils/price-fallback"
 import { defineStore } from "pinia"
 import locales, { getTrans } from "@/locales"
 import { pinia } from "@/pinia"
@@ -122,7 +124,7 @@ export const useGameStore = defineStore("game", {
     secret: loadSecret(),
     buyStatus: loadBuyStatus(),
     sellStatus: loadSellStatus(),
-    priceFallbackMode: loadPriceFallbackMode()
+    priceFallback: loadPriceFallback()
   }),
   actions: {
     async tryFetchData() {
@@ -198,10 +200,22 @@ export const useGameStore = defineStore("game", {
       // saveSellStatus(this.sellStatus)
       this.clearAllCaches()
     },
-    setPriceFallbackMode(mode: "A" | "B" | "C") {
-      this.priceFallbackMode = mode
-      savePriceFallbackMode(mode)
+    /** 整份设置替换（左右两侧 + 强制大全套） */
+    setPriceFallback(settings: PriceFallbackSettings) {
+      this.priceFallback = settings
+      savePriceFallback(settings)
+      // 检索类缓存要清；价格缓存的 key 含设置签名，会自然 miss，不依赖清缓存时机
       this.clearAllCaches()
+    },
+    /** 只改单侧 —— 左右解耦，UI 上就是两个独立控件 */
+    setPriceFallbackSide(side: "ask" | "bid", patch: Partial<FallbackSide>) {
+      this.setPriceFallback({
+        ...this.priceFallback,
+        [side]: { ...this.priceFallback[side], ...patch }
+      })
+    },
+    setPriceFallbackForceBigSet(force: boolean) {
+      this.setPriceFallback({ ...this.priceFallback, forceBigSet: force })
     },
     resetPriceStatus() {
       this.buyStatus = loadBuyStatus()
@@ -443,14 +457,34 @@ function loadSellStatus() {
   return PriceStatus.BID
 }
 
-type PriceFallbackMode = "A" | "B" | "C"
-
-function loadPriceFallbackMode(): PriceFallbackMode {
-  const v = localStorage.getItem(`${KEY_PREFIX}price-fallback-mode`)
-  return v === "A" ? "A" : v === "C" ? "C" : "B"
+/**
+ * 读取兜底设置。
+ *
+ * 迁移：旧版是 A/B/C 三档（一个枚举同时控制左右两侧）。这里把用户**当年显式选过**的档位
+ * 映射成最接近的新配置，**不擅自改他的意图**；从没设置过的走新默认链（借另一端 → 大全套）。
+ * 旧 key 保留不删，万一要回退还能用。
+ */
+function loadPriceFallback(): PriceFallbackSettings {
+  const raw = localStorage.getItem(`${KEY_PREFIX}price-fallback`)
+  if (raw) {
+    try {
+      return normalizePriceFallback(JSON.parse(raw))
+    } catch {
+      // 落库数据被手改坏时退回默认，不让整个应用起不来
+    }
+  }
+  const legacy = localStorage.getItem(`${KEY_PREFIX}price-fallback-mode`)
+  if (legacy === "A" || legacy === "B" || legacy === "C") {
+    return migrateLegacyMode(legacy)
+  }
+  return {
+    ask: { ...DEFAULT_PRICE_FALLBACK.ask },
+    bid: { ...DEFAULT_PRICE_FALLBACK.bid },
+    forceBigSet: false
+  }
 }
-function savePriceFallbackMode(mode: PriceFallbackMode) {
-  localStorage.setItem(`${KEY_PREFIX}price-fallback-mode`, mode)
+function savePriceFallback(settings: PriceFallbackSettings) {
+  localStorage.setItem(`${KEY_PREFIX}price-fallback`, JSON.stringify(settings))
 }
 
 export function useGameStoreOutside() {
