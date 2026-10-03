@@ -700,21 +700,28 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ---
 
-## 二十二、推送：本机网络受限，改用 `一键推送.bat`（2026-10-03）
+## 二十二、推送受阻的真实原因与 `一键推送.bat`（2026-10-03，含同日订正）
 
-本轮把工作区攒下的成果整理成两个提交后**推送失败**，实测结论如下（**不是仓库的问题**）：
+> **订正**：本轮最初把推送失败归因为「出口代理按域名白名单放行、`github.com` 不在名单里」。
+> **那个结论是错的** —— 当时的探测跑在受沙箱代理影响的 shell 里，测的是沙箱出口，不是本机。
+> 同日重测后的正确结论如下。
 
-- 出口代理 `HTTP_PROXY=http://127.0.0.1:13923` 对 **`github.com` 返回 `CONNECT tunnel failed, response 502`**；
-  绕过代理直连则是 `Failed to connect to github.com:443`（本机无直连出口）。
-- 同一代理对 **`api.github.com` 返回 200**、`codeload.github.com` 返回 301 —— 说明它是**按域名白名单放行**，
-  `github.com` 不在名单里。所以 `git fetch/push` 一律走不通，**与凭据无关**
-  （`credential.helper=store`，`~/.git-credentials` 存在）。
+1. **真正的阻塞：PAT 缺 `workflow` scope。** API 实测 `x-oauth-scopes: repo`（只有 `repo`）。
+   本次推送会改 `.github/workflows/deploy.yml` / `release.yml`，GitHub 对这类推送硬性要求 token 带
+   `workflow`，否则 `! [remote rejected] ... without 'workflow' scope`。
+   **加权限即可**（https://github.com/settings/tokens），**与网络无关**。
+2. **网络是「偶发抖动」，不是不通。** `hosts` 被 **Steam++（Watt Toolkit）** 写入 100+ 条
+   `127.0.0.1 <域名>`（github / twitch / steam / huggingface …），本机 `443` 的监听者是
+   `Steam++.Accelerator.exe`。但它的本地反代是通的：走 hosts 与走真实 IP 探测 `git-receive-pack`
+   都返回 `401`（=需要认证），`git push --dry-run` 能拿到 `200`。只是偶尔 `Connection was reset`。
+3. **另有凭据助手打架**：`PortableGit/etc/gitconfig` 的 `credential.helper=helper-selector` 与
+   `~/.gitconfig` 的 `store` 并存；前者被调用时会弹 GCM 的「CredentialHelperSelector」窗并**阻塞等待**，
+   表现为 push 卡住。想只用 `~/.git-credentials` 里的 PAT，把列表显式重置为 `""`（清空）+ `store`。
 
-**因此新增仓库根目录的 `一键推送.bat`**（双击即可，与既有的 `一键部署.bat` / `超级一键部署.bat` 同一套约定）：
-清 DNS → 校验 git 与远程 → 列出待推提交 → `git push`；失败时**自动清空代理变量重试一次**，
-再失败就打印可操作的排查提示。脚本为 ASCII-only + CRLF（避开 cmd 代码页问题），
-开头 `chcp 65001` 让中文提交标题正常显示。
+**因此新增仓库根目录的 `一键推送.bat`**（双击即可，与既有 `一键部署.bat` 同一套约定）：
+清 DNS → 校验 git 与远程 → **预检待推提交是否触及 `.github/workflows/`** → `git push`；
+失败时按日志**分类**给结论（workflow scope / 网络 / 凭据），而不是笼统地说「网络问题」。
+脚本 ASCII-only + CRLF，开头 `chcp 65001` 让中文提交标题可读。
 
-⚠️ 另有一个**历史遗留的 git 对象损坏**：`assets/vue-8ikB7t_e.js` 的 blob（`git fsck` 报 `missing blob`）。
-它是早先误提交的构建产物，本轮已从当前树中删除，但**旧提交仍引用它**，`git fetch` 收尾的
-`geometric-repack` 会因此报错。彻底修复需要从远端重新取回该对象——请知悉后再决定是否处理。
+⚠️ 另有历史遗留的 git 对象损坏（`assets/vue-8ikB7t_e.js` 的 blob，`git fsck` 报 `missing blob`），
+已从当前树删除但旧提交仍引用，`git fetch` 收尾的 `geometric-repack` 会因此报错。

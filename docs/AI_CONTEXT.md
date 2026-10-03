@@ -113,9 +113,30 @@ Milky Way Idle 玩家自用的**利润计算工具**：纯前端 SPA、无后端
     - 零依赖的纯工具要单独成文件（如 `marketvolume/keys.ts`），需要它的 store / 纯函数模块**直接从该文件引**，不要走 barrel；
     - 测试里若要 **真数据**，顺序必须是「**先写 localStorage → 再建 store → 最后动态 import 数据层**」。静态 import 任何会拉到 game 的模块都会先于播种执行。
 12. **给 store 的状态赋值时不要用「展开 reactive 对象」构造新值**：`@/common/apis/game` 的模块级 watch 会做 `structuredClone(toRaw(store.marketData))`，而 `toRaw` **只解顶层**——`{ ...store.marketData }` 这类写法会把嵌套的 reactive 代理对象原样带进新值，于是直接抛 `DataCloneError: #<Object> could not be cloned`。要改市场数据请赋一个**全新字面量**（或先 `toRaw` 再逐层处理），别从 `store.xxx` 上展开。
-13. **本机 `git push` / `git fetch` 到 GitHub 会失败，不是仓库的问题**（2026-10-03 实测）：出口代理（`HTTP_PROXY=http://127.0.0.1:13923`）对 **`github.com` 返回 `CONNECT tunnel failed, response 502`**，而绕过代理直连是 `Failed to connect to github.com:443`（本机无直连出口）。同一代理对 **`api.github.com` 返回 200**、`codeload.github.com` 301 —— 即**按域名白名单放行**，`github.com` 不在名单里。
-    - 因此**不要反复重试 `git push`**，也不用怀疑凭据（`credential.helper=store`，`~/.git-credentials` 存在）。
-    - 提交照常在本地做；推送交给仓库根目录的 **`一键推送.bat`**（双击即可；会 flush DNS、列出待推提交、`git push`，失败时自动清空代理变量重试一次，并打印可操作的排查提示）。
+13. **`git push` 被拒的真因：token 缺 `workflow` scope（不是网络问题）**（2026-10-03 订正）：
+    用 API 实测核实 —— `x-oauth-scopes: repo`，**只有 `repo`**。本次推送会改
+    `.github/workflows/deploy.yml` / `release.yml`，而 GitHub 对「会新增/修改 workflow 文件」的推送
+    硬性要求 token 带 `workflow` 权限，否则直接拒收：
+    `! [remote rejected] main -> main (refusing to allow a Personal Access Token to create or update workflow ... without 'workflow' scope)`。
+    - **修复**：给该 classic PAT 勾上 `workflow`（https://github.com/settings/tokens → 点开该 token → 勾选 workflow → Update），重推即可，无需重克隆。
+    - **易误判点**：同一时刻 `git push` 可能先报 `Recv failure: Connection was reset` / `Empty reply from server`（见第 14 条），
+      只有**连上服务器的那一次**才会露出真正的 `remote rejected`。别一看到 reset 就断定「网络不通」。
+14. **本机 `github.com` 被 Steam++（Watt Toolkit）改写了 hosts**（2026-10-03 实测）：
+    `C:\Windows\System32\drivers\etc\hosts` 里有 **100+ 条 `127.0.0.1 <域名>`**（github / twitch / steam / huggingface / greasyfork …），
+    而本机 `443` 的监听者是 **`Steam++.Accelerator.exe`** —— 它把域名指到本机、再在本地反代出去。
+    - 反代**本身是通的**：`GET .../info/refs?service=git-receive-pack` 走 hosts 与走真实 IP 都返回 `401`（=需要认证），
+      `git push --dry-run` 也能拿到 `200 OK`。所以它只是**偶发抖动**（push 偶尔 `Connection was reset`），不是根因。
+    - 想单独验证链路：`curl -I --resolve github.com:443:20.205.243.166 https://github.com`（绕过 hosts 直连真实 IP）。
+    - 若推送老是抖：临时退出 Steam++，或关掉它的 GitHub 加速。
+15. **凭据助手有两个来源，会弹 GCM 的「CredentialHelperSelector」框**（2026-10-03 实测）：
+    `git config --show-origin --get-all credential.helper` 会同时列出
+    `system`（WorkBuddy 自带 PortableGit 的 `etc/gitconfig`）= `helper-selector` 与 `global`（`~/.gitconfig`）= `store`。
+    `helper-selector` 被调用时**会弹窗**让你选 `<no helper> / manager / wincred` 并**阻塞等待** —— 表现为「push 卡住不动」。
+    想让 `~/.git-credentials` 里的 PAT 直接生效、彻底不再弹窗，把列表显式重置为只有 `store`：
+    `git config --global --unset-all credential.helper`，然后
+    `git config --global --add credential.helper ""`（空值 = 清空从 system 继承来的列表），再
+    `git config --global --add credential.helper store`。
+    - 提交照常在本地做；推送可交给仓库根目录的 **`一键推送.bat`**（双击即可；flush DNS → **预检待推提交是否触及 `.github/workflows/`** → `git push`，并按日志分类给出 workflow / 网络 / 凭据三种结论）。
     - 附带发现：仓库里有一个**损坏的 git 对象** —— `assets/vue-8ikB7t_e.js` 的 blob（`git fsck` 报 `missing blob`，`git fetch` 收尾的 `geometric-repack` 会因此报错）。它是历史误提交的构建产物，已被删除出当前树；**旧提交仍引用它**，如需彻底修复得从远端重新取回该对象。
 
 ## 7. 常规工作流（AI 接手后）
