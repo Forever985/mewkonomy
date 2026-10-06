@@ -58,9 +58,43 @@ const defaultConfig = {
   expectationFactor: 1
 }
 
-onMounted(() => {
-  enhancerStore.hrid && onSelect(getItemDetailOf(enhancerStore.hrid))
-})
+/**
+ * 「去强化」带入装备：**监听 hrid 变化**，而不是只在 `onMounted` 读一次。
+ *
+ * ## 为什么不能只靠 onMounted
+ *
+ * 11 个利润页的「去强化」都是同一个模式：跳转前写 `enhancerStore.config.hrid`，
+ * 目标页自己读。原本目标页只在 `onMounted` 读一次 —— 这在「每次都重新挂载」时成立，
+ * 但只要目标页实例被复用（keep-alive 命中、或从 A 页跳 B 页时组件未销毁），
+ * `onMounted` 就**不会再执行**，第二次点击带的装备自然看不到。
+ *
+ * 实测（2026-10-06）：`pages/enhancer/index.vue` 编译后 `__name` 是 `"index"`
+ * （由文件名推断），而 `AppMain` 的 `keep-alive :include="cachedViews"` 传的是
+ * **路由名** `"Enhancer"`，两者对不上 ⇒ 缓存是否命中取决于构建产物细节，
+ * 属于「不能依赖」的隐式行为。改成监听后，两种情况都成立。
+ *
+ * ## 为什么要排除「自己写回自己」
+ *
+ * `onSelect`（第 109 行）会把 `config.hrid` 写成 `item.hrid`。
+ * 若监听器无条件响应 hrid 变化，选中装备 A → 写 hrid=A → 监听器再次触发 onSelect(A)，
+ * 形成自激循环。用 `carriedHrid` 记住「当前界面正在显示哪件」即可切断：
+ * 只有外部（利润页跳转）改了 hrid 且与当前显示不同，才重新选中。
+ */
+const carriedHrid = ref<string>()
+
+function syncFromStore() {
+  const hrid = enhancerStore.hrid
+  if (hrid && hrid !== carriedHrid.value) {
+    carriedHrid.value = hrid
+    onSelect(getItemDetailOf(hrid))
+  }
+}
+
+// immediate 覆盖「首次进入」；后续变化覆盖「组件被复用时再次点击去强化」
+watch(() => enhancerStore.hrid, syncFromStore, { immediate: true })
+
+// 被 keep-alive 缓存时（第二次点击可能不重新挂载），激活时也要对齐一次
+onActivated(syncFromStore)
 
 watch(
   () => enhancerStore.config,
@@ -106,6 +140,9 @@ function onSelect(item: ItemDetail) {
   if (!item) {
     return
   }
+  // 记录「当前界面显示的是哪件」：既让 syncFromStore 能识别重复选中，
+  // 也让 onSelect 里对 config.hrid 的写回不再被监听器当成一次外部切换。
+  carriedHrid.value = item.hrid
   enhancerStore.config.hrid = item.hrid
   currentItem.value = {
     hrid: item.hrid,

@@ -312,13 +312,14 @@ const onPriceStatusChange = usePriceStatus("dashboard-price-status")
  * 只跳不带的话看到的还是上次残留的装备，还得手动重选，这个按钮就没意义了。
  *
  * `enhancerStore.hrid` 是 `config.hrid` 的 getter（`stores/enhancer.ts:67`），
- * 强化页 `onMounted` 会读它并自动选中（`pages/enhancer/index.vue:61-63`）：
+ * 强化页**监听**它并自动选中（`pages/enhancer/index.vue`）：
  *
- *     onMounted(() => {
- *       enhancerStore.hrid && onSelect(getItemDetailOf(enhancerStore.hrid))
- *     })
+ *     watch(() => enhancerStore.hrid, syncFromStore, { immediate: true })
+ *     onActivated(syncFromStore)
  *
- * ⇒ 跳转前写好 `config.hrid`，强化页挂载时自己就会选中。
+ * ⇒ 跳转前写好 `config.hrid`，强化页自己就会选中。
+ * ⚠️ 监听而非「只在 `onMounted` 读一次」：目标页实例被复用时（keep-alive 命中）
+ * `onMounted` 不会重跑，第二次点击就带不进装备 —— 见 PROJECT_CONTEXT §31。
  * 状态走全局 store，**地址栏保持干净**。
  *
  * 只覆盖 hrid：起始/目标等级、逃逸等级、时薪、税率等**是玩家调好的计算条件**，

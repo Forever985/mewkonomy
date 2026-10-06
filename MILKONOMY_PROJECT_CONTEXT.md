@@ -978,11 +978,16 @@ function gotoEnhancer() {
 | 事实 | 位置 |
 | --- | --- |
 | `enhancerStore.hrid` 是 `config.hrid` 的 **getter**（同一个值） | `pinia/stores/enhancer.ts:67` |
-| 强化页挂载时读它并自动选中装备 | `pages/enhancer/index.vue:61-63`：`onMounted(() => { enhancerStore.hrid && onSelect(getItemDetailOf(enhancerStore.hrid)) })` |
+| 强化页**监听** `hrid` 变化并自动选中装备 | `pages/enhancer/index.vue`：`watch(() => enhancerStore.hrid, syncFromStore, { immediate: true })` + `onActivated(syncFromStore)`（2026-10-06 由 `onMounted` 改监听，见 §31） |
 | 每行的 `row.hrid` 现成可用 | 模板里已在用：`jungle/index.vue:155` 的 `<ItemIcon :hrid="row.hrid" />` |
 | `Calculator` 实例的 `hrid` 来自构造参数第��项 | `src/calculator/index.ts:40-42` |
 
-⇒ **跳转前写 `config.hrid = row.hrid`，强化页挂载时自己就会选中那一件。**
+⇒ **跳转前写 `config.hrid = row.hrid`，强化页会自己选中那一件。**
+
+⚠️ **2026-10-06 修正**：本节原先写的是「强化页**挂载时**读它」，
+即目标页只在 `onMounted` 读一次。该实现在目标页实例被复用时失效
+（表现为「第二次点击去强化带不进装备」），已改为**监听 hrid 变化**。
+详见 §31；上面的表已同步为修复后的表述。
 
 ### 28.2 实现
 
@@ -1020,7 +1025,12 @@ composable / 路由跳转这类**组件 setup 之外**的场景拿不到当前 p
 | `vitest` | **39 文件 / 350 用例全绿** |
 | `vite build --mode public` | 成功；产物中 `config.hrid` 命中 6 个 chunk、新文案命中 1 个 |
 | dev server 编译 | 7 个相关模块全部 **HTTP 200** |
-| **运行时链路**（最关键） | 编译产物里逐段确认：<br>① `gotoEnhancer(row)` 里 `useEnhancerStoreOutside().config.hrid = row.hrid`<br>② store 产物里 `hrid` getter + `useEnhancerStoreOutside` 各 1 处<br>③ 强化页产物里 `onMounted(() => { enhancerStore.hrid && onSelect(...) }`<br>④ 模板 4 个抽验页均传 `row` |
+| **运行时链路**（最关键） | 编译产物里逐段确认：<br>① `gotoEnhancer(row)` 里 `useEnhancerStoreOutside().config.hrid = row.hrid`<br>② store 产物里 `hrid` getter + `useEnhancerStoreOutside` 各 1 处<br>③ 强化页产物里读取 `enhancerStore.hrid` 并调用 `onSelect`<br>④ 模板 4 个抽验页均传 `row` |
+
+⚠️ **2026-10-06 修正**：③④ 原先逐字锁定的是 `onMounted(...)` 那段代码。
+「锁定具体实现」本身没错，但**当那段实现被证明有缺陷时，它就成了枷锁** ——
+测试全绿却漏掉了「第二次点击失效」。现已改为按**行为**（hrid 变化 → 选中跟随）
+锁定，见 §31 与 `tests/goto-enhancer-carryover.test.ts`。
 
 ### 28.5 顺带修正的过时表述（9 处）
 
@@ -1254,3 +1264,104 @@ function targetLevelsOf(params) {
    ⇒ `expect2 is not a function`。改名 `expectCount` 后通过。
 2. 全量测试时忘删 `tests/_probe-fix.test.ts`，被算进 39 个文件里报 3 个失败
    ⇒ 删掉后 38/345 全绿。**探针文件用完必须删**。
+
+---
+
+## 三十一、「去强化」第二次点击带不进装备（2026-10-06）
+
+### 31.1 现象
+
+用户亲测：在 `enhanposer` 页第二次点击行尾「去强化」，强化页**没有带上**该行的装备。
+第一次点击正常。
+
+### 31.2 根因（实测确认，非推断）
+
+「去强化」是**写 store / 读 store** 的跨页契约：
+
+```ts
+// 写入侧（useLeaderboardPage.gotoEnhancer，11 个利润页共用）
+useEnhancerStoreOutside().config.hrid = row.hrid
+router.push({ name: "Enhancer" })
+
+// 读取侧（pages/enhancer/index.vue）—— 缺陷所在
+onMounted(() => {
+  enhancerStore.hrid && onSelect(getItemDetailOf(enhancerStore.hrid))
+})
+```
+
+**写入侧一直是对的**（实测两次点击后 `store.config.hrid` 均正确）。
+问题在读取侧：**只在 `onMounted` 读一次**。
+只要目标页实例被复用，`onMounted` 就不再执行 ⇒ 界面停在上一次的装备。
+
+**关键实测（`vitest` + `vite` transformRequest）**：
+
+| 环节 | 实测结果 |
+| --- | --- |
+| `pages/enhancer/index.vue` 编译后组件名 | `__name: "index"`（由**文件名** `index.vue` 推断） |
+| `AppMain` 的 `keep-alive :include` 传的值 | **路由名** `"Enhancer"`（`tagsViewStore.cachedViews`） |
+| 两者是否匹配 | **对不上** ⇒ 缓存是否命中取决于构建产物细节 |
+
+也就是说「目标页会不会被复用」本身是**隐式且不可依赖**的行为 ——
+即便当前构建恰好每次都重建，换个构建配置就会静默失效。
+**结论：不能把「一定会重新挂载」当作前提。**
+
+### 31.3 为什么之前的四层验证没抓到
+
+§28 的验证逐字锁定了产物里的 `onMounted(...)` 那段代码，测试全绿却漏掉了这个缺陷：
+**锁定「实现」在实现有缺陷时就是枷锁**。测试应锁「行为」——
+「hrid 变化 ⇒ 选中跟随」，而不是「某段代码存在」。
+
+### 31.4 修复
+
+`pages/enhancer/index.vue` 与 `pages/enhancest/index.vue`（超级强化，同款缺陷）：
+
+```ts
+const carriedHrid = ref<string>()
+
+function syncFromStore() {
+  const hrid = enhancerStore.hrid
+  if (hrid && hrid !== carriedHrid.value) {
+    carriedHrid.value = hrid
+    onSelect(getItemDetailOf(hrid))
+  }
+}
+
+watch(() => enhancerStore.hrid, syncFromStore, { immediate: true })
+onActivated(syncFromStore)
+```
+
+要点：
+1. **`immediate: true`** 覆盖首次进入；**后续变化**覆盖组件被复用时的再次点击；
+   **`onActivated`** 兜住 keep-alive 激活路径。三条路径都成立。
+2. **`carriedHrid` 用来切断自激循环**：`onSelect` 内会执行
+   `config.hrid = item.hrid`（第 145 行），若监听器无条件响应就会无限自我触发。
+   只有「与当前显示不同」才重新选中。
+3. 命名避开 `enhancer/index.vue` 中既有的局部变量 `selectedHrid`（保护符选中项，第 381 行），
+   故新变量叫 `carriedHrid`（"带过来的 hrid"）。
+
+### 31.5 测试
+
+新增 `tests/goto-enhancer-carryover.test.ts`（**3 个用例**）：
+1. **原缺陷点**：同一实例不卸载，外部连续改 hrid 两次都应跟随；静置后不自激
+2. **只覆盖 hrid**：目标等级 / 件数 / 工时费等玩家预设必须保留（守住 §28.3 的设计）
+3. **无效 hrid 不崩、不清空当前选择**（`onSelect` 的 `!item` 早退路径）
+
+**反向验证**：`git stash` 回退源码后重跑 ⇒ **2 failed | 1 passed**，
+失败信息正是 `expected '...advanced_foraging_charm' to be '...alchemists_bottoms'`
+（第二次点击仍停在第一件装备）。**测试确实能抓住这个 bug，不是摆设。**
+
+### 31.6 验证
+
+`vue-tsc` **0 报错**；`vitest` **40 文件 / 353 用例全绿**（上轮 39/350，+1 文件 +3 用例）；
+`vite build --mode private` 成功（12.71s）。
+
+### 31.7 过程中的一次误判（记录下来）
+
+最初怀疑是 keep-alive 缓存命中，于是写了「include 传路由名 vs 组件名」的探针，
+**结论是「未命中」**，与用户现象矛盾。又写了「真实 `Enhanposer` 页 + 真实路由 + 真实点击」
+的探针，**两次点击都正常**。
+
+真正的定位靠的是**换提问方式**：不再问「为什么会复用」，而是问
+「如果复用了会怎样」—— 一旦确认「复用在当前构建下不可依赖」，
+就不需要复现出复用场景也能定位缺陷。
+**探针用于验证假设，不能用于否定假设。**

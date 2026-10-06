@@ -77,9 +77,26 @@ const defaultConfig = {
   escapeLevel: -1
 }
 
-onMounted(() => {
-  enhancerStore.advancedConfig.hrid && onSelect(getItemDetailOf(enhancerStore.advancedConfig.hrid))
-})
+/**
+ * 从 store 带入待强化的装备：**监听 hrid 变化**，而不是只在 `onMounted` 读一次。
+ *
+ * 与 `pages/enhancer/index.vue` 同款处理（那里是被 11 个利润页的「去强化」写入，
+ * 这里是 `advancedConfig`）。原先只靠 `onMounted`，一旦页面实例被复用
+ * （keep-alive 命中）就不再执行 ⇒ 带不进来。`carriedHrid` 用来切断
+ * 「onSelect 写回 config.hrid → 监听器自激」的循环。
+ */
+const carriedHrid = ref<string>()
+
+function syncFromStore() {
+  const hrid = enhancerStore.advancedConfig.hrid
+  if (hrid && hrid !== carriedHrid.value) {
+    carriedHrid.value = hrid
+    onSelect(getItemDetailOf(hrid))
+  }
+}
+
+watch(() => enhancerStore.advancedConfig.hrid, syncFromStore, { immediate: true })
+onActivated(syncFromStore)
 
 watch(
   () => enhancerStore.advancedConfig,
@@ -110,6 +127,8 @@ function onSelect(item: ItemDetail) {
   if (!item) {
     return
   }
+  // 与 syncFromStore 配对：记住当前显示的是哪件，切断监听器自激
+  carriedHrid.value = item.hrid
   enhancerStore.advancedConfig.hrid = item.hrid
   currentItem.value = {
     hrid: item.hrid,

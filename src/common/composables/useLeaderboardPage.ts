@@ -221,16 +221,19 @@ export function useLeaderboardPage<T extends PanelSearchData>(options: UseLeader
    * ## 为什么用 store 而不是地址栏
    *
    * `enhancerStore.hrid` 是 `config.hrid` 的 getter（`stores/enhancer.ts:67`），
-   * 强化页 `onMounted` 会读它并自动选中：
+   * 强化页**监听**它并自动选中：
    *
    * ```ts
-   * // pages/enhancer/index.vue:61-63
-   * onMounted(() => {
-   *   enhancerStore.hrid && onSelect(getItemDetailOf(enhancerStore.hrid))
-   * })
+   * // pages/enhancer/index.vue
+   * watch(() => enhancerStore.hrid, syncFromStore, { immediate: true })
+   * onActivated(syncFromStore)
    * ```
    *
-   * ⇒ 跳转前写好 `config.hrid`，强化页挂载时自己就会选中。
+   * ⇒ 跳转前写好 `config.hrid`，强化页自己就会选中。
+   *
+   * ⚠️ 这里监听而非「只在 onMounted 读一次」是有讲究的：目标页实例被复用时
+   * （keep-alive 命中）`onMounted` 不会重跑，第二次点击就会带不进装备。
+   * 详见 PROJECT_CONTEXT §31。
    * 状态走全局 store，**地址栏保持干净**（不暴露在分享链接与浏览器历史里），
    * 这与 `usePriceStatus` 是同一思路。
    *
