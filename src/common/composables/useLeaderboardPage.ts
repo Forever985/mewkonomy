@@ -90,6 +90,18 @@ export interface UseLeaderboardPageOptions<T extends PanelSearchData> {
   debounceMs?: number
   /** 是否接入「按页记忆买卖价」这套（默认 true）。decompose 不用，传 false */
   withPriceStatus?: boolean
+  /**
+   * 是否在**挂载时立即**取一次数据（默认 true）。
+   *
+   * 传 `false` 时**不会**自动触发首次取数，页面需自己调 `fetchData()`
+   * （典型场景：数据计算量大，官网反馈「进页面就运算很久」——
+   * 典型如 enhanposer 分解模式，遍历 20 个强化等级要 70 秒。
+   * 配合 API 层把筛选条件下推成**计算参数**后，用户点「计算」按钮才按条件算，
+   * 既省掉等待，也让「计算哪些」由用户决定）。
+   *
+   * 注意：传 `false` 时分页/市场数据等 watch 仍在，只是首次不自动跑。
+   */
+  immediate?: boolean
 }
 
 export function useLeaderboardPage<T extends PanelSearchData>(options: UseLeaderboardPageOptions<T>) {
@@ -102,7 +114,8 @@ export function useLeaderboardPage<T extends PanelSearchData>(options: UseLeader
     priceStatusKey = `${key}-price-status`,
     autoRefresh = [],
     debounceMs = 300,
-    withPriceStatus = true
+    withPriceStatus = true,
+    immediate = true
   } = options
 
   const { t } = useI18n()
@@ -163,7 +176,7 @@ export function useLeaderboardPage<T extends PanelSearchData>(options: UseLeader
     () => useGameStoreOutside().buyStatus,
     () => useGameStoreOutside().sellStatus,
     ...autoRefresh
-  ], fetchData, { immediate: true })
+  ], fetchData, { immediate })
 
   // 自定义价格表变化（内容级改动也要重算，故 deep）
   watch(() => usePriceStoreOutside(), fetchData, { deep: true })

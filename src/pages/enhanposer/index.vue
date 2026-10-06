@@ -2,7 +2,7 @@
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import PagerFooter from "@@/components/PagerFooter/index.vue"
 import SearchPanel from "@@/components/SearchPanel/index.vue"
-import type { PanelField } from "@@/components/SearchPanel/types"
+import type { PanelField, PanelProjectOptions } from "@@/components/SearchPanel/types"
 import { Edit, MagicStick, Search } from "@element-plus/icons-vue"
 import { getEnhanposerDataApi } from "@/common/apis/enhanposer"
 
@@ -36,10 +36,14 @@ const {
   currentPriceRow,
   setPrice,
   gotoEnhancer,
+  fetchData: fetchDataLD,
   onPriceStatusChange
 } = useLeaderboardPage({
   key: "enhanposer",
   api: getEnhanposerDataApi,
+  // ★ 不在挂载时自动计算：分解模式遍历 20 个强化等级实测要 70 秒。
+  //   改为用户点「计算」按钮后按当前条件算（目标等级已下推为计算参数）。
+  immediate: false,
   searchData: {
   name: [],
   minProfitRate: undefined,
@@ -55,7 +59,16 @@ const {
   banLife: false,
   noDecompose: false,
   materialPriceType: "ask",
-  productPriceType: "bid"
+  productPriceType: "bid",
+  // 物品等级区间（平铺的 minLevel/maxLevel ⇒ handleSearch 匹配 actionLevel，
+  // 而本页 actionLevel === item.itemLevel，所以它就是「物品等级」筛选）。
+  // ⚠️ 与 conditions 里的「目标强化等级」是两件事，别混：
+  //     conditions ⇒ 强化到 +N（决定**算什么**）
+  //     minLevel  ⇒ 物品本身等级（决定**看哪些装备**）
+  minLevel: undefined,
+  maxLevel: undefined,
+  // 反向排除（{ name?, project? }[]，命中任一即剔除）
+  excludes: []
   }
 })
 // 影响「计算模式」的参数变化：清缓存后重算（缓存按模式签名校验，签名不符也会自动重算）
@@ -99,6 +112,9 @@ const priceTypeOptions = computed(() => [
   { value: "bid", label: `${t("右收购")}(${t("右价")})` }
 ])
 
+/** 可检索的动作列表（供「排除」用）：本页的 project 形如 `强化分解+10` */
+const projectOptions: PanelProjectOptions = ["强化", "分解"]
+
 /** 搜索面板配置：字段顺序/文案/边界与原手写模板完全一致 */
 const panelFields: PanelField[] = [
   { type: "name", key: "name", label: "物品", width: 220 },
@@ -131,6 +147,26 @@ const panelFields: PanelField[] = [
     placeholderMin: "0",
     placeholderMax: "∞"
   },
+  {
+    type: "range",
+    label: "物品等级",
+    tip: "物品等级说明",
+    minKey: "minLevel",
+    maxKey: "maxLevel",
+    min: 0,
+    placeholderMin: "0",
+    placeholderMax: "∞"
+  },
+  {
+    type: "range",
+    label: "利润 / 天",
+    tip: "利润天说明",
+    minKey: "minProfitPD",
+    maxKey: "maxProfitPD",
+    placeholderMin: "0",
+    placeholderMax: "∞"
+  },
+  { type: "excludes", label: "排除", tip: "排除说明", projectOptions, namePlaceholder: "排除的产品名", projectPlaceholder: "排除的生产动作，留空=该产品全部" },
   { type: "checkbox", key: "banEquipment", label: "排除装备" },
   { type: "checkbox", key: "banJewelry", label: "排除首饰" },
   { type: "checkbox", key: "banCharm", label: "排除护符" },
@@ -144,6 +180,69 @@ const panelFields: PanelField[] = [
 
 
 const { t } = useI18n()
+
+// ── 按需计算（替代「进页面就自动算」）────────────────────────────────
+//
+// 官网反馈「点进这个页面就要运算很久」——实测分解模式遍历 20 个强化等级要 **70.9 秒**，
+// 而只算 1 个等级只要 **0.98 秒**。所以这里改成：
+//
+// 1. **不自动计算**（`immediate: false`）——进页面只显示上次结果（或空）
+// 2. 用户填好「只看目标等级」后点「计算」⇒ 只算那些等级
+// 3. 想要全量就勾「全部等级」⇒ 算 1~20（会慢，明示耗时）
+//
+// 其它页面（jungle / dashboard 等 10 个）**不受影响**：composable 的
+// `immediate` 默认是 true，行为与改造前一致。
+
+/** 是否计算全部 1~20 档（勾上则忽略「只看目标等级」，耗时 ~70 秒） */
+const calcAllLevels = ref(false)
+
+/** 本次会算哪些目标等级（与 API 层 `targetLevelsOf` 的口径一致，用于提示） */
+const plannedLevels = computed(() => {
+  if (calcAllLevels.value) {
+    return Array.from({ length: 20 }, (_, i) => i + 1)
+  }
+  const picks: number[] = []
+  for (const c of ldSearchData.value.conditions ?? []) {
+    if (!c) continue
+    if (c.steps != null && c.steps !== "") {
+      const n = Number(c.steps)
+      if (Number.isFinite(n)) picks.push(n)
+    }
+    if (c.minLevel != null || c.maxLevel != null) {
+      const lo = c.minLevel != null && c.minLevel !== "" ? Number(c.minLevel) : 1
+      const hi = c.maxLevel != null && c.maxLevel !== "" ? Number(c.maxLevel) : 20
+      for (let n = Math.min(lo, hi); n <= Math.max(lo, hi); n++) picks.push(n)
+    }
+  }
+  const uniq = [...new Set(picks)].sort((a, b) => a - b)
+  // 什么都不填 ⇒ 默认只算 +1（最省）
+  return uniq.length ? uniq : [1]
+})
+
+/** 是否已计算过（首屏与「清空筛选后」都要能提示用户点按钮） */
+const calculated = ref(false)
+
+/** 勾选「全部等级」时同步到 searchData，让提示与实际计算范围一致 */
+watch(calcAllLevels, () => {
+  ldSearchData.value.calcLevels = [...plannedLevels.value]
+})
+
+/** 模式变化 ⇒ 缓存失效，需要重新点「计算」 */
+watch([
+  () => ldSearchData.value.noDecompose,
+  () => ldSearchData.value.materialPriceType,
+  () => ldSearchData.value.productPriceType
+], () => {
+  calculated.value = false
+})
+
+function onCalcClick() {
+  // `fetchData` 会把整个 `searchData` 展开进请求参数，所以把 calcLevels
+  // 放进 `searchData` 即可传给 API 层（它会用作**计算参数**，只算这些等级）。
+  ldSearchData.value.calcLevels = [...plannedLevels.value]
+  calculated.value = true
+  fetchDataLD()
+}
 </script>
 
 <template>
@@ -164,7 +263,48 @@ const { t } = useI18n()
       <el-col :xs="24" :sm="24" :md="24" :lg="24" :xl="14">
         <el-card>
           <template #header>
+            <div class="flex items-center justify-between mb-2">
+              <span>{{ t('利润排行') }}</span>
+              <div class="flex items-center gap-2">
+                <el-tooltip placement="top" effect="light" :show-after="120">
+                  <template #content>
+                    <div class="max-w-360px leading-5">{{ t("按需计算说明") }}</div>
+                  </template>
+                  <el-checkbox v-model="calcAllLevels">
+                    {{ t("全部等级") }}
+                  </el-checkbox>
+                </el-tooltip>
+                <el-button
+                  type="primary"
+                  :icon="MagicStick"
+                  :loading="loadingLD"
+                  @click="onCalcClick"
+                >
+                  {{ t("计算") }}
+                </el-button>
+              </div>
+            </div>
+            <div class="text-xs text-gray-400 mb-2">
+              {{ t("将计算的目标等级") }}：{{ plannedLevels.join("、") || "-" }}
+              <span v-if="plannedLevels.length >= 20">{{ t("（全部 20 档，约需 70 秒）") }}</span>
+              <span v-else>{{ t("（约需 {0} 秒）", [Math.max(1, Math.round(plannedLevels.length * 1.0))]) }}</span>
+            </div>
             <SearchPanel v-model="ldSearchData" :fields="panelFields" title="利润排行" @change="handleSearchLD" />
+            <el-alert
+              v-if="!calculated"
+              type="info"
+              :closable="false"
+              show-icon
+              class="mt-2"
+            >
+              <template #title>
+                {{ t("尚未计算") }}
+              </template>
+              <div class="text-xs leading-5">
+                {{ t("本页数据量大（分解模式遍历 20 个强化等级实测约 70 秒），所以改成按需计算：") }}
+                {{ t("先在下面填好「只看目标等级」，再点「计算」按钮，只算你关心的等级。") }}
+              </div>
+            </el-alert>
           </template>
           <template #default>
             <el-table :data="leaderboardData" v-loading="loadingLD" @sort-change="handleSortLD">

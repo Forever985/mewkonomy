@@ -685,4 +685,13 @@ export default {
   "转化本身不创造利润，只是把冲泡精华换成别的技能精华；真正盈利的前提是市场愿意给高于自制成本的价格。": "Transmutation itself creates no profit; it only swaps brewing essence for another skill's essence. Real profit requires the market to pay above your own crafting cost.",
   "有市场报价的档位": "Tiers with market quotes",
   "该档产出护符无市场报价，此数字是理论上限": "This tier's charms have no market quote — this number is a theoretical ceiling",
+  "全部等级": "All levels",
+  "将计算的目标等级": "Levels to compute",
+  "（全部 20 档，约需 70 秒）": " (all 20 tiers, ~70s)",
+  "（约需 {0} 秒）": " (~{0}s)",
+  "按需计算说明": "When checked, ignores the target-level filter and computes all tiers 1~20 (~70s measured). When unchecked, only the levels you filled in are computed — a single level takes about 1 second. Leaving it empty defaults to +1.",
+  "尚未计算": "Not computed yet",
+  "本页数据量大（分解模式遍历 20 个强化等级实测约 70 秒），所以改成按需计算：": "This page is heavy (decompose mode walks all 20 enhance levels, ~70s measured), so it now computes on demand:",
+  "先在下面填好「只看目标等级」，再点「计算」按钮，只算你关心的等级。": "fill in the target levels below, then press Calculate — only those levels are computed.",
+  "利润天说明": "Profit per day is often the more meaningful number when comparing items, since hourly profit is affected by action time.",
 }

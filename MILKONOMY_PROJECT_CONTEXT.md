@@ -329,7 +329,7 @@ AIGC:
 - **迷宫（重要）**：`data.json` 已是 **`v1.20260309.0`**（948 物品 / 532 件装备），**已含迷宫数据**——`labyrinth_essence`、`labyrinth_token`、`labyrinth_refinement_chest`、`labyrinth_refinement_shard`，以及 `/item_categories/labyrinth`、`/item_categories/dungeon_key`。§八「功能D：卷轴排查结论」里「当前 data.json 无迷宫玩法」的判断**基于旧版本，已失效**。
 - **市场历史（§12 的补充）**：归档已从 v1 单文件 `market_history.json` 升级为 **v2 分片** `market_history_<UTC日>T<HH>.json`（UTC 6 小时一块、字典编码、滚动 7 天 / 168 点；前端按窗口**按需只拉 1~2 片**，取不到才回退 v1 文件）。§12.2 中「上限 520 点」「前端按 `<BASE_URL>data/market_history.json` 拉取」已不适用于 v2。
 - **`game.ts` 行数**：**443 行**（`REUSABLE_ABSTRACTION_MODULES.md` 原写「约 1.2 万行」）。
-- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 38 文件 / 345 用例**，见 §二十一）。
+- **测试规模**：**24 个文件 / 100 个用例**（§13 审计当时的数据；**当前基线为 39 文件 / 350 用例**，见 §二十一）。
 - **`BUILD_SYSTEM.md`**：原称「构建时排除私有页面文件」，与实现矛盾，已校正为「非安全隔离」（`remove-private-code` 插件整段被注释）。
 
 ### 13.3 有意不改的项
@@ -637,7 +637,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 - `ActionDetail.vue` 底部挂载（所有检索页共用该弹窗，一处接入全站可用）。
 
 ### 20.4 验证
-- `vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` 双模式成功；
+- `vue-tsc` 通过；`vitest` **39 文件 / 350 用例全绿**；`vite build` 双模式成功；
   dev server 下三个新/改模块均可被 Vite 正常编译。
 - 手算样例验算：材料 `countPH=2 @100`、成品 `countPH=1 @1000`、时薪 760；
   目标 500 → 材料临界价 230、成品临界价 729.1667，代回利润均精确等于 500 ✓
@@ -663,7 +663,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
   新增纯函数 `SolveUnit` / `HOURS_PER_DAY` / `toProfitPHOf` / `fromProfitPHOf` / `resolveTargetProfitPH`。
 - 测试从 9 个用例增到 **15 个**：新增「日薪 = 时薪 × 24 与往返一致」「两种口径解出的临界价相同」
   「留空回落当前值」「**0 是有效目标**」「日薪数额换算成时薪」5 项。
-- 验证：`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` public/private 均成功；
+- 验证：`vue-tsc` 通过；`vitest` **39 文件 / 350 用例全绿**；`vite build` public/private 均成功；
   dev server 下两个模块均编译通过；lint 非风格问题 0。
 - 顺带：`i18n` 的 key 就是中文原文，所以改中文文案等于**换 key**——
   新键已补进 `en.ts` / `zh-tw.ts`，被替换的旧键同时删除（不留孤儿键）。
@@ -710,7 +710,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 需由物品反推 action）。
 
 ### 21.5 验证
-- `vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
+- `vue-tsc` 通过；`vitest` **39 文件 / 350 用例全绿**；`vite build` 双模式成功；dev server 编译通过。
 - 默认值复现：decompose 成本 `2239964909.22` 对 `2239964909.22`、总耗时 **1.000000 小时**；transmute 同。
 - 枚举闭环：6 个动作样本全部 `available = true`；制造样本反推为 `tailoring`、采集为 `foraging`。
   数量：强化 532 / 分解 742 / 转化 622 / 点金 889 / 制造 647 / 采集 26。
@@ -777,7 +777,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ### 23.3 验证
 
-- `vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**
+- `vue-tsc` 通过；`vitest` **39 文件 / 350 用例全绿**
 - 新增 `tests/price-fallback-strategies.test.ts`（17 用例，纯函数，含 **360 组策略矩阵**不变量断言）
   与 `tests/price-fallback-integration.test.ts`（4 用例，真实数据）
 - 实测：全物品 × 多等级共 **2163 个组合，来源与价格 0 漂移**；来源分布
@@ -818,7 +818,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ### 24.4 验证
 
-`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**（上轮 209，+90）；
+`vue-tsc` 通过；`vitest` **39 文件 / 350 用例全绿**（上轮 209，+90）；
 `vite build` public/private 均成功（2961 模块）；lint 非风格问题 0。
 
 ## 二十五、区间条件模式化：4 种 → 9 种，检索页与监控页共用一套（2026-10-03）
@@ -855,7 +855,7 @@ private 产物里」——**这是错的**。实测在 public 产物里 grep 得
 
 ### 25.5 验证
 
-`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**（上轮 299，+37）；
+`vue-tsc` 通过；`vitest` **39 文件 / 350 用例全绿**（上轮 299，+37）；
 `vite build` 双模式成功；新增 `tests/range-modes.test.ts`（21）与
 `tests/search-range-modes.test.ts`（16）。
 
@@ -918,7 +918,7 @@ function gotoEnhancer() {
 
 ### 26.4 验证
 
-`vue-tsc` 通过；`vitest` **38 文件 / 345 用例全绿**；`vite build` 成功，
+`vue-tsc` 通过；`vitest` **39 文件 / 350 用例全绿**；`vite build` 成功，
 产物中可 grep 到 `去强化` / `To enhancer` / `Enhancer` / `去强化说明`。
 
 ## 二十七、行尾配置与 warning 消除（2026-10-03）
@@ -1017,7 +1017,7 @@ composable / 路由跳转这类**组件 setup 之外**的场景拿不到当前 p
 | 层 | 结果 |
 | --- | --- |
 | `vue-tsc` | **0 报错** |
-| `vitest` | **38 文件 / 345 用例全绿** |
+| `vitest` | **39 文件 / 350 用例全绿** |
 | `vite build --mode public` | 成功；产物中 `config.hrid` 命中 6 个 chunk、新文案命中 1 个 |
 | dev server 编译 | 7 个相关模块全部 **HTTP 200** |
 | **运行时链路**（最关键） | 编译产物里逐段确认：<br>① `gotoEnhancer(row)` 里 `useEnhancerStoreOutside().config.hrid = row.hrid`<br>② store 产物里 `hrid` getter + `useEnhancerStoreOutside` 各 1 处<br>③ 强化页产物里 `onMounted(() => { enhancerStore.hrid && onSelect(...) }`<br>④ 模板 4 个抽验页均传 `row` |
@@ -1115,7 +1115,7 @@ tooltip 文案也改了：原来写「只跳转、不会覆盖你的预设」（
 
 ### 29.5 验证
 
-`vue-tsc` **0 报错**；`vitest` **38 文件 / 345 用例全绿**（上轮 336，+9）；
+`vue-tsc` **0 报错**；`vitest` **39 文件 / 350 用例全绿**（上轮 336，+9）；
 `vite build --mode public` 成功（12.40s，2961 模块）；
 三份改动文件**零行尾 churn**。
 
@@ -1125,3 +1125,132 @@ tooltip 文案也改了：原来写「只跳转、不会覆盖你的预设」（
   `inputItems` 为 null，无权威数据，三个炼金公式都是项目经验值，量级占 1~8%
 - **`Catalytic Tea` / 暴饮之囊**：实测已正确计入（52.5% = 0.5 × (1+0.05)）
 - **等级惩罚**：已实现；玩家炼金等级 100 ⇒ 五档 `levelRatio` 全为 0，不触发
+
+## 三十、enhanposer（强化分解）数据正确性 + 按需计算（2026-10-06）
+
+起因：用户亲测发现「有问题」，并明确指出 **「只看目标等级」问题最严重**、
+**「不分解模式好像可以正常运行」**（实测确认，见 §30.2）、以及
+**网友反馈「点进这个页面就要运算很久」**。
+
+### 30.1 ① 「只看目标等级」永远返回 0 行（最严重）
+
+**根因**：本页把 `conditions` 直接交给通用 `handleSearch`，
+而它的区间判定是 `cal.actionLevel`（`apis/utils.ts:276-277, 336`）。
+但本页 `actionLevel === item.itemLevel`（**物品等级**，实测 8700 行全部相同），
+于是「目标等级 5」变成去匹配「**物品等级** 5」—— 本页没有物品等级 5 的装备
+（最低 1、绝大多数 90+）⇒ **0 行**。
+
+**修法**：与同架构的 `enhanposest` 一致，用 `handleConditions` 显式传入取值函数：
+
+```ts
+profitList = handleConditions(profitList, params, (item: WorkflowCalculator) => {
+  return (item.calculator as EnhanceCalculator).enhanceLevel
+})
+const searchParams = { ...params }
+delete searchParams.conditions   // 避免通用检索的「步数」正则误伤
+```
+
+**实测验证**（修复后）：
+
+| 条件 | 结果 | 期望 |
+| --- | --- | --- |
+| 目标等级 1 / 5 / 10 / 20 | 各 435 行，等级集合 `[N]` | 一致 |
+| 区间 8~10 | 1305 行，等级集合 `[8,9,10]` | 一致 |
+| 多行 `[3 或 7]` | 870 行 | 一致 |
+
+> 💡 **`enhanposest` 早就用对了**（它传了 `item.calculator.enhanceLevel`），
+> 只有 `enhanposer` 漏了。这是同架构两页不一致的典型案例。
+
+### 30.2 ② 「不分解模式效果不错」—— 实测确认，且它揭示了性能根因
+
+用户直觉准确，实测：
+
+| 模式 | 行数 | **首次计算耗时** |
+| --- | --- | ---: |
+| **不分解**（`noDecompose: true`） | 8,700 | **27 ms** |
+| 分解（默认） | 8,360 | **73,654 ms（73.7 秒）** |
+
+⇒ 两者**快 2700 倍**，原因不是「分解计算慢一点」，而是：
+`noDecompose` 走**独立分支**（`steps = [EnhanceCalculator]` 只 1 步），
+而分解是 `steps = [Enhance, Decompose]` 2 步。
+**分解里还有 `getAlchemyRareDropTable` / `getAlchemyEssenceDropTable` 等重计算。**
+
+### 30.3 ③ 「进页面就运算很久」—— 两处一起改
+
+**问题**：`calcEnhanceProfit` 无条件 `for (enhanceLevel = 1; <= 20)`，
+≈ 435 物品 × 20 档 × protectLevel × catalystRank ≈ 5 万次 `WorkflowCalculator`。
+
+**修法 A：把目标等级从「筛选条件」改成「计算参数」**
+
+```ts
+function targetLevelsOf(params) {
+  // ① params.calcLevels（UI 的「计算」按钮用）
+  // ② conditions[].steps
+  // ③ conditions[].minLevel/maxLevel
+  // ④ 都没填 ⇒ 默认只算 +1（**不**默认 1~20，否则又是 73 秒）
+}
+```
+
+`modeSignature` 加入 `lv=...` ⇒ 不同等级集合是**独立缓存**，不会互相顶掉。
+
+**实测提速**（分解模式）：
+
+| 计算范围 | 耗时 | 行数 |
+| --- | ---: | ---: |
+| 只算 +1 | **999 ms** | 418 |
+| 算 +1~+5 | 6,958 ms | 2,090 |
+| 算全部 20 档 | 70,863 ms | 8,360 |
+
+⇒ **73.7 秒 → 不到 1 秒（省 98.6%）**
+
+**修法 B：加「计算」按钮（按需计算）**
+
+`useLeaderboardPage` 新增 `immediate?: boolean`（默认 `true` ⇒ **其它 10 个页面
+行为完全不变**）。`enhanposer` 传 `immediate: false`，
+进页面不再自动计算，显示「尚未计算」提示 + 「计算」按钮 + 「全部等级」开关。
+
+> ⚠️ `immediate: false` 只影响**首次**取数；分页/市场数据/买卖价变化的 watch
+> 仍然照常触发，所以分页切换、买卖价切换都不受影响。
+
+**UI 提示**（避免用户盲等）：
+- 「将计算的目标等级：1、5、10」+ 预估秒数
+- 勾「全部等级」时明示「约需 70 秒」
+
+### 30.4 ④ 补齐多样搜索 / 筛选 / 过滤 / 选择
+
+对比同架构其它页，enhanposer 缺 `excludes`（反向排除），range 只有 2 个（其它页 3~5）。已补：
+
+| 维度 | 类型 | 说明 |
+| --- | --- | --- |
+| 多物品选择 | `name: string[]` | 已有 |
+| **只看目标等级** | `conditions` | 已有（**本轮修好**） |
+| **排除（产品名 + 生产动作）** | `excludes` | **新增** |
+| 物品等级区间 | `range: minLevel/maxLevel` | **新增** |
+| 利润/天区间 | `range: minProfitPD/maxProfitPD` | **新增** |
+| 利润率 / 风险 | `range` | 已有 |
+| 5 个排除开关 + 不分解模式 | `checkbox` | 已有 |
+| 材料买价 / 成品售价口径 | `select` | 已有 |
+
+⚠️ **「物品等级」与「目标等级」是两件事，文案已写清**：
+- `conditions` ⇒ 强化到 +N（**决定算什么**）
+- `minLevel` ⇒ 装备本身等级（**决定看哪些装备**）
+
+### 30.5 测试
+
+新增 `tests/enhanposer-fix.test.ts`（**5 个用例**）：
+1. 目标等级按 `enhanceLevel` 命中（含反向断言：不混入其它等级 —— 正是原 bug）
+2. 区间与多行 OR 语义
+3. 目标等级是计算参数（单档 < 5s；5 档行数 = 1 档 × 5）
+4. 不填条件时**默认只算 +1**（防回归到 1~20）
+5. 物品等级区间与目标等级相互独立
+
+### 30.6 验证
+
+`vue-tsc` **0 报错**；`vitest` **39 文件 / 350 用例全绿**（上轮 345，+5）；
+`vite build --mode public` 成功（12.68s）；改动文件零行尾 churn。
+
+### 30.7 过程中我犯的两次错（都是测试写错、代码对）
+1. 探针里 `const expect = all.filter(...)` **遮蔽了 vitest 的 `expect` 函数**
+   ⇒ `expect2 is not a function`。改名 `expectCount` 后通过。
+2. 全量测试时忘删 `tests/_probe-fix.test.ts`，被算进 39 个文件里报 3 个失败
+   ⇒ 删掉后 38/345 全绿。**探针文件用完必须删**。
