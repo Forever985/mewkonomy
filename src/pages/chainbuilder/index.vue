@@ -3,9 +3,10 @@ import type { ChainMakerOption, ChainStep, ChainStepSummary } from "@/common/api
 import type Calculator from "@/calculator"
 import type { WorkflowCalculator } from "@/calculator/workflow"
 import {
+  buildStepFromMaker,
   calcChainProfitApi,
   clearChainBuilderCache,
-  filterChainItems,
+  filterChainOptions,
   getChainAlchemyOutputOptions,
   getChainIngredientsOf,
   getChainMakersOf,
@@ -131,6 +132,38 @@ const targetMakers = computed<ChainMakerOption[]>(() => {
   return targetHrid.value ? getChainMakersOf(targetHrid.value) : []
 })
 
+/**
+ * 「谁能做它」列表默认展示前几条。
+ *
+ * 加上炼金反查后，某些物品的候选会到几十条（实测「贤者之石碎片」有 42 个投入品
+ * 都能转化出它）—— 一次全铺开会把页面淹掉，但全部隐藏又会让用户找不到
+ * 自己知道的那条路。所以默认给前几条，剩下的折叠。
+ */
+const MAKER_PREVIEW = 8
+const showAllMakers = ref(false)
+const visibleMakers = computed(() =>
+  showAllMakers.value ? targetMakers.value : targetMakers.value.slice(0, MAKER_PREVIEW)
+)
+
+/**
+ * maker 的展示文案。
+ *
+ * ⚠️ 必须区分两类，否则同名项目会互相混淆：
+ * **同一个「转化」可以来自多个不同投入品**（转 太阳石碎片 和 转 月亮石碎片是两条不同的路）。
+ * 只写「转化」两个字的选项在列表里会看起来完全一样，用户无从选择。
+ *
+ * - 采集/制造：`制造 · 1 次得 1`
+ * - 炼金：`转化 ← 太阳石碎片 · 0.5%`
+ */
+function makerLabel(m: ChainMakerOption) {
+  if (m.stepHrid === m.hrid) {
+    return `${t(m.project)} · ${t("1 次得 ")}${Format.number(m.count, 2)}`
+  }
+  const input = t(getItemDetailOf(m.stepHrid)?.name || m.stepHrid)
+  const rate = m.rate != null ? ` · ${Format.percent(m.rate)}` : ""
+  return `${t(m.project)} ← ${input}${rate}`
+}
+
 const targetItem = computed(() => (targetHrid.value ? getItemDetailOf(targetHrid.value) : undefined))
 
 /**
@@ -148,19 +181,21 @@ const allItems = computed(() => {
     .sort((a, b) => a.name.localeCompare(b.name))
 })
 
-const targetCandidates = computed(() => filterChainItems(allItems.value, targetSearch.value).slice(0, 60))
+const targetCandidates = computed(() => filterChainOptions(allItems.value, targetSearch.value).slice(0, 60))
 
 /**
  * 当前待展开层的原料列表。
  *
  * 关键：这里返回的是「上一步的产物所对应的下一层原料」，
  * 而非全量候选 —— 这就是把 889 项收敛到个位数的关键。
+ *
+ * ⚠️ 必须把**完整 step** 传进去（不只是 hrid）：
+ * 早前只传 hrid，函数内部永远取第一个 maker，于是用户选了「转化」却按「制造」算原料
+ * —— 这就是「选保护之镜的转化，却弹出保护之镜碎片」的根因。
  */
 const currentIngredients = computed(() => {
   if (!newbieSteps.value.length) return []
-  // 已排好的链条是从原料→成品，末尾那个就是当前要往前追问的环节
-  const head = newbieSteps.value[0]
-  return getChainIngredientsOf(head.hrid)
+  return getChainIngredientsOf(newbieSteps.value[0])
 })
 
 /** 该层的原料里，哪些是「一级原料」（没有更上游 ⇒ 需要采集或外购） */
@@ -216,10 +251,17 @@ watch(targetHrid, () => {
   result.value = null
 })
 
-/** 在目标层选「用哪个项目做」 */
+/**
+ * 在目标层选「用哪个项目做」。
+ *
+ * ⚠️ 用 `buildStepFromMaker` 而不是手工拼 project/action/kind/hrid：
+ * 炼金环节的 `ChainStep.hrid` 是**投入品**（不是产物），
+ * maker 里用 `stepHrid` 表达，并靠 `outHrid` 指明「这一样交给下一步」。
+ * 早前把 maker.hrid 直接当 step.hrid，炼金环节整条都算错了。
+ */
 function onPickMaker(maker: ChainMakerOption) {
   if (!targetHrid.value) return
-  newbieSteps.value = [{ project: maker.project, action: maker.action, kind: maker.kind, hrid: targetHrid.value }]
+  newbieSteps.value = [buildStepFromMaker(maker)]
   expandLevel.value = 1
   result.value = null
 }
@@ -235,7 +277,7 @@ function onPickIngredient(hrid: string, maker?: ChainMakerOption) {
     result.value = null
     return
   }
-  newbieSteps.value.unshift({ project: maker.project, action: maker.action, kind: maker.kind, hrid })
+  newbieSteps.value.unshift(buildStepFromMaker(maker))
   result.value = null
 }
 
@@ -244,14 +286,9 @@ function onAutoExpand() {
   const ings = currentIngredients.value
   const targets = ings.filter(i => i.makers.length > 0)
   if (!targets.length) return
-  // 逐个插入到最上游
+  // 逐个插入到最上游（makers 已按「先配方、后炼金命中率降序」排好，第一个即推荐做法）
   for (const ing of targets.reverse()) {
-    newbieSteps.value.unshift({
-      project: ing.makers[0].project,
-      action: ing.makers[0].action,
-      kind: ing.makers[0].kind,
-      hrid: ing.hrid
-    })
+    newbieSteps.value.unshift(buildStepFromMaker(ing.makers[0]))
   }
   result.value = null
 }
@@ -259,7 +296,7 @@ function onAutoExpand() {
 /** 手动挑一个环节（覆盖自动推断） */
 function onOverrideStep(maker: ChainMakerOption) {
   if (!newbieSteps.value.length) return
-  newbieSteps.value[0] = { project: maker.project, action: maker.action, kind: maker.kind, hrid: newbieSteps.value[0].hrid }
+  newbieSteps.value[0] = buildStepFromMaker(maker)
   result.value = null
 }
 
@@ -294,14 +331,41 @@ function onProjectChange(index: number) {
   step.hrid = ""
   step.catalystRank = 0
   step.outHrid = ""
+  // 换项目后候选集完全变了，旧关键字必须清掉，否则新候选会被旧词过滤成空
+  const next = { ...stepQuery.value }
+  delete next[index]
+  stepQuery.value = next
   result.value = null
 }
 function itemOptions(step: ChainStep) {
   return step.project ? getChainStepItemOptions(step) : []
 }
-/** 进阶模式的物品下拉：与新手模式共用多路匹配（中文名 / 英文名 / hrid） */
-function filterStepItems(step: ChainStep, query: string) {
-  return filterChainItems(itemOptions(step), query)
+
+/**
+ * 进阶模式的物品搜索。
+ *
+ * ## ⚠️ 早前「搜索框完全不生效」的根因
+ *
+ * 写的是
+ * ```html
+ * <el-select filterable :filter-method="(q) => filterStepItems(step, q)">
+ *   <el-option v-for="opt in itemOptions(step)" ... />
+ * ```
+ * 但 Element Plus 的 `filter-method` 语义是「**你自己去过滤数据**」的回调 ——
+ * **它的返回值会被直接丢弃**。上面那么写，过滤结果 return 出去就没了，
+ * 而 `itemOptions(step)` 永远返回全量 ⇒ 输入关键字列表毫无变化。
+ *
+ * 正确做法：`filter-method` 只负责**记下关键字**，选项列表由关键字**计算得出**。
+ */
+const stepQuery = ref<Record<number, string>>({})
+
+function onStepFilter(index: number, q: string) {
+  stepQuery.value = { ...stepQuery.value, [index]: q }
+}
+
+function filteredItemOptions(index: number, step: ChainStep) {
+  // filterChainOptions：空关键字返回**全量**（不是 []），否则搜索框一清空就没选项
+  return filterChainOptions(itemOptions(step), stepQuery.value[index] ?? "")
 }
 function alchemyOutputs(step: ChainStep) {
   return getChainAlchemyOutputOptions(step)
@@ -499,14 +563,57 @@ const TERM_TIPS: Record<string, string> = {
         <div v-if="targetItem && !newbieSteps.length" class="mt-3">
           <div class="text-sm mb-1">{{ t("下面这些做法能做出它，选一个：") }}</div>
           <div class="text-xs text-gray-400 mb-2">
-            {{ t("同一个物品常有多种做法（如转化/分解/点金），它们的速度、成功率、掉落都不一样，选你实际会做的那一种。") }}
+            {{ t("同一个物品常有多种做法（如制造/转化/分解/点金），它们的速度、命中率、投入都不一样，选你实际会做的那一种。") }}
           </div>
           <div v-if="!targetMakers.length" class="text-sm text-gray-500">{{ t("这个物品不能生产（或需要先强化）") }}</div>
-          <el-radio-group v-for="m in targetMakers" :key="m.project + m.hrid" :value="m.project" class="mr-4">
-            <el-radio-button :value="m.project" @click="onPickMaker(m)">
-              {{ m.project }} · {{ t('1 次得 ') }}{{ Format.number(m.count, 2) }}
-            </el-radio-button>
-          </el-radio-group>
+          <template v-else>
+            <div class="flex flex-col gap-2">
+              <div
+                v-for="(m, i) in visibleMakers"
+                :key="`${m.project}|${m.stepHrid}`"
+                class="flex items-center gap-2 p-2 rounded border flex-wrap"
+              >
+                <ItemIcon v-if="m.stepHrid !== m.hrid" :hrid="m.stepHrid" :width="22" :height="22" />
+                <span class="font-medium min-w-70px">{{ m.project }}</span>
+
+                <!-- 炼金：说明「投入什么」+ 命中率（用户最需要看到的信息） -->
+                <template v-if="m.stepHrid !== m.hrid">
+                  <span class="text-sm">{{ t("投入") }}</span>
+                  <span class="text-sm text-gray-700">
+                    {{ t(getItemDetailOf(m.stepHrid)?.name || m.stepHrid) }}
+                  </span>
+                  <el-tag
+                    v-if="m.rate != null"
+                    size="small"
+                    :type="RATE_TAG_TYPE[rateLevelOf(m.rate)] as any"
+                  >
+                    {{ Format.percent(m.rate) }}
+                  </el-tag>
+                  <span v-if="m.rate != null" class="text-xs text-gray-500">
+                    {{ t("平均 ") }}{{ attemptsPerOf(m.rate) }} {{ t(" 次出 1 个") }}
+                  </span>
+                </template>
+                <span v-else class="text-xs text-gray-500">
+                  {{ t("1 次得 ") }}{{ Format.number(m.count, 2) }}
+                </span>
+
+                <el-button size="small" type="primary" text @click="onPickMaker(m)">
+                  {{ t("用这个") }}
+                </el-button>
+              </div>
+            </div>
+            <el-button
+              v-if="targetMakers.length > MAKER_PREVIEW"
+              size="small"
+              text
+              class="mt-1"
+              @click="showAllMakers = !showAllMakers"
+            >
+              {{ showAllMakers
+                ? t("收起")
+                : t("还有 {0} 种做法（多为别的物品转化而来），展开看看", [String(targetMakers.length - MAKER_PREVIEW)]) }}
+            </el-button>
+          </template>
         </div>
 
         <!-- 第 3 步：往前推原料 -->
@@ -553,18 +660,23 @@ const TERM_TIPS: Record<string, string> = {
                   {{ t("作为起点（外购/采集）") }}
                 </el-tag>
                 <!-- 有上游：列出可选做法 -->
+                <!-- ⚠️ 用**下标**做 value 而不是 project：同一个「转化」可能有多条
+                     （转太阳石碎片 / 转月亮石碎片…），按 project 匹配永远命中第一个，
+                     用户选了 B 也会接上 A。 -->
                 <el-select
                   v-else
                   :model-value="undefined"
                   :placeholder="t('选谁来做')"
                   size="small"
-                  style="width: 160px"
-                  @update:model-value="(v: any) => {
-                    const m = ing.makers.find(x => x.project === v)
-                    m && onPickIngredient(ing.hrid, m)
-                  }"
+                  style="width: 200px"
+                  @update:model-value="(mi: number) => onPickIngredient(ing.hrid, ing.makers[mi])"
                 >
-                  <el-option v-for="m in ing.makers" :key="m.project" :label="m.project" :value="m.project" />
+                  <el-option
+                    v-for="(m, mi) in ing.makers"
+                    :key="mi"
+                    :label="makerLabel(m)"
+                    :value="mi"
+                  />
                 </el-select>
               </div>
             </div>
@@ -605,13 +717,13 @@ const TERM_TIPS: Record<string, string> = {
           <el-select
             v-model="step.hrid"
             filterable
-            :filter-method="(q: string) => filterStepItems(step, q)"
+            :filter-method="(q: string) => onStepFilter(index, q)"
             :disabled="!step.project"
             :placeholder="t('物品（可搜中文名 / hrid）')"
             style="flex: 1"
             @change="step.outHrid = ''"
           >
-            <el-option v-for="opt in itemOptions(step)" :key="opt.hrid" :label="t(opt.name)" :value="opt.hrid" />
+            <el-option v-for="opt in filteredItemOptions(index, step)" :key="opt.hrid" :label="t(opt.name)" :value="opt.hrid" />
           </el-select>
           <el-select v-if="isAlchemyKind(step.kind)" v-model="step.catalystRank" style="width: 120px">
             <el-option v-for="r in [0, 1, 2]" :key="r" :label="catalystLabel(r, step.kind)" :value="r" />

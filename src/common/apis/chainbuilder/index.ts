@@ -63,6 +63,21 @@ export function filterChainItems<T extends ChainItemOption>(items: T[], query: s
   )
 }
 
+/**
+ * 下拉框用的过滤：**空关键字返回全量**。
+ *
+ * ⚠️ 不要把它和 `filterChainItems` 混用：后者的语义是「搜索」，空串返回 `[]`
+ * （那样调用方才分得清「没搜到」和「没搜索」）。
+ * 而 `el-select` 的选项列表需要「过滤」语义 —— 输入框一清空就该显示全部候选，
+ * 否则用户会看到「搜索框一删就什么选项都没有」。
+ *
+ * 这个区别曾经真实踩坑：早前进阶模式把 `filterChainItems` 的结果直接丢弃
+ * （`filter-method` 的返回值无效），搜索框完全不生效，详见页面里的注释。
+ */
+export function filterChainOptions<T extends ChainItemOption>(items: T[], query: string): T[] {
+  return query.trim() ? filterChainItems(items, query) : items
+}
+
 /** 可选项目列表 */
 export function getChainProjectOptions(): ChainProjectOption[] {
   return [
@@ -153,16 +168,85 @@ export interface ChainMakerOption extends ChainItemOption {
   kind: ChainStep["kind"]
   /** 该环节 1 次产出里，这个物品占多少 */
   count: number
+  /**
+   * 该填进 `ChainStep.hrid` 的物品 —— **不一定等于 `hrid`**。
+   *
+   * ⚠️ 两类计算器的解析方向**相反**：
+   * - 采集 / 制造：`hrid` 是**产物**（配方按产出查）⇒ `stepHrid === hrid`
+   * - 炼金（转化/分解/点金）：`hrid` 是**投入**（掉落表按投入查）
+   *   ⇒ 想得到 X，要投入的是**别的东西**，`stepHrid` 是那个投入品
+   *
+   * 早前实现把两者混为一谈，导致炼金环节被完全算错（详见 getChainMakersOf 注释）。
+   */
+  stepHrid: string
+  /** 炼金环节：这一步拿到 `hrid` 的命中率（0~1）。非炼金为 undefined（视为 1） */
+  rate?: number
 }
 
 const makerCache = new Map<string, ChainMakerOption[]>()
 
 /**
- * 「哪些项目能做出这个物品」。
+ * 炼金「产出 → 投入」反查表（按 kind 缓存）。
  *
- * 遍历全部项目 × 全部物品看似昂贵，但 `getChainStepItemOptions` 已经把
- * 「某项目下有哪些可用物品」算好并缓存了，这里直接反查那份缓存，
- * 额外开销只有一次 Map 查找 + 一次 Calculator 构造。
+ * 为什么必须反查：炼金计算器是按**投入**解析的 ——
+ * `buildChainCalculator({kind:'transmute', hrid: A})` 给你「把 A 转化能出什么」。
+ * 所以想知道「谁能做出 X」，不能拿 X 当投入去试（那只能得到 X 自己的回流），
+ * 必须扫全部可投入物品，看谁的产出表里有 X。
+ *
+ * 成本实测（2026-10-07）：transmute 622 个输入 36ms、decompose 742 个 18ms、
+ * coinify 889 个 11ms —— 总计约 65ms，可接受，故直接缓存全表。
+ */
+const alchemyReverseCache = new Map<string, Map<string, { inputHrid: string, rate: number, count: number }[]>>()
+
+function getAlchemyReverseIndex(kind: "transmute" | "decompose" | "coinify") {
+  const cached = alchemyReverseCache.get(kind)
+  if (cached) return cached
+
+  const idx = new Map<string, { inputHrid: string, rate: number, count: number }[]>()
+  const inputs = getChainStepItemOptions({ project: "", action: "alchemy", kind } as Pick<ChainStep, "project" | "action" | "kind">)
+  for (const o of inputs) {
+    let cal: Calculator
+    try {
+      cal = buildChainCalculator({ project: "", action: "alchemy", kind, hrid: o.hrid } as ChainStep)
+    } catch {
+      continue
+    }
+    if (!cal.available) continue
+    for (const p of cal.productList) {
+      const cnt = p.count ?? 0
+      if (cnt <= 0) continue
+      // 自我回流不算「能做出它」：转 1 个 A 拿回 0.74 个 A 是净亏，不是生产
+      if (p.hrid === o.hrid) continue
+      const arr = idx.get(p.hrid) || []
+      arr.push({ inputHrid: o.hrid, rate: p.rate ?? 1, count: cnt })
+      idx.set(p.hrid, arr)
+    }
+  }
+  alchemyReverseCache.set(kind, idx)
+  return idx
+}
+
+/**
+ * 「哪些做法能做出这个物品」。
+ *
+ * ## ⚠️ 旧实现的判据是错的（2026-10-07 修）
+ *
+ * 旧代码用 `getChainStepItemOptions({kind, action})` 判断「该项目能不能做 X」，
+ * 但那个函数返回的是「该动作**可作用于**哪些物品」（合法**输入**），不是产出。
+ * ⇒ 每个物品都会被错误地挂上 转化 / 分解 / 点金：
+ *
+ * ```
+ * getChainMakersOf(原奶)     → [挤奶, 转化, 分解, 点金]   ← 后三个全错
+ * getChainMakersOf(保护之镜) → [制造, 转化, 分解, 点金]   ← 用户实测踩到
+ * ```
+ *
+ * 用户实测症状：「不管选转化还是分解还是点金，出来的都是保护之镜碎片」——
+ * 因为下游 `getChainIngredientsOf` 永远取列表里的**第一个** maker（制造），
+ * 而制造保护之镜的原料正是 `/items/shard_of_protection`（保护之镜碎片 ×180）。
+ *
+ * 现在按**真实产出**判定：
+ * - 采集 / 制造：计算器按产物解析，直接用 `hrid = X` 建，看 productList 里有没有 X
+ * - 炼金：查反查表（见 getAlchemyReverseIndex）
  */
 export function getChainMakersOf(itemHrid: string): ChainMakerOption[] {
   const cached = makerCache.get(itemHrid)
@@ -175,23 +259,50 @@ export function getChainMakersOf(itemHrid: string): ChainMakerOption[] {
     makerCache.set(itemHrid, out)
     return out
   }
+  const base = {
+    hrid: itemHrid,
+    name: item.name,
+    cn: getTrans(item.name) as string
+  }
 
   for (const p of getChainProjectOptions()) {
-    const opts = getChainStepItemOptions({ project: p.label, action: p.action, kind: p.kind })
-    if (!opts.some(o => o.hrid === itemHrid)) continue
-    const cal = buildChainCalculator({ project: p.label, action: p.action, kind: p.kind, hrid: itemHrid } as ChainStep)
+    if (isAlchemyKind(p.kind)) {
+      const idx = getAlchemyReverseIndex(p.kind as "transmute" | "decompose" | "coinify")
+      for (const hit of idx.get(itemHrid) ?? []) {
+        out.push({
+          ...base,
+          project: p.label,
+          action: p.action,
+          kind: p.kind,
+          count: hit.count,
+          stepHrid: hit.inputHrid,
+          rate: hit.rate
+        })
+      }
+      continue
+    }
+
+    let cal: Calculator
+    try {
+      cal = buildChainCalculator({ project: p.label, action: p.action, kind: p.kind, hrid: itemHrid } as ChainStep)
+    } catch {
+      continue
+    }
     if (!cal.available) continue
-    // 该物品在该动作产出物中的单次数量（拿不到就退化为 1，只作展示）
-    const p0 = cal.productList.find(x => x.hrid === itemHrid)
+    const hit = cal.productList.find(x => x.hrid === itemHrid)
+    if (!hit || !((hit.count ?? 0) > 0)) continue
     out.push({
-      hrid: itemHrid,
-      name: item.name,
+      ...base,
       project: p.label,
       action: p.action,
       kind: p.kind,
-      count: p0?.count || 1
+      count: hit.count ?? 1,
+      stepHrid: itemHrid
     })
   }
+
+  // 确定的配方（采集/制造，rate 视为 1）排最前，炼金按命中率降序
+  out.sort((a, b) => (b.rate ?? 1) - (a.rate ?? 1))
   makerCache.set(itemHrid, out)
   return out
 }
@@ -230,43 +341,98 @@ function isTeaIngredientOf(action: Action, hrid: string): boolean {
   return Array.isArray(tea) && tea.includes(hrid)
 }
 
-export function getChainIngredientsOf(itemHrid: string): ChainIngredientInfo[] {
+/** 由「谁能做它」的一项构造出可用的 ChainStep（两种模式共用） */
+export function buildStepFromMaker(maker: ChainMakerOption): ChainStep {
+  return {
+    project: maker.project,
+    action: maker.action,
+    kind: maker.kind,
+    hrid: maker.stepHrid,
+    // 炼金：产出的是 maker.hrid，必须显式声明「这一样交给下一步」
+    outHrid: isAlchemyKind(maker.kind) ? maker.hrid : undefined,
+    catalystRank: 0
+  }
+}
+
+/**
+ * 「再做它需要什么原料」—— 用于新手模式把链条一环环往前推。
+ *
+ * ## ⚠️ 旧实现的两个致命缺陷（2026-10-07 修）
+ *
+ * 1. **忽略用户的选择**：函数只收 `itemHrid`，内部 `for (const maker of getChainMakersOf(...))`
+ *    之后无条件 `break` —— 永远只取列表**第一个** maker。
+ *    于是用户选了「转化」，界面却按「制造」算原料。
+ *
+ *    用户实测症状：「选保护之镜 + 转化，弹出来的是保护之镜碎片，而且不管选
+ *    转化/分解/点金都一样」—— 因为第一个 maker 恒为「制造」，
+ *    而制造保护之镜的原料正是 `/items/shard_of_protection`（保护之镜碎片 ×180）。
+ *
+ * 2. **炼金环节语义错**：炼金的「原料」就是它**投入的那个物品**，
+ *    而且必须按命中率放大（1 个产物平均需要 1/命中率 个投入）。
+ *    实测「太阳石碎片 --转化(0.005)--> 贤者之石碎片」需要 **200 个碎片**才出 1 个。
+ *    漏掉这个倍数，整条链看起来就像稳赚。
+ *
+ * @param input 优先传完整的 ChainStep（尊重用户选的做法）；传字符串时退回第一个 maker
+ */
+export function getChainIngredientsOf(input: ChainStep | string): ChainIngredientInfo[] {
   const gameData = getGameDataApi()
+  const itemHrid = typeof input === "string" ? input : input.hrid
+  if (!itemHrid) return []
+
+  let step: ChainStep
+  if (typeof input === "string") {
+    const first = getChainMakersOf(input)[0]
+    if (!first) return []
+    step = buildStepFromMaker(first)
+  } else {
+    step = input
+  }
+
   const out: ChainIngredientInfo[] = []
   const seen = new Set<string>()
 
-  // 遍历所有项目，找到能做出它的，用其 ingredientList 作为原料
-  for (const maker of getChainMakersOf(itemHrid)) {
-    const cal = buildChainCalculator({
-      project: maker.project,
-      action: maker.action,
-      kind: maker.kind,
-      hrid: itemHrid
-    } as ChainStep)
-    for (const ing of cal.ingredientList) {
-      const key = `${ing.hrid}|${ing.level || 0}`
-      if (seen.has(key)) continue
-      // 过滤茶：它们来自玩家的冲泡配置，不是配方的一环
-      if (isTeaIngredientOf(maker.action, ing.hrid)) continue
-      // 过滤「自产自用」：炼金转化会把自己列为原料（1 - 成功率 的那部分留在手里），
-      // 实测法师布的原料清单第一条就是「Magician's Cloth×0.85825」——它自己。
-      // 对新手这是死循环，必须排除。
-      if (ing.hrid === itemHrid) continue
-      // 过滤金币：它是系统货币，不是「一环工序」。若不过滤，它既没有上游，
-      // 又会被 `isBaseMaterial` 判成「一级原料」而把新手引到「金币怎么获取」的死路。
-      // 金币成本由 `Calculator.cost` 单独计入，不会因为这里过滤而丢失。
-      if (ing.hrid === COIN_HRID) continue
-      seen.add(key)
-      const detail = gameData.itemDetailMap[ing.hrid]
-      out.push({
-        hrid: ing.hrid,
-        name: detail?.name || ing.hrid,
-        count: ing.count,
-        level: ing.level,
-        makers: getChainMakersOf(ing.hrid)
-      })
-    }
-    break // 只取第一个可用项目，避免同物品多项目时原料重复
+  // ── 炼金：投入品即原料，且按命中率放大 ──
+  if (isAlchemyKind(step.kind)) {
+    const cal = buildChainCalculator(step)
+    if (!cal.available) return []
+    const targetHrid = step.outHrid || cal.productList[0]?.hrid
+    const target = targetHrid ? cal.productList.find(p => p.hrid === targetHrid) : undefined
+    const rate = target?.rate ?? 0
+    if (rate <= 0) return []
+    out.push({
+      hrid: step.hrid,
+      name: gameData.itemDetailMap[step.hrid]?.name || step.hrid,
+      count: 1 / rate,
+      makers: getChainMakersOf(step.hrid)
+    })
+    return out
+  }
+
+  // ── 采集 / 制造：用配方本身的原料清单 ──
+  const cal = buildChainCalculator(step)
+  if (!cal.available) return []
+  for (const ing of cal.ingredientList) {
+    const key = `${ing.hrid}|${ing.level || 0}`
+    if (seen.has(key)) continue
+    // 过滤茶：它们来自玩家的冲泡配置，不是配方的一环
+    if (isTeaIngredientOf(step.action, ing.hrid)) continue
+    // 过滤「自产自用」：炼金转化会把自己列为原料（1 - 成功率 的那部分留在手里），
+    // 实测法师布的原料清单第一条就是「Magician's Cloth×0.85825」——它自己。
+    // 对新手这是死循环，必须排除。
+    if (ing.hrid === itemHrid) continue
+    // 过滤金币：它是系统货币，不是「一环工序」。若不过滤，它既没有上游，
+    // 又会被 `isBaseMaterial` 判成「一级原料」而把新手引到「金币怎么获取」的死路。
+    // 金币成本由 `Calculator.cost` 单独计入，不会因为这里过滤而丢失。
+    if (ing.hrid === COIN_HRID) continue
+    seen.add(key)
+    const detail = gameData.itemDetailMap[ing.hrid]
+    out.push({
+      hrid: ing.hrid,
+      name: detail?.name || ing.hrid,
+      count: ing.count,
+      level: ing.level,
+      makers: getChainMakersOf(ing.hrid)
+    })
   }
   return out
 }
@@ -333,6 +499,7 @@ export function getChainStepSummary(step: ChainStep): ChainStepSummary | null {
 export function clearChainBuilderCache() {
   itemOptionCache.clear()
   makerCache.clear()
+  alchemyReverseCache.clear()
 }
 
 
