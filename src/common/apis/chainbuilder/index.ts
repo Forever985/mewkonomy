@@ -6,7 +6,9 @@ import { GatherCalculator } from "@/calculator/gather"
 import { ManufactureCalculator } from "@/calculator/manufacture"
 import { getStorageCalculatorItem } from "@/calculator/utils"
 import { WorkflowCalculator } from "@/calculator/workflow"
+import { getActionConfigOf } from "@/common/apis/player"
 import { getTrans } from "@/locales"
+import { COIN_HRID } from "@/pinia/stores/game"
 import { getGameDataApi } from "../game"
 
 /**
@@ -37,6 +39,28 @@ export interface ChainProjectOption {
 export interface ChainItemOption {
   hrid: string
   name: string
+  /** 中文名（来自游戏语言包），用于展示与搜索 */
+  cn?: string
+}
+
+/**
+ * 在候选物品里做多路匹配：**英文名 / 中文名 / hrid 片段**。
+ *
+ * ⚠️ 三路都要的原因：玩家接触这个游戏的入口不同 ——
+ * 中文玩家打「奶酪」，从 Wiki 或别人分享里来的人打 `/items/azure_cheese`，
+ * 英文玩家打 `Azure Cheese`。只支持一种，另外两种人就「搜不到」。
+ *
+ * 与 `common/utils/multilang-search.ts` 的 `normalizeTerm` 同思路（都做小写化），
+ * 但这里只需要「包含」判定，不需要多词 AND/OR 语法，故不复用整套引擎。
+ */
+export function filterChainItems<T extends ChainItemOption>(items: T[], query: string): T[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  return items.filter((i) =>
+    i.name.toLowerCase().includes(q)
+    || (i.cn && i.cn.includes(query.trim()))
+    || i.hrid.toLowerCase().includes(q)
+  )
 }
 
 /** 可选项目列表 */
@@ -91,7 +115,8 @@ export function getChainStepItemOptions(step: Pick<ChainStep, "project" | "actio
   for (const item of Object.values(gameData.itemDetailMap)) {
     const cal = buildChainCalculator({ ...step, hrid: item.hrid, catalystRank: 0 } as ChainStep)
     if (cal.available) {
-      options.push({ hrid: item.hrid, name: item.name })
+      // cn：游戏语言包里的中文名，供搜索与展示（getTrans 在英文界面原样返回英文名）
+      options.push({ hrid: item.hrid, name: item.name, cn: getTrans(item.name) as string })
     }
   }
   options.sort((a, b) => a.name.localeCompare(b.name))
@@ -112,6 +137,173 @@ export function getChainAlchemyOutputOptions(step: ChainStep): ChainItemOption[]
       name: gameData.itemDetailMap[p.hrid]?.name || p.hrid
     }))
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * 以下是给「新手模式」加的能力（2026-10-07）
+ *
+ * 改造前的实测问题：11 个项目里单个下拉最多 **889 项**（点金），
+ * 且要用户先想清楚「我的原料是什么」。而新手的心智是
+ * 「我想做这个东西，划算吗」—— 所以下面这套是**从成品倒推**。
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** 一个物品能被哪些「项目」生产出来（反向查询）。用于「我想做 X」的入口。 */
+export interface ChainMakerOption extends ChainItemOption {
+  project: string
+  action: Action
+  kind: ChainStep["kind"]
+  /** 该环节 1 次产出里，这个物品占多少 */
+  count: number
+}
+
+const makerCache = new Map<string, ChainMakerOption[]>()
+
+/**
+ * 「哪些项目能做出这个物品」。
+ *
+ * 遍历全部项目 × 全部物品看似昂贵，但 `getChainStepItemOptions` 已经把
+ * 「某项目下有哪些可用物品」算好并缓存了，这里直接反查那份缓存，
+ * 额外开销只有一次 Map 查找 + 一次 Calculator 构造。
+ */
+export function getChainMakersOf(itemHrid: string): ChainMakerOption[] {
+  const cached = makerCache.get(itemHrid)
+  if (cached) return cached
+
+  const gameData = getGameDataApi()
+  const item = gameData.itemDetailMap[itemHrid]
+  const out: ChainMakerOption[] = []
+  if (!item) {
+    makerCache.set(itemHrid, out)
+    return out
+  }
+
+  for (const p of getChainProjectOptions()) {
+    const opts = getChainStepItemOptions({ project: p.label, action: p.action, kind: p.kind })
+    if (!opts.some(o => o.hrid === itemHrid)) continue
+    const cal = buildChainCalculator({ project: p.label, action: p.action, kind: p.kind, hrid: itemHrid } as ChainStep)
+    if (!cal.available) continue
+    // 该物品在该动作产出物中的单次数量（拿不到就退化为 1，只作展示）
+    const p0 = cal.productList.find(x => x.hrid === itemHrid)
+    out.push({
+      hrid: itemHrid,
+      name: item.name,
+      project: p.label,
+      action: p.action,
+      kind: p.kind,
+      count: p0?.count || 1
+    })
+  }
+  makerCache.set(itemHrid, out)
+  return out
+}
+
+/**
+ * 某个物品的「原料清单」（它是谁做出来的、要做它需要什么）。
+ * 用于新手模式下把链条一环一环往前推。
+ */
+export interface ChainIngredientInfo {
+  hrid: string
+  name: string
+  count: number
+  level?: number
+  /** 该原料自身能由哪些项目产出（空 ⇒ 一级原料，需采集/外购） */
+  makers: ChainMakerOption[]
+}
+
+/**
+ * 判定一个物品是否属于「玩家冲泡配置」带来的消耗（茶）。
+ *
+ * ⚠️ 这类物品**不是配方原料**：`getTeaIngredientList` 是按玩家在「冲泡」面板里
+ * 勾选的茶动态算出来的（`getActionConfigOf(action).tea`），每个人配的茶不同、
+ * 数量极小（实测 0.008~0.023 份/次，来自「1 小时 / 300s / 时钟」口径）。
+ *
+ * 它们不该出现在新手模式的「原料清单」里 —— 新手会把「智慧茶」当成需要自己做的工序，
+ * 从而被 3~5 个茶类物品淹没。
+ *
+ * ⚠️ **不能按 categoryHrid 判定**：茶的真实类目是 `/item_categories/drink`
+ * （和奶酒同大类，见 data.json 实测），按类目过滤会连正常饮品一起误杀。
+ * 这里直接比对「玩家该动作配置的茶清单」—— 权威来源，且天然随玩家配置变化。
+ *
+ * @param action 该环节的动作；同一个物品对不同动作的判定可能不同
+ */
+function isTeaIngredientOf(action: Action, hrid: string): boolean {
+  const tea = getActionConfigOf(action)?.tea
+  return Array.isArray(tea) && tea.includes(hrid)
+}
+
+export function getChainIngredientsOf(itemHrid: string): ChainIngredientInfo[] {
+  const gameData = getGameDataApi()
+  const out: ChainIngredientInfo[] = []
+  const seen = new Set<string>()
+
+  // 遍历所有项目，找到能做出它的，用其 ingredientList 作为原料
+  for (const maker of getChainMakersOf(itemHrid)) {
+    const cal = buildChainCalculator({
+      project: maker.project,
+      action: maker.action,
+      kind: maker.kind,
+      hrid: itemHrid
+    } as ChainStep)
+    for (const ing of cal.ingredientList) {
+      const key = `${ing.hrid}|${ing.level || 0}`
+      if (seen.has(key)) continue
+      // 过滤茶：它们来自玩家的冲泡配置，不是配方的一环
+      if (isTeaIngredientOf(maker.action, ing.hrid)) continue
+      // 过滤「自产自用」：炼金转化会把自己列为原料（1 - 成功率 的那部分留在手里），
+      // 实测法师布的原料清单第一条就是「Magician's Cloth×0.85825」——它自己。
+      // 对新手这是死循环，必须排除。
+      if (ing.hrid === itemHrid) continue
+      // 过滤金币：它是系统货币，不是「一环工序」。若不过滤，它既没有上游，
+      // 又会被 `isBaseMaterial` 判成「一级原料」而把新手引到「金币怎么获取」的死路。
+      // 金币成本由 `Calculator.cost` 单独计入，不会因为这里过滤而丢失。
+      if (ing.hrid === COIN_HRID) continue
+      seen.add(key)
+      const detail = gameData.itemDetailMap[ing.hrid]
+      out.push({
+        hrid: ing.hrid,
+        name: detail?.name || ing.hrid,
+        count: ing.count,
+        level: ing.level,
+        makers: getChainMakersOf(ing.hrid)
+      })
+    }
+    break // 只取第一个可用项目，避免同物品多项目时原料重复
+  }
+  return out
+}
+
+/** 环节的「说明」：这一步在干什么、消耗什么、产出什么。给新手看的白话摘要。 */
+export interface ChainStepSummary {
+  inputs: { hrid: string, name: string, count: number }[]
+  outputs: { hrid: string, name: string, count: number, rate?: number }[]
+  timeCost: string
+}
+
+export function getChainStepSummary(step: ChainStep): ChainStepSummary | null {
+  if (!step.hrid) return null
+  const cal = buildChainCalculator(step)
+  if (!cal.available) return null
+  const gameData = getGameDataApi()
+  const nameOf = (h: string) => gameData.itemDetailMap[h]?.name || h
+  const perHour = Math.round(cal.actionsPH)
+  return {
+    inputs: cal.ingredientList
+      // 与 getChainIngredientsOf 同款过滤：茶来自玩家冲泡配置、金币是货币、
+      // 都不是「这一步在消耗某种物品」意义上的原料
+      .filter(i => !isTeaIngredientOf(step.action, i.hrid) && i.hrid !== COIN_HRID)
+      .map(i => ({ hrid: i.hrid, name: nameOf(i.hrid), count: i.count })),
+    outputs: cal.productList.map(p => ({ hrid: p.hrid, name: nameOf(p.hrid), count: p.count, rate: p.rate })),
+    // ⚠️ 不能用 getTrans 的占位符语法：它在本文件里拿不到 vue-i18n 的运行时实例，
+    // 早前版本导致 "{0}" 原样显示。这里直接输出已算好的数值。
+    timeCost: `${perHour} ${getTrans("次 / 小时")}`
+  }
+}
+
+/** 清空缓存（游戏数据刷新后调用，避免拿到旧数据） */
+export function clearChainBuilderCache() {
+  itemOptionCache.clear()
+  makerCache.clear()
+}
+
 
 /** 环节的衔接产物：制造/采集=物品本身；炼金=用户指定的 outHrid */
 function getStepOutputHrid(step: ChainStep): string | undefined {

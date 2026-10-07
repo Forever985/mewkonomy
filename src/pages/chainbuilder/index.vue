@@ -1,19 +1,218 @@
 <script lang="ts" setup>
-import type { ChainStep } from "@/common/apis/chainbuilder"
-import { calcChainProfitApi, getChainAlchemyOutputOptions, getChainProjectOptions, getChainStepItemOptions, isAlchemyKind } from "@/common/apis/chainbuilder"
+import type { ChainMakerOption, ChainStep, ChainStepSummary } from "@/common/apis/chainbuilder"
 import type Calculator from "@/calculator"
 import type { WorkflowCalculator } from "@/calculator/workflow"
+import {
+  calcChainProfitApi,
+  clearChainBuilderCache,
+  filterChainItems,
+  getChainAlchemyOutputOptions,
+  getChainIngredientsOf,
+  getChainMakersOf,
+  getChainProjectOptions,
+  getChainStepItemOptions,
+  getChainStepSummary,
+  isAlchemyKind
+} from "@/common/apis/chainbuilder"
+import { getGameDataApi, getItemDetailOf } from "@/common/apis/game"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import * as Format from "@@/utils/format"
-import { ArrowDown, ArrowUp, Delete, MagicStick, Plus } from "@element-plus/icons-vue"
+import { getTrans } from "@/locales"
+import { ArrowDown, ArrowUp, Delete, MagicStick, Plus, QuestionFilled, Search } from "@element-plus/icons-vue"
 import { useI18n } from "vue-i18n"
+import { useGameStore } from "@/pinia/stores/game"
 import ActionDetail from "../dashboard/components/ActionDetail.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 
 const { t } = useI18n()
+const gameStore = useGameStore()
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 面向新手的改造（2026-10-07）
+ *
+ * ## 改造前实测的三个障碍
+ *
+ * 1. **入口方向反了**。新手的心智是「我想做这个东西，划算吗」，
+ *    而原界面逼他先答「我的原料是什么」—— 于是第一屏就是一个空环节 + 11 个陌生项目。
+ * 2. **候选爆炸**。实测单个下拉的候选数：
+ *    挤奶 7 / 烹饪 31 / 冲泡 70 / 裁缝 143 / 制造 198 / 锻造 205 /
+ *    转化 622 / 分解 742 / **点金 889**。让新学生在 889 项里找东西 = 劝退。
+ * 3. **黑话无解释**。「内部流转」「衔接产物」「倍率」「alignHrid」，
+ *    界面上一个都没解释。
+ *
+ * ## 改造后的两条路
+ *
+ * - **新手模式（默认）**：先选「我想做的成品」，系统反查「谁能做它」，
+ *    再顺着原料一层层往前推。每层候选被**上一层的产物**收敛，不再是全量列表。
+ * - **进阶模式**：保留原来的正向逐环节编辑（一行一个环节，自由组合）。
+ *    老玩家不会被新界面束缚，两种模式共享同一份结果区。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+const mode = ref<"newbie" | "advanced">("newbie")
+
+/* ───────────────────── 示例链：让新手先看到「长什么样」 ───────────────────── */
+
+/**
+ * 内置示例链 —— 新手最缺的不是功能，是**参照物**。
+ *
+ * 空白的「环节 1 + 11 个项目」无法自解释，而「挤奶→锻造→转化→分解」这种
+ * 具体链路一看就懂。所以每条示例都直接给出完整 steps，一键载入后可计算、可改。
+ *
+ * ⚠️ **示例里的每个 hrid 都必须真实可用**（`buildChainCalculator(...).available === true`），
+ * 否则点了「计算」只会得到一句「存在不可用的环节」，比没有示例更糟。
+ * 早前第二例写成「裁缝斗篷 → 转化贤者之石 → 分解贤者之石」，实测
+ * `DecomposeCalculator(philosophers_stone).available === false`（游戏里不能分解它），
+ * 已被 `tests/chainbuilder-examples.test.ts` 锁死。
+ */
+const EXAMPLES: { name: string, desc: string, steps: ChainStep[] }[] = [
+  {
+    name: "示例：两级链（最常见）",
+    desc: "挤奶得原奶 → 锻造得奶酪。教你「一步喂给下一步」",
+    steps: [
+      { project: "挤奶", action: "milking", kind: "gather", hrid: "/items/azure_milk" },
+      { project: "锻造", action: "cheesesmithing", kind: "manufacture", hrid: "/items/azure_cheese" }
+    ]
+  },
+  {
+    name: "示例：带炼金的三级链",
+    desc: "裁缝得竹布 → 转化得亚麻布 → 分解。教你炼金环节怎么衔接（带催化剂加成）",
+    steps: [
+      { project: "裁缝", action: "tailoring", kind: "manufacture", hrid: "/items/bamboo_fabric" },
+      {
+        project: "转化",
+        action: "alchemy",
+        kind: "transmute",
+        hrid: "/items/bamboo_fabric",
+        outHrid: "/items/linen_fabric",
+        catalystRank: 1
+      },
+      { project: "分解", action: "alchemy", kind: "decompose", hrid: "/items/linen_fabric", catalystRank: 1 }
+    ]
+  }
+]
+
+function loadExample(ex: typeof EXAMPLES[number]) {
+  mode.value = "advanced"
+  steps.value = JSON.parse(JSON.stringify(ex.steps))
+  chainName.value = ex.name.replace(/^示例：/, "")
+  result.value = null
+  ElMessage.success(t("已载入示例，可直接点「计算」，也可以改成你自己的链路"))
+}
+
+/* ───────────────────────── 新手模式：从成品倒推 ───────────────────────── */
+
+/** 目标成品（新手模式的起点） */
+const targetHrid = ref("")
+const targetSearch = ref("")
+/** 已排好的链条（从原料到成品，与进阶模式 steps 同构，可直接复用 calcChainProfitApi） */
+const newbieSteps = ref<ChainStep[]>([])
+/** 正在展开的层级：0 = 目标成品层，1..N = 逐层往前 */
+const expandLevel = ref(0)
+
+/** 目标物品本身能由哪些项目产出 —— 候选被真实数据收敛，通常 1~5 项 */
+const targetMakers = computed<ChainMakerOption[]>(() => {
+  return targetHrid.value ? getChainMakersOf(targetHrid.value) : []
+})
+
+const targetItem = computed(() => (targetHrid.value ? getItemDetailOf(targetHrid.value) : undefined))
+
+/**
+ * 全部可搜索物品（新手模式下唯一需要面对的大列表，但支持多路模糊搜索）。
+ *
+ * ⚠️ 候选必须支持 **hrid / 中文名 / 英文名** 三路匹配：
+ * 中文玩家打「奶酪」，从 Wiki 或别人分享链接来的人打 `/items/azure_cheese`，
+ * 英文玩家打 `Azure Cheese`。只支持一种，另外两种人就「搜不到」。
+ */
+const allItems = computed(() => {
+  const map = getGameDataApi().itemDetailMap
+  return Object.values(map)
+    .filter(i => i.enhancementCosts || i.alchemyDetail || i.categoryHrid === "/item_categories/equipment")
+    .map(i => ({ hrid: i.hrid, name: i.name, cn: getTrans(i.name) as string }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+})
+
+const targetCandidates = computed(() => filterChainItems(allItems.value, targetSearch.value).slice(0, 60))
+
+/**
+ * 当前待展开层的原料列表。
+ *
+ * 关键：这里返回的是「上一步的产物所对应的下一层原料」，
+ * 而非全量候选 —— 这就是把 889 项收敛到个位数的关键。
+ */
+const currentIngredients = computed(() => {
+  if (!newbieSteps.value.length) return []
+  // 已排好的链条是从原料→成品，末尾那个就是当前要往前追问的环节
+  const head = newbieSteps.value[0]
+  return getChainIngredientsOf(head.hrid)
+})
+
+/** 该层的原料里，哪些是「一级原料」（没有更上游 ⇒ 需要采集或外购） */
+function isBaseMaterial(makers: ChainMakerOption[]) {
+  return makers.length === 0
+}
+
+const currentStepSummary = computed<ChainStepSummary | null>(() => {
+  if (!newbieSteps.value.length) return null
+  return getChainStepSummary(newbieSteps.value[0])
+})
+
+/** 换目标成品 ⇒ 清空整条链重新开始 */
+watch(targetHrid, () => {
+  newbieSteps.value = []
+  expandLevel.value = 0
+  result.value = null
+})
+
+/** 在目标层选「用哪个项目做」 */
+function onPickMaker(maker: ChainMakerOption) {
+  if (!targetHrid.value) return
+  newbieSteps.value = [{ project: maker.project, action: maker.action, kind: maker.kind, hrid: targetHrid.value }]
+  expandLevel.value = 1
+  result.value = null
+}
+
+/** 把某个原料接成新的最上游环节 */
+function onPickIngredient(hrid: string, maker?: ChainMakerOption) {
+  if (!newbieSteps.value.length) return
+  if (!maker) {
+    // 一级原料：没有更上游，作为链条起点。
+    // project 留空 —— 它是「采集 / 外购」而非某个生产动作，
+    // 界面上已按「外购 / 采集」展示，不该硬塞一个假项目。
+    newbieSteps.value.unshift({ project: "", action: "milking", kind: "gather", hrid })
+    result.value = null
+    return
+  }
+  newbieSteps.value.unshift({ project: maker.project, action: maker.action, kind: maker.kind, hrid })
+  result.value = null
+}
+
+/** 一键把当前层能自动识别的原料都补齐（多原料时全接；新手最常用） */
+function onAutoExpand() {
+  const ings = currentIngredients.value
+  const targets = ings.filter(i => i.makers.length > 0)
+  if (!targets.length) return
+  // 逐个插入到最上游
+  for (const ing of targets.reverse()) {
+    newbieSteps.value.unshift({
+      project: ing.makers[0].project,
+      action: ing.makers[0].action,
+      kind: ing.makers[0].kind,
+      hrid: ing.hrid
+    })
+  }
+  result.value = null
+}
+
+/** 手动挑一个环节（覆盖自动推断） */
+function onOverrideStep(maker: ChainMakerOption) {
+  if (!newbieSteps.value.length) return
+  newbieSteps.value[0] = { project: maker.project, action: maker.action, kind: maker.kind, hrid: newbieSteps.value[0].hrid }
+  result.value = null
+}
+
+/* ───────────────────────── 进阶模式：正向逐环节 ───────────────────────── */
 
 const projectOptions = getChainProjectOptions()
-
 const steps = ref<ChainStep[]>([
   { project: "", action: "milking", kind: "gather", hrid: "", catalystRank: 0 }
 ])
@@ -47,9 +246,14 @@ function onProjectChange(index: number) {
 function itemOptions(step: ChainStep) {
   return step.project ? getChainStepItemOptions(step) : []
 }
+/** 进阶模式的物品下拉：与新手模式共用多路匹配（中文名 / 英文名 / hrid） */
+function filterStepItems(step: ChainStep, query: string) {
+  return filterChainItems(itemOptions(step), query)
+}
 function alchemyOutputs(step: ChainStep) {
   return getChainAlchemyOutputOptions(step)
 }
+
 /**
  * 催化剂标签 —— 用**游戏内的真实物品名**，且随炼金类型变化。
  *
@@ -71,14 +275,25 @@ function catalystLabel(rank: number, kind?: string) {
   return t("无")
 }
 
+/* ───────────────────────── 统一计算与结果 ───────────────────────── */
+
+/** 当前生效的环节（两种模式共用一条计算链） */
+const activeSteps = computed<ChainStep[]>(() => {
+  if (mode.value === "newbie") {
+    return newbieSteps.value.filter(s => s.hrid)
+  }
+  return steps.value
+})
+
 function calculate() {
-  if (!steps.value.length || steps.value.some(s => !s.hrid)) {
+  const use = activeSteps.value
+  if (!use.length || use.some(s => !s.hrid)) {
     ElMessage.warning(t("请选择物品"))
     return
   }
   loading.value = true
   try {
-    const wf = calcChainProfitApi(steps.value, chainName.value || t("手动产业链"))
+    const wf = calcChainProfitApi(use, chainName.value || t("手动产业链"))
     result.value = wf
     if (!wf) {
       ElMessage.warning(t("存在不可用的环节，请检查选择"))
@@ -91,12 +306,28 @@ function calculate() {
   }
 }
 
+// 游戏数据刷新后，物品/价格变了 ⇒ 候选缓存与结果一并失效
+watch(() => gameStore.marketData, () => {
+  clearChainBuilderCache()
+  result.value = null
+})
+
 // 详情弹窗
 const detailVisible = ref(false)
 const detailData = ref<Calculator>()
 function showDetail(row: Calculator) {
   detailData.value = row
   detailVisible.value = true
+}
+
+/* ───────────────────────── 术语 tooltip ───────────────────────── */
+
+const TERM_TIPS: Record<string, string> = {
+  环节说明: "产业链由若干「环节」串起来：一步做一件事，前一步的产物自动作为后一步的原料（0 价内部流转，不重复计入成本）。",
+  衔接产物: "一次炼金可能产出多种东西（转化/分解/点金各有掉落）。这里要指定「哪一样交给下一步」，其余仍按市价计入收入。",
+  倍率说明: "整条链不是各环节独立相加，而是按「上一环节产出 ÷ 下一环节消耗」算出每步的相对倍数，这样才不会出现「产 10 个只够做 1 个」的时间失真。",
+  目标成品: "先选你最终想卖的东西。系统会告诉你「谁能做它」，然后顺着原料一层层往前推。",
+  一级原料: "这个物品没有更上游的工序了 —— 它要么靠采集得到，要么直接外购。它就是整条链的起点。"
 }
 </script>
 
@@ -105,29 +336,188 @@ function showDetail(row: Calculator) {
     <GameInfo />
     <el-card>
       <template #header>
-        <div class="flex items-center gap-2">
-          <span>{{ t("手动产业链") }}</span>
-          <span class="text-sm text-gray-400">{{ t("项目+动作逐节点缀连，自动内部流转并整链核算") }}</span>
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <div class="flex items-center gap-2">
+            <span>{{ t("手动产业链") }}</span>
+            <el-radio-group v-model="mode" size="small">
+              <el-radio-button value="newbie">
+                <span class="flex items-center gap-1">
+                  {{ t("新手模式") }}
+                </span>
+              </el-radio-button>
+              <el-radio-button value="advanced">
+                {{ t("进阶模式") }}
+              </el-radio-button>
+            </el-radio-group>
+          </div>
+          <span class="text-sm text-gray-400">
+            {{ mode === "newbie" ? t("先选成品，再顺着原料往前推；每层只列上一层能用到的东西") : t("项目+动作逐节点缀连，自动内部流转并整链核算") }}
+          </span>
         </div>
       </template>
 
-      <!-- 环节编辑 -->
-      <div class="chain-steps">
-        <div v-for="(step, index) in steps" :key="index" class="chain-step">
-          <div class="chain-step-no">{{ t("环节") }} {{ index + 1 }}</div>
+      <!-- ═══════════════ 新手模式：从成品倒推 ═══════════════ -->
+      <div v-if="mode === 'newbie'">
+        <!-- 首屏引导：先说清「这是什么」，再给两个示例当参照物 -->
+        <el-alert type="info" :closable="false" show-icon class="mb-3">
+          <template #title>
+            <span class="text-sm">
+              {{ t("产业链 = 把「做东西」的几步串起来，算出整条链每小时赚多少。") }}
+              {{ t("下面选你最终想卖的东西，剩下的交给工具。") }}
+            </span>
+          </template>
+        </el-alert>
+
+        <el-steps :active="newbieSteps.length ? (currentIngredients.length ? 1 : 2) : 0" simple finish-status="success">
+          <el-step :title="t('① 选成品')" />
+          <el-step :title="t('② 选谁能做')" />
+          <el-step :title="t('③ 往前推原料')" />
+        </el-steps>
+
+        <div class="mt-4">
+          <el-input
+            v-model="targetSearch"
+            :placeholder="t('搜索你想做的东西：中文名 / 英文名 / hrid 都行，例如「奶酪」或 azure_cheese')"
+            clearable
+            size="large"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <div v-if="targetCandidates.length" class="target-hints mt-2">
+            <el-tag
+              v-for="opt in targetCandidates"
+              :key="opt.hrid"
+              class="cursor-pointer mr-1 mb-1"
+              @click="targetHrid = opt.hrid"
+            >
+              <span>{{ t(opt.name) }}</span>
+              <!-- 中文名与英文名不同时都显示，否则新手只认得其中一种 -->
+              <span v-if="opt.cn && opt.cn !== opt.name" class="text-xs opacity-70">{{ opt.cn }}</span>
+            </el-tag>
+          </div>
+        </div>
+
+        <div v-if="targetItem" class="mt-3 flex items-center gap-2 p-2 rounded bg-gray-50">
+          <ItemIcon :hrid="targetItem.hrid" :width="32" :height="32" />
+          <span class="font-medium">{{ t(targetItem.name) }}</span>
+          <span class="text-xs text-gray-500">{{ targetItem.hrid }}</span>
+        </div>
+
+        <!-- 第 2 步：选「谁能做」 -->
+        <div v-if="targetItem && !newbieSteps.length" class="mt-3">
+          <div class="text-sm mb-1">{{ t("下面这些做法能做出它，选一个：") }}</div>
+          <div class="text-xs text-gray-400 mb-2">
+            {{ t("同一个物品常有多种做法（如转化/分解/点金），它们的速度、成功率、掉落都不一样，选你实际会做的那一种。") }}
+          </div>
+          <div v-if="!targetMakers.length" class="text-sm text-gray-500">{{ t("这个物品不能生产（或需要先强化）") }}</div>
+          <el-radio-group v-for="m in targetMakers" :key="m.project + m.hrid" :value="m.project" class="mr-4">
+            <el-radio-button :value="m.project" @click="onPickMaker(m)">
+              {{ m.project }} · {{ t('1 次得 ') }}{{ Format.number(m.count, 2) }}
+            </el-radio-button>
+          </el-radio-group>
+        </div>
+
+        <!-- 第 3 步：往前推原料 -->
+        <div v-if="newbieSteps.length" class="mt-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-medium">{{ t("当前链条（从原料到成品）") }}</span>
+            <el-button size="small" text @click="newbieSteps = []">
+              {{ t("重新选成品") }}
+            </el-button>
+          </div>
+
+          <div v-for="(step, index) in [...newbieSteps].reverse()" :key="index" class="chain-step">
+            <div class="chain-step-no">{{ t("环节") }} {{ newbieSteps.length - index }}</div>
+            <ItemIcon :hrid="step.hrid" :width="22" :height="22" />
+            <span class="flex-1">{{ t(getItemDetailOf(step.hrid)?.name || step.hrid) }}</span>
+            <span class="text-xs text-gray-500">{{ step.project || t("外购 / 采集") }}</span>
+            <el-tooltip placement="top" effect="light" :show-after="120">
+              <template #content>
+                <div class="max-w-320px leading-5">
+                  {{ t("这一步的产物会自动作为下一步的原料（0 价内部流转，不重复计入成本）") }}
+                </div>
+              </template>
+              <el-tag size="small" type="info">{{ t("→ 交给下一步") }}</el-tag>
+            </el-tooltip>
+          </div>
+
+          <!-- 往上一层原料 -->
+          <div v-if="currentIngredients.length" class="mt-4 p-3 rounded border">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-sm font-medium">
+                {{ t("『") }}{{ t(currentStepSummary ? getItemDetailOf(currentStepSummary.outputs[0]?.hrid || "")?.name || '' : '') }}{{ t("』需要这些原料") }}
+              </span>
+              <el-button size="small" :icon="MagicStick" @click="onAutoExpand">
+                {{ t("自动补齐") }}
+              </el-button>
+            </div>
+            <div class="flex flex-col gap-2">
+              <div v-for="ing in currentIngredients" :key="ing.hrid + (ing.level || 0)" class="flex items-center gap-2">
+                <ItemIcon :hrid="ing.hrid" :width="22" :height="22" />
+                <span class="flex-1">{{ t(ing.name) }}</span>
+                <span class="text-xs text-gray-500">{{ t("需要 ") }}{{ Format.number(ing.count, 2) }}</span>
+                <!-- 一级原料：作为链条起点 -->
+                <el-tag v-if="isBaseMaterial(ing.makers)" size="small" type="info" class="cursor-pointer" @click="onPickIngredient(ing.hrid)">
+                  {{ t("作为起点（外购/采集）") }}
+                </el-tag>
+                <!-- 有上游：列出可选做法 -->
+                <el-select
+                  v-else
+                  :model-value="undefined"
+                  :placeholder="t('选谁来做')"
+                  size="small"
+                  style="width: 160px"
+                  @update:model-value="(v: any) => {
+                    const m = ing.makers.find(x => x.project === v)
+                    m && onPickIngredient(ing.hrid, m)
+                  }"
+                >
+                  <el-option v-for="m in ing.makers" :key="m.project" :label="m.project" :value="m.project" />
+                </el-select>
+              </div>
+            </div>
+          </div>
+          <div v-else class="mt-3 text-sm text-gray-500">{{ t("已推到一级原料，链条完成") }}</div>
+        </div>
+      </div>
+
+      <!-- ═══════════════ 进阶模式：正向逐环节 ═══════════════ -->
+      <div v-else>
+        <!-- 示例链：新手与老玩家都需要一个「参照物」，空白表单无法自解释 -->
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+          <span class="text-sm text-gray-500">{{ t("没思路？载入示例改改看：") }}</span>
+          <el-button v-for="ex in EXAMPLES" :key="ex.name" size="small" @click="loadExample(ex)">
+            {{ t(ex.name) }}
+          </el-button>
+          <el-tooltip v-for="ex in EXAMPLES" :key="`${ex.name}-tip`" placement="top" effect="light" :show-after="120">
+            <template #content>
+              <div class="max-w-280px leading-5">{{ t(ex.desc) }}</div>
+            </template>
+            <el-icon class="cursor-help text-gray-400" :size="14"><QuestionFilled /></el-icon>
+          </el-tooltip>
+        </div>
+
+        <div class="chain-steps">
+          <div v-for="(step, index) in steps" :key="index" class="chain-step">
+          <div class="chain-step-no">
+            {{ t("环节") }} {{ index + 1 }}
+          </div>
           <el-select
             :model-value="step.project"
             :placeholder="t('项目')"
             style="width: 110px"
             @update:model-value="step.project = $event; onProjectChange(index)"
           >
-            <el-option v-for="p in projectOptions" :key="p.label" :label="p.label" :value="p.label" />
+            <el-option v-for="p in projectOptions" :key="p.label" :label="t(p.label)" :value="p.label" />
           </el-select>
           <el-select
             v-model="step.hrid"
             filterable
+            :filter-method="(q: string) => filterStepItems(step, q)"
             :disabled="!step.project"
-            :placeholder="t('物品')"
+            :placeholder="t('物品（可搜中文名 / hrid）')"
             style="flex: 1"
             @change="step.outHrid = ''"
           >
@@ -150,15 +540,23 @@ function showDetail(row: Calculator) {
             <el-button :icon="ArrowUp" :disabled="index === 0" @click="moveStep(index, -1)" />
             <el-button :icon="ArrowDown" :disabled="index === steps.length - 1" @click="moveStep(index, 1)" />
           </el-button-group>
-          <el-button :icon="Delete" type="danger" text @click="removeStep(index)" />
+            <el-button :icon="Delete" type="danger" text @click="removeStep(index)" />
+          </div>
+
+          <div class="flex items-center gap-2 mt-3">
+            <el-button :icon="Plus" @click="addStep">
+              {{ t("添加环节") }}
+            </el-button>
+          </div>
         </div>
       </div>
 
-      <!-- 操作 -->
-      <div class="flex items-center gap-2 mt-3">
-        <el-button :icon="Plus" @click="addStep">{{ t("添加环节") }}</el-button>
-        <el-input v-model="chainName" :placeholder="t('产业链名称')" style="width: 200px" clearable />
-        <el-button type="primary" :icon="MagicStick" :loading="loading" @click="calculate">{{ t("计算") }}</el-button>
+      <!-- 统一操作栏 -->
+      <div class="flex items-center gap-2 mt-4">
+        <el-input v-model="chainName" :placeholder="t('产业链名称（可留空）')" style="width: 200px" clearable />
+        <el-button type="primary" :icon="MagicStick" :loading="loading" @click="calculate">
+          {{ t("计算") }}
+        </el-button>
       </div>
     </el-card>
 
@@ -167,7 +565,9 @@ function showDetail(row: Calculator) {
       <template #header>
         <div class="flex items-center justify-between">
           <span>{{ t("计算结果") }}：{{ result.project }}</span>
-          <el-button type="primary" text @click="showDetail(result)">{{ t("查看详情") }}</el-button>
+          <el-button type="primary" text @click="showDetail(result)">
+            {{ t("查看详情") }}
+          </el-button>
         </div>
       </template>
       <el-descriptions :column="4" border>
@@ -219,5 +619,15 @@ function showDetail(row: Calculator) {
   min-width: 52px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+.target-hints {
+  max-height: 140px;
+  overflow-y: auto;
+}
+.success {
+  color: #67c23a;
+}
+.error {
+  color: #f56c6c;
 }
 </style>
