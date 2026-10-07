@@ -20,7 +20,7 @@
  * 安全护栏：推送前断言 git status 中**不存在任何以 D 开头的 data/ 条目**，
  * 一旦出现删除立即中止，绝不让线上历史被误删。
  */
-import { execFileSync, spawnSync } from "node:child_process"
+import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -88,14 +88,22 @@ function gitFlags(port) {
 /** 逐个实测候选端口，返回第一个 git 真能连通的；全不行返回 0 */
 function detectProxyPort() {
   for (const port of PROXY_CANDIDATES) {
-    // timeout 防止死端口把探测挂死（9044 就是「连得上但不响应」）
-    const r = spawnSync(
-      "git",
-      [...gitFlags(port), "ls-remote", "--heads", REPO, BRANCH],
-      { stdio: "ignore", timeout: 25000 }
-    )
-    if (r.status === 0) {
-      return port
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      // timeout 防止死端口把探测挂死（9044 就是「连得上但不响应」）
+      const r = spawnSync(
+        "git",
+        [...gitFlags(port), "ls-remote", "--heads", REPO, BRANCH],
+        { stdio: "ignore", timeout: 25000 }
+      )
+      if (!r.error && r.status === 0) {
+        return port
+      }
+      // spawn 本身偶发 EBUSY ⇒ 重试同一端口；真的连不通（有 status）才换下一个
+      if (r.error && isSpawnBusy(r.error) && attempt < 3) {
+        sleepSync(200 * attempt)
+        continue
+      }
+      break
     }
   }
   return 0
@@ -116,13 +124,96 @@ const KEEP_OLD_SECONDS = 24 * 3600
 function log(msg) {
   console.log(`  ${msg}`)
 }
-function run(cmd, cmdArgs, opts = {}) {
-  const r = spawnSync(cmd, cmdArgs, { stdio: "inherit", ...opts })
-  if (r.status !== 0) throw new Error(`${cmd} ${cmdArgs.join(" ")} 退出码 ${r.status}`)
-  return r
+/** 同步等待（毫秒）。Atomics.wait 是纯同步的，不需要把整个脚本改成 async。 */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
+
+/**
+ * Windows 上 spawn 偶发 EBUSY 时是否该重试。
+ *
+ * 实测（2026-10-07）：同一条 `git --version` 连续调用会出现
+ * status=0 / ERR EBUSY 交替，且与 stdio 模式无关（ignore/inherit 正常，
+ * encoding=utf8 失败，但同样的 encoding=utf8 配上显式 stdio 又成功）。
+ * ⇒ 这是**间歇性的句柄/文件占用**（杀软扫描新写入的 clone 目录、
+ *    或进程创建钩子），不是确定性故障。
+ *
+ * 它曾经真实地让发布流程中断在 `git ls-files` 上：
+ *   [x] spawnSync git EBUSY
+ * 所以必须重试，不能当致命错误直接抛出。
+ */
+function isSpawnBusy(e) {
+  const code = e && e.code
+  return code === "EBUSY" || code === "EAGAIN" || /EBUSY|EAGAIN/.test(String(e && e.message))
+}
+
+const SPAWN_ATTEMPTS = 6
+
+function run(cmd, cmdArgs, opts = {}) {
+  let lastErr
+  for (let i = 1; i <= SPAWN_ATTEMPTS; i++) {
+    const r = spawnSync(cmd, cmdArgs, { stdio: "inherit", ...opts })
+    if (!r.error && r.status === 0) return r
+    const err = r.error || new Error(`${cmd} ${cmdArgs.join(" ")} 退出码 ${r.status}`)
+    // 只对「进程根本没起来」重试；进程起来了但退出码非 0 是真实错误，立即抛出
+    if (!r.error || !isSpawnBusy(r.error)) throw err
+    lastErr = err
+    if (i < SPAWN_ATTEMPTS) sleepSync(150 * i)
+  }
+  throw lastErr
+}
+
+/**
+ * 捕获命令行输出（同步）。
+ *
+ * ★ 用**文件描述符重定向**，不用管道。
+ *
+ * 为什么：实测（2026-10-07）在 clone 出来的目录里，
+ * `spawnSync(git, [...], { encoding: "utf8" })`（走管道）**必失败**：
+ *     ERR EBUSY: spawnSync git EBUSY
+ * 连续重试 6 次全部 EBUSY，而把 stdout 指向一个普通文件则稳定成功
+ * （同一目录、同一命令、连测 4 次全 OK）。stderr 指向 ignore 也一样正常。
+ *
+ * 这曾让整个发布中断在 `git ls-files` 上（`[x] spawnSync git EBUSY`），
+ * 是本轮「部署报成功但网站没变化」的直接原因之一。
+ *
+ * 顺带保留对 EBUSY 的少量重试：进程创建偶发占用（杀软扫描新 clone 的目录）
+ * 在别的机器上仍可能出现，重试成本极低。
+ */
 function runCapture(cmd, cmdArgs, opts = {}) {
-  return execFileSync(cmd, cmdArgs, { encoding: "utf8", ...opts })
+  const { cwd } = opts
+  const stamp = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const outFile = path.join(os.tmpdir(), `mwk-capture-out-${stamp}.txt`)
+  const errFile = path.join(os.tmpdir(), `mwk-capture-err-${stamp}.txt`)
+
+  let lastErr
+  for (let i = 1; i <= SPAWN_ATTEMPTS; i++) {
+    let fdOut, fdErr
+    try {
+      fdOut = fs.openSync(outFile, "w")
+      fdErr = fs.openSync(errFile, "w")
+      const r = spawnSync(cmd, cmdArgs, { cwd, stdio: ["ignore", fdOut, fdErr] })
+      fs.closeSync(fdOut); fdOut = undefined
+      fs.closeSync(fdErr); fdErr = undefined
+
+      if (r.error) throw r.error
+      if (r.status !== 0) {
+        const detail = fs.readFileSync(errFile, "utf8").trim()
+        throw new Error(`${cmd} ${cmdArgs.join(" ")} 退出码 ${r.status}${detail ? `\n${detail}` : ""}`)
+      }
+      return fs.readFileSync(outFile, "utf8")
+    } catch (e) {
+      if (!isSpawnBusy(e)) throw e
+      lastErr = e
+      if (i < SPAWN_ATTEMPTS) sleepSync(150 * i)
+    } finally {
+      if (fdOut !== undefined) { try { fs.closeSync(fdOut) } catch {} }
+      if (fdErr !== undefined) { try { fs.closeSync(fdErr) } catch {} }
+      try { fs.unlinkSync(outFile) } catch {}
+      try { fs.unlinkSync(errFile) } catch {}
+    }
+  }
+  throw lastErr
 }
 
 /** dist 里所有文件的相对路径集合（用于判断线上哪些文件本次不再产出） */
