@@ -1546,3 +1546,111 @@ actionsPerHour: number   // 每小时动作次数
 
 `vue-tsc` **0 报错**；`vitest` **41 文件 / 368 用例全绿**（上轮 365，+3）；
 `vite build --mode private` 成功（12.27s）；三个文件行尾与 HEAD 一致（CRLF），无 churn。
+
+---
+
+## 三十四、charmtransform 的买卖价轮子被 API 层旁路（2026-10-07）
+
+### 34.1 用户指正：不该问「自制还是市价」，那是轮子里的一个档
+
+我在 §33 结尾问用户「投入的冲泡护符按市场买入价还是自制成本计价」。
+用户直接否掉：**「为什么不能复用轮子呢？还是那句话，无非就是左买右卖、左买左卖、
+右买右卖、右买左卖。」**
+
+教训：动手前先 grep 有没有现成轮子（与 §33.1 同一条原则，我却又犯了一次）。
+
+实测确认本页已有**两个**轮子：
+
+| 轮子 | 位置 | 能力 |
+| --- | --- | --- |
+| `PriceStatusSelect` + `usePriceStatus` | `charmtransform/index.vue:110` | `buyStatus` / `sellStatus`：左价 / 右价 / 压一档 / 抬一档 |
+| `priceFallback`（UI 在 `GameInfo` 内，本页已渲染） | `stores/game.ts` | 左右独立优先级链：市价 → 借另一端 → 商店 / **大套装（自产）** |
+
+⇒ **「按自制成本估算」= `priceFallback.then = "bigset"` 或 `forceBigSet`**
+——它本来就是轮子里的一个档，**根本不需要问用户**。
+
+### 34.2 真正的缺陷：控件在页面上，但成本侧不接
+
+`calcCharmTransformApi` 曾传：
+
+```ts
+const ingredientConfig: IngredientPriceConfig[] = essenceCost > 0
+  ? [{ hrid: charmHrid, immutable: true, price: essenceCost }]
+  : []
+```
+
+而 `calculator/index.ts` 的 `handlePrice` 会用它**覆盖** `ingredientList[0]` 的取价，
+默认取价本来是 `getPriceOf(hrid).ask`
+⇒ **轮子被旁路，两个控件在 charmtransform 上都是装饰品。**
+
+实测（官方实时数据 2026-10-07）：四种 `buyStatus` 得到护符项**恒为自制成本**。
+
+### 34.3 ⚠️ 缺陷极其隐蔽：`costPH` 合计仍然会变
+
+`handlePrice` 是按**数组下标**匹配的（`priceConfigList[i]`，**不是按 hrid**），
+而 `TransmuteCalculator.ingredientList` 的结构是 `[护符, 催化剂?, ...茶]`：
+
+| 下标 | 项 | 旧实现是否被覆盖 | 修复前是否随轮子变 |
+| --- | --- | --- | --- |
+| 0 | **冲泡护符本身** | ✅ 覆盖成自制成本 | ❌ **恒定（缺陷）** |
+| 1 | 催化剂 | ❌ | ✅ 变 |
+| 2..4 | 茶（催化茶等） | ❌ | ✅ 变 |
+
+⇒ **整体 `costPH` 三档分明，看起来轮子"生效了"。**
+我第一版回归测试就断言 `costPH` 三档不同 ⇒ **回退源码后仍然全绿（假绿灯）**。
+
+**必须断言到「护符那一项」才抓得住。**
+
+### 34.4 一个假绿灯的诞生与拆除（过程记录）
+
+三轮迭代，每一轮都抓到自己的假绿灯：
+
+1. **v1：断言 `costPH` 三档不同** → 回退后仍全绿。
+   原因：催化剂与茶仍走轮子，合计照样变（§34.3）。
+2. **v2：改断言护符项，但加了 `?? 直接 new 计算器` 兜底** → 回退后**仍然全绿**。
+   原因：API 层字段缺失时兜底路径接管，**断言照样成立，缺陷被吞掉**。
+   ⚠️ 这是 §31.3 的翻版：**任何「让失败消失」的兜底都会把测试变成摆设。**
+3. **v3：去掉所有兜底 + 只从 API 层取** → 回退后 3 项全失败 ✅
+
+另外 v1 还踩了一个数据依赖的坑：选了 `master` 档（实测 `ask = bid = -1`，
+被 `priceFallback` 兜底成自产估值）⇒ 三档恒同 ⇒ 假通过。
+**最终版改为自造市价**：给五档护符固定 `ask=777 / bid=555`，
+并显式断言「市价 ≠ 自制成本」这个**前提**。
+
+催化剂与茶也必须造价 —— `Calculator.valid` 的判定是「**所有**投入项 `price !== -1`」，
+只造护符的价会让测试挂在无关的失效条件上。
+
+### 34.5 修复
+
+- 删掉 `ingredientPriceConfigList` 的覆盖（改为空数组）⇒ 投入价走 `getPriceOf()` 原生路径。
+- `essenceCost` 保留但**降为纯参考列**（tooltip 里对照「自制这条路大约多少钱」）。
+- 新增 `charmPriceNow` / `charmPriceSourceNow`，UI 显示轮子当前取到的价与**来源**
+  （`market` / `cross` 借价 / `shop` / `selfcraft` 自产估值 / `none`，非 market 打标签）。
+  ⚠️ 不标来源的话用户会把 `cross`、`selfcraft` 的数字当市价，而这两者都不是能成交的价格。
+- 新增 `ingredientListWithPrice`，UI 可展示「钱花在哪」（护符 + 催化剂 + 茶）。
+- `valid` 判定从 `essenceCost > 0` 改为 `charmPriceNow.ask > 0`
+  —— 否则用户把 `priceFallback` 切到「市价」而该档无报价时会被误判成「算不出来」。
+
+### 34.6 顺带证实的两条事实
+
+1. **轮子本身完好**：实测 `advanced_alchemy_charm`（双边报价）在四种 `buyStatus` 下
+   分别得 50,800,000 / 50,614,072（压一档）/ 50,985,928（抬一档）/ 42,880,000（右价）
+   —— 四个值全不同。**问题从来不在轮子，在于有人旁路了它。**
+2. ⚠️ **`currentBuyStatus` 是模块加载时的快照**（`apis/game/index.ts:41-42`），
+   靠 `watch` 同步 ⇒ **测试里改完 store 必须 `await` 一拍**，否则读到旧值。
+   我第一版探针就栽在这里，一度误判「轮子无效」。
+
+### 34.7 测试
+
+`tests/charmtransform-price-wheel.test.ts`（**3 用例**，**自足**，不依赖任何外部实时文件）：
+
+1. 投入护符项取价随 `buyStatus` 三档变化，且等于 `getPriceOf` 的结果
+2. 护符项 `priceSource` 必须是 `market`（`internal` 即被覆盖）
+3. 自制成本降为参考列：与投入价不同也不影响 `valid`
+
+**双向验证**：修复后 3 passed；`git stash` 回退源码后 **3 failed**。
+
+### 34.8 验证
+
+`vue-tsc` **0 报错**；`vitest` **42 文件 / 371 用例全绿**（连续两次一致，+1 文件 +3 用例）；
+`vite build --mode private` 成功（15.56s）；两个源文件行尾与 HEAD 一致（CRLF），无 churn。

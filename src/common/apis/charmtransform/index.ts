@@ -1,6 +1,7 @@
 import type { IngredientPriceConfig, ProductPriceConfig } from "@/calculator"
+import type { PriceSource } from "@/common/apis/game"
 import { TransmuteCalculator } from "@/calculator/alchemy"
-import { getGameDataApi, getMarketDataApi, getPriceOf } from "@/common/apis/game"
+import { getGameDataApi, getMarketDataApi, getPriceOf, getPriceSourceOf } from "@/common/apis/game"
 import { getTrans } from "@/locales"
 
 /**
@@ -154,8 +155,18 @@ export interface CharmTierResult {
   charmName: string
   /** 从精华制作到该档冲泡护符所需精华数 */
   essenceCount: number
-  /** 精华成本（essenceCount × 精华ask，-1 表示精华无价不可算） */
+  /**
+   * 自制成本参考值（essenceCount × 精华价）。
+   *
+   * ⚠️ **仅供对照，不参与利润计算** —— 投入价一律走买卖价轮子
+   * （`PriceStatusSelect` 的左右价 + `priceFallback` 的自产兜底）。
+   * 保留它是为了让用户一眼比出「市价更便宜还是自制更便宜」。
+   */
   essenceCost: number
+  /** 投入护符当前按轮子取到的买入价（真实参与利润计算的那个数） */
+  charmPriceNow: number
+  /** 上面那个数的来源：market / cross / shop / selfcraft / none */
+  charmPriceSourceNow: PriceSource
   /** 该档冲泡护符市场买入价（参考） */
   charmAskActual: number
   successRate: number
@@ -166,7 +177,18 @@ export interface CharmTierResult {
   profitIdealPH: number
   profitActualRate: number
   profitIdealRate: number
+  /** 投入价必须由轮子取到数 */
   valid: boolean
+  /**
+   * 转化这一步的**完整投入清单**（护符本身 + 催化剂 + 茶），已按各自口径取价。
+   *
+   * 暴露它有两个实际用途：
+   *  1. UI 可以展示「钱花在哪」——旧界面只给一个总数，看不到催化剂与茶；
+   *  2. 测试能精确断言「护符那一项」的价格，从而抓住
+   *     `ingredientPriceConfigList` 按下标覆盖护符项、旁路买卖价轮子的缺陷。
+   *     （只看 `costPH` 会假绿 —— 催化剂与茶仍走轮子，合计照样会变。）
+   */
+  ingredientListWithPrice: { hrid: string, count: number, price: number, priceSource: string }[]
   products: CharmProductResult[]
   /** 制作阶段的副产品（单列） */
   byProducts: CharmByProduct[]
@@ -195,6 +217,14 @@ export function calcCharmTransformApi(catalystRank: number = 0): CharmTierResult
     // 从权威数据推导，不再硬编码
     const essenceCount = brewingEssenceNeededFor(tier)
     const essenceCost = essencePrice > 0 && essenceCount > 0 ? essenceCount * essencePrice : -1
+    /**
+     * 投入护符当前**按轮子**取到的买入价，及其来源。
+     *
+     * `getPriceSourceOf` 会区分 market / cross / shop / selfcraft / none ——
+     * UI 必须标出来，否则用户会把「借来的右价」或「自产估值」误当真实市价。
+     */
+    const charmPriceNow = getPriceOf(charmHrid)
+    const charmPriceSourceNow = getPriceSourceOf(charmHrid, 0, "ask")
     const charmAskActual = getMarketDataApi().marketData[charmHrid]?.[0]?.ask ?? -1
 
     /**
@@ -280,10 +310,31 @@ export function calcCharmTransformApi(catalystRank: number = 0): CharmTierResult
       return { hrid: p.hrid, rate: p.rate ?? 1, ask, bid, hasLiquidity, ownCraftCost }
     })
 
-    // 投入护符自产成本注入（用户自制作冲泡护符，不按市场买入价）
-    const ingredientConfig: IngredientPriceConfig[] = essenceCost > 0
-      ? [{ hrid: charmHrid, immutable: true, price: essenceCost }]
-      : []
+    /**
+     * 投入护符的计价 —— **走买卖价轮子，不做覆盖**。
+     *
+     * ⚠️ 历史缺陷：本页曾传
+     *   `ingredientPriceConfigList: [{ hrid: charmHrid, immutable: true, price: essenceCost }]`
+     * 把投入价硬编码成「用冲泡精华从零自制」的成本。
+     * 而 `calculator/index.ts` 会用它**覆盖** `ingredientList` 里的默认取价，
+     * 默认取价（`TransmuteCalculator.ingredientList`）本来是 `getPriceOf(hrid).ask`
+     * —— 也就是说**轮子本来是通的，是这个覆盖把它旁路了**。
+     *
+     * 实测（官方实时数据 2026-10-07，`advanced_alchemy_charm` 双边报价）：
+     *   buy=ASK → 50,800,000 / ASK_LOW → 50,614,072
+     *   ASK_HIGH → 50,985,928 / BID → 42,880,000
+     * 四个值全不同 ⇒ 轮子本身完好。
+     *
+     * 删掉覆盖后，「按市价买入」与「按自制成本估算」都由轮子的两个控件表达：
+     *   - `PriceStatusSelect`（`buyStatus`）：左买 / 右买 / 压一档 / 抬一档
+     *   - `GameInfo` 内的 `priceFallback`：`then: "bigset"` / `forceBigSet`
+     *     即「市价没有就按大全套（自产）成本估」
+     * 两者都在本页已渲染 ⇒ 用户不需要在本页额外做「自制 vs 市价」二选一。
+     *
+     * `essenceCost` 仍要保留，但只作为**参考列**（展示自制这条路大约多少钱），
+     * 不再参与利润计算。
+     */
+    const ingredientConfig: IngredientPriceConfig[] = []
 
     // 产出价格覆盖：仅无流动性的护符需要覆盖（实际=0 / 理想=essenceCost），crate/essence 掉落保持市场价
     // productMeta 现在全是护符 ⇒ 无流动性的按 0 计价（实际）/ 按制作成本计价（理想上限）
@@ -329,6 +380,8 @@ export function calcCharmTransformApi(catalystRank: number = 0): CharmTierResult
       charmName: getTrans(charmItem.name),
       essenceCount,
       essenceCost,
+      charmPriceNow: charmPriceNow.ask,
+      charmPriceSourceNow,
       charmAskActual,
       successRate: calcActual.successRate,
       incomeActualPH: calcActual.result.incomePH,
@@ -338,7 +391,20 @@ export function calcCharmTransformApi(catalystRank: number = 0): CharmTierResult
       profitIdealPH: calcIdeal.result.profitPH,
       profitActualRate: calcActual.result.profitRate,
       profitIdealRate: calcIdeal.result.profitRate,
-      valid: essenceCost > 0 && calcActual.valid,
+      /**
+       * 可算性：投入价必须由轮子取到数。
+       *
+       * ⚠️ 早前这里判的是 `essenceCost > 0`（自制成本），删掉成本覆盖后
+       * 自制成本只是参考列 —— 若仍拿它判定，用户把 `priceFallback`
+       * 切到「市价」而该档护符无报价时，会被误判成「算不出来」。
+       */
+      valid: charmPriceNow.ask > 0 && calcActual.valid,
+      ingredientListWithPrice: calcActual.ingredientListWithPrice.map(i => ({
+        hrid: i.hrid,
+        count: i.count,
+        price: i.price,
+        priceSource: i.priceSource as string
+      })),
       products,
       byProducts,
       byProductValuePH,

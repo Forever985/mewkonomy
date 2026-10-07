@@ -45,6 +45,33 @@ function profitClass(v: number) {
 }
 
 /**
+ * 价格来源标签 —— 取价不是永远来自市场，必须标出来。
+ *
+ * `PriceSource` 有五档（见 `common/apis/game`）：
+ *   market   市场真实成交
+ *   cross    借了另一端的市价（右价借左价 / 左价借右价）—— 数字是真的，方向是反的
+ *   shop     商店价
+ *   selfcraft 大全套（自产）成本估值
+ *   none     确实无价
+ *
+ * 不标的话用户会把 `cross` / `selfcraft` 的数字当市价，而这两者都不是能真成交的价格。
+ */
+function priceSourceLabel(s: string) {
+  if (s === "cross") return t("借价")
+  if (s === "selfcraft") return t("自产估值")
+  if (s === "shop") return t("商店价")
+  if (s === "none") return t("无价")
+  return ""
+}
+function priceSourceTip(s: string) {
+  if (s === "cross") return t("该物品市场只有一端报价，这个数字借自另一端，不是真实可成交价。")
+  if (s === "selfcraft") return t("市场无报价，按「用对应精华从零自制」的成本估算 —— 是价格上限，不是能卖到的价。")
+  if (s === "shop") return t("取自商店价格。")
+  if (s === "none") return t("市场与兜底都给不出价格，这一档无法计算。")
+  return t("取自市场真实成交价。")
+}
+
+/**
  * 五档是否**全部**无市场报价。
  *
  * 实测 `market.json` 里所有护符（冲泡 + 其它技能）ask/bid 都是 -1，
@@ -108,7 +135,9 @@ const quotedCount = computed(() => result.value.filter(r => !r.noMarketQuote).le
             </el-radio-group>
           </el-tooltip>
         <PriceStatusSelect @change="onPriceStatusChange" />
-        <span class="text-sm text-gray-400 ml-2">{{ t("理想价格") }}：{{ t("市场无人买卖时由你主宰，挂价上限=产出护符自身精华直接制作成本") }}</span>
+        <span class="text-sm text-gray-400 ml-2">
+          {{ t("投入价按上面的买价口径取；市场无报价时由 GameInfo 里的兜底策略决定（可切成自产成本估值）") }}
+        </span>
       </div>
 
       <el-table :data="result" size="small" highlight-current-row :row-class-name="() => ''" @row-click="onRowClick">
@@ -123,8 +152,25 @@ const quotedCount = computed(() => result.value.filter(r => !r.noMarketQuote).le
         <el-table-column :label="t('所需精华')" align="center" min-width="90">
           <template #default="{ row }">{{ Format.number(row.essenceCount, 0) }}</template>
         </el-table-column>
-        <el-table-column :label="t('精华成本')" align="center" min-width="110">
-          <template #default="{ row }">{{ row.essenceCost > 0 ? Format.money(row.essenceCost) : "--" }}</template>
+        <el-table-column :label="t('投入价（按上面选的口径）')" align="center" min-width="170">
+          <template #default="{ row }">
+            <el-tooltip placement="top" effect="light" :show-after="120">
+              <template #content>
+                <div class="max-w-360px leading-5">
+                  {{ priceSourceTip(row.charmPriceSourceNow) }}
+                  <div class="mt-1 text-gray-400">
+                    {{ t("自制成本（仅对照）") }}：{{ row.essenceCost > 0 ? Format.money(row.essenceCost) : t("无法估算") }}
+                  </div>
+                </div>
+              </template>
+              <span>
+                {{ row.charmPriceNow > 0 ? Format.money(row.charmPriceNow) : "--" }}
+                <el-tag v-if="row.charmPriceSourceNow !== 'market'" size="small" type="warning" class="ml-1">
+                  {{ priceSourceLabel(row.charmPriceSourceNow) }}
+                </el-tag>
+              </span>
+            </el-tooltip>
+          </template>
         </el-table-column>
         <el-table-column :label="t('成功率')" align="center" min-width="80">
           <template #default="{ row }">{{ Format.percent(row.successRate) }}</template>
