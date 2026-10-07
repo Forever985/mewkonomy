@@ -77,10 +77,6 @@ export class WorkflowCalculator extends Calculator {
           ? []
           : [{ immutable: true, price: 0, hrid: config.hrid }]
       }
-      // 适配继承强化
-      if (i < configs.length - 1 && !config.productPriceConfigList) {
-        config.productPriceConfigList = [{ immutable: true, price: 0, hrid: config.hrid }]
-      }
       let cal = getCalculatorInstance(config)
 
       let modified = false
@@ -99,10 +95,43 @@ export class WorkflowCalculator extends Calculator {
             }
           }
         }
+      }
 
-        if (modified) {
-          cal = getCalculatorInstance(config)
-        }
+      /**
+       * 中间产物按 0 价内部流转（下游环节以 0 价消费它，所以本环节也不能把它当收入卖）。
+       *
+       * ⚠️ 两处必须按下面的写法，否则**虚增收入**：
+       *
+       * ① 必须**按 hrid 逐项**构造整个数组，不能只给一项 `{hrid: config.hrid}`。
+       *    `Calculator.handlePrice` 是**按数组下标**匹配的（`priceConfigList[i]`，
+       *    完全不看 hrid），只给 1 项 ⇒ 只会压到 `productList[0]`，
+       *    而那一项很可能是**无关的副产品**（实测：炼金中间环节的
+       *    `productList[0]` 是月亮石碎片，被误压 0；真正该压的中间产物没压）。
+       *
+       * ② 目标不能用 `config.hrid`。炼金类计算器是以**投入品**为 hrid 的
+       *    （`TransmuteCalculator` 按 recipe 的输入解析），而真正流向下一阶段的
+       *    是 `alignProductHrid`（如「转化贤者之石碎片」产出表里的贤者之石碎片）。
+       *    用错目标 ⇒ 中间产物按**市价当收入卖**，下一步又 0 价拿到它
+       *    ⇒ 同一份价值被算两次（既是收入又是免费原料）。
+       *    实测 3 步链「制造碎片 → 转化贤者之石碎片 → 转化」虚增 **3,398,926/h**，
+       *    占报告收入的 40%，把 -65% 的亏损粉饰成 -42%。
+       *
+       * 注：`modified` 置真后会重建计算器，让新价格配置生效。
+       */
+      if (i < configs.length - 1 && cal.available && !config.productPriceConfigList) {
+        const target = (cal.config as any)?.alignProductHrid || config.hrid
+        const byHrid = cal.productList.map((p) =>
+          p.hrid === target ? { immutable: true, price: 0, hrid: p.hrid } : undefined!
+        )
+        config.productPriceConfigList = byHrid.some(Boolean)
+          ? byHrid
+          // 目标不在产物里（自定义配方等情况）⇒ 退回旧行为：压 productList[0]
+          : [{ immutable: true, price: 0, hrid: config.hrid }]
+        modified = true
+      }
+
+      if (modified) {
+        cal = getCalculatorInstance(config)
       }
 
       cal.available && cal.run()
