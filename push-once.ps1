@@ -19,7 +19,7 @@
 # ============================================================
 
 param(
-    [int]$ProxyPort = 7899,
+    [int]$ProxyPort = 0,
     [int]$MaxAttempts = 3,
     [switch]$NoPause
 )
@@ -58,15 +58,15 @@ function Invoke-GitCapture([string[]]$gitArgs) {
 }
 
 function Test-PortOpen([int]$port) {
-    try {
-        $c = New-Object System.Net.Sockets.TcpClient
-        $iar = $c.BeginConnect('127.0.0.1', $port, $null, $null)
-        $ok = $iar.AsyncWaitHandle.WaitOne(500)
-        if ($ok) { $c.EndConnect($iar) }
-        $c.Close()
-        return $ok
-    } catch { return $false }
+    # 兼容旧调用点：实际实现已挪到 scripts\proxy-probe.ps1（Test-ProxyPortOpen）
+    return (Test-ProxyPortOpen $port)
 }
+
+# ── 代理探测：从共用模块引入（scripts\proxy-probe.ps1）────────────────
+#
+# 该模块同时被 deploy-once.ps1 使用；**不要在这里另写一份**，
+# 复制粘贴必然随时间漂移（这次就是因为两份脚本各写死 7899 才出的问题）。
+. (Join-Path $PSScriptRoot 'scripts\proxy-probe.ps1')
 
 try {
     Write-Host ""
@@ -87,33 +87,12 @@ try {
     Ok "环境就绪"
 
     # ---------------------------------------------------------- [1/3] 通道
-    Step "[1/3] 启动加速通道并自检"
-    if (Test-PortOpen $ProxyPort) {
-        Info "端口 $ProxyPort 已在监听，复用已有反代"
-    } else {
-        Info "启动本地反代 ..."
-        if (Test-Path $PLog) { Remove-Item $PLog -Force -ErrorAction SilentlyContinue }
-        $proxyProc = Start-Process -FilePath 'node' -ArgumentList @($proxyScript, "$ProxyPort") `
-            -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput $PLog -RedirectStandardError "$PLog.err"
-        $proxyOwned = $true
-        $waited = 0
-        while ($waited -lt 15 -and -not (Test-PortOpen $ProxyPort)) {
-            Start-Sleep -Seconds 1
-            $waited++
-        }
-        if (-not (Test-PortOpen $ProxyPort)) {
-            if (Test-Path $PLog) { Get-Content $PLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "      $_" } }
-            throw "反代启动超时（15 秒）"
-        }
-        Ok "反代已监听 127.0.0.1:$ProxyPort（等待 ${waited}s）"
-    }
+    Step "[1/3] 探测可用加速通道"
 
-    if (Test-Path $PLog) {
-        $logText = (Get-Content $PLog -Raw -ErrorAction SilentlyContinue)
-        if ($logText -match 'SELFTEST_OK') { Ok "加速通道自检通过" }
-        elseif ($logText -match 'SELFTEST_FAIL') { Warn "通道自检未通过 —— 请确认 Watt Toolkit 已开启且「GitHub 加速」已勾选" }
-    }
+    $channel = Resolve-GitHubChannel -Remote $Remote -ProxyScript $proxyScript -Log $PLog -ExplicitPort $ProxyPort
+    $ProxyPort = $channel.Port
+    $proxyProc = $channel.Proc
+    $proxyOwned = $channel.Owned
 
     # 临时 git 配置：走本地反代 + 放行 Watt 自签证书 + 凭据 wincred + 大仓库 postBuffer
     # 与 deploy-once.ps1 保持一致（同样的坑，同样的解法）

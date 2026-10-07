@@ -42,7 +42,9 @@ function Write-Step([string]$Title) {
 # $cfgArgs: git -c 参数数组；$desc: 通道描述
 function Test-Channel([string[]]$cfgArgs, [string]$desc) {
     $start = Get-Date
-    Write-Host "  尝试 [$desc] ..." -NoNewline
+    # ⚠️ 这里原本用 `Write-Host ... -NoNewline`，但 **PowerShell 5.1 不支持该参数**
+    #    （会把脚本打成 ParserError 直接崩掉）。改为普通输出。
+    Write-Host "  尝试 [$desc] ..."
     & git @cfgArgs -c http.lowSpeedLimit=1 -c http.lowSpeedTime=15 ls-remote --heads $ProbeRepo 2>$null | Out-Null
     $ok   = ($LASTEXITCODE -eq 0)
     $el   = ((Get-Date) - $start).TotalSeconds
