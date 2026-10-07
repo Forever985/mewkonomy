@@ -6,7 +6,8 @@ import { GatherCalculator } from "@/calculator/gather"
 import { ManufactureCalculator } from "@/calculator/manufacture"
 import { getStorageCalculatorItem } from "@/calculator/utils"
 import { WorkflowCalculator } from "@/calculator/workflow"
-import { getActionConfigOf } from "@/common/apis/player"
+import { getActionConfigOf, getDrinkConcentration } from "@/common/apis/player"
+import { usePlayerStoreOutside } from "@/pinia/stores/player"
 import { getTrans } from "@/locales"
 import { COIN_HRID } from "@/pinia/stores/game"
 import { getGameDataApi } from "../game"
@@ -460,6 +461,76 @@ export interface ChainStepSummary {
   targetPerHour: number
   /** 该环节每小时的**动作次数**（不是产出个数） */
   actionsPerHour: number
+  /**
+   * 这一步按**玩家配置**消耗的饮品（茶 / 咖啡）。
+   *
+   * ⚠️ 它们**已计入成本**（`Calculator.cost` 里含 `getTeaIngredientList`），
+   * 但刻意**不在 `inputs` 里** —— 因为它们不是「配方的一环」，
+   * 而是玩家在 dashboard 的「玩家配置」里勾选的增益。
+   *
+   * 之所以要单独列出：早前实现把它们从所有展示位都过滤掉了
+   * ⇒ 用户根本看不到茶，也就无从判断「我有暴饮之囊，算了没有？」
+   * 于是合理地怀疑「玩家配置没被考虑」。实际是算了但没显示。
+   */
+  teas: { hrid: string, name: string, count: number }[]
+}
+
+/**
+ * 本链用到的**玩家配置**摘要。
+ *
+ * 「玩家配置」是这个工具的输入之一，不是可有可无的装饰：
+ * - 每个动作勾选的饮品（茶 / 咖啡）→ 直接进成本
+ * - 特殊装备（如**暴饮之囊** +10% 饮品浓度）→ 同时影响
+ *   ① 饮品增益强度（× (1 + 浓度)）② 饮品时长（÷ (1 + 浓度)，即喝得更频繁）
+ *   ⇒ 两个方向都进成本与产出
+ *
+ * 实测（2026-10-07）：装上暴饮之囊后整链成本/h 由 17,516,088 变为 17,530,214，
+ * 即配置**确实生效**。此接口把它显式暴露给界面，避免用户以为没算。
+ */
+export interface ChainPlayerConfigSummary {
+  /** 本链涉及的动作 → 各自配了哪些饮品 */
+  byAction: {
+    action: Action
+    /** 展示用标签（优先用该动作在链里的项目名，如「转化」） */
+    label: string
+    teas: { hrid: string, name: string }[]
+  }[]
+  /** 饮品浓度（来自特殊装备，如暴饮之囊）+10% 即 0.1 */
+  drinkConcentration: number
+  /** 提供加成的特殊装备 */
+  specialEquipment: { type: string, hrid: string, name: string, enhanceLevel: number }[]
+}
+
+export function getChainPlayerConfigSummary(steps: ChainStep[]): ChainPlayerConfigSummary {
+  const gameData = getGameDataApi()
+  const nameOf = (h: string) => gameData.itemDetailMap[h]?.name || h
+  const seen = new Set<string>()
+  const byAction: ChainPlayerConfigSummary["byAction"] = []
+
+  for (const s of steps) {
+    if (!s.action || seen.has(s.action)) continue
+    seen.add(s.action)
+    const teas = Array.from(getActionConfigOf(s.action)?.tea ?? []).map(h => ({ hrid: h, name: nameOf(h) }))
+    byAction.push({ action: s.action, label: s.project || s.action, teas })
+  }
+
+  const store = usePlayerStoreOutside()
+  const specialEquipment: ChainPlayerConfigSummary["specialEquipment"] = []
+  for (const [type, item] of store.config.specialEquimentMap as Map<string, { hrid?: string, enhanceLevel?: number }>) {
+    if (!item?.hrid) continue
+    specialEquipment.push({
+      type: String(type),
+      hrid: item.hrid,
+      name: nameOf(item.hrid),
+      enhanceLevel: item.enhanceLevel ?? 0
+    })
+  }
+
+  return {
+    byAction,
+    drinkConcentration: getDrinkConcentration(),
+    specialEquipment
+  }
 }
 
 export function getChainStepSummary(step: ChainStep): ChainStepSummary | null {
@@ -491,7 +562,11 @@ export function getChainStepSummary(step: ChainStep): ChainStepSummary | null {
     successRate,
     targetShare: successRate,
     targetPerHour: perHour * successRate,
-    actionsPerHour: perHour
+    actionsPerHour: perHour,
+    // 饮品单独列出（它们已在 cost 里，但不是「配方的一环」）
+    teas: cal.ingredientList
+      .filter(i => isTeaIngredientOf(step.action, i.hrid))
+      .map(i => ({ hrid: i.hrid, name: nameOf(i.hrid), count: i.count }))
   }
 }
 

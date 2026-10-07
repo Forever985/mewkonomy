@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import type { ChainMakerOption, ChainStep, ChainStepSummary } from "@/common/apis/chainbuilder"
+import type { ChainMakerOption, ChainPlayerConfigSummary, ChainStep, ChainStepSummary } from "@/common/apis/chainbuilder"
 import type Calculator from "@/calculator"
 import type { WorkflowCalculator } from "@/calculator/workflow"
 import {
@@ -10,6 +10,7 @@ import {
   getChainAlchemyOutputOptions,
   getChainIngredientsOf,
   getChainMakersOf,
+  getChainPlayerConfigSummary,
   getChainProjectOptions,
   getChainStepItemOptions,
   getChainStepSummary,
@@ -24,6 +25,7 @@ import { usePriceStatus } from "@@/composables/usePriceStatus"
 import { ArrowDown, ArrowUp, Delete, MagicStick, Plus, QuestionFilled, Search } from "@element-plus/icons-vue"
 import { useI18n } from "vue-i18n"
 import { useGameStore } from "@/pinia/stores/game"
+import { usePlayerStore } from "@/pinia/stores/player"
 import ActionDetail from "../dashboard/components/ActionDetail.vue"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 
@@ -391,6 +393,27 @@ function catalystLabel(rank: number, kind?: string) {
   if (rank === 2) return t("至高催化剂")
   return t("无")
 }
+
+/**
+ * 玩家配置摘要 —— **它是计算的输入，不是装饰**。
+ *
+ * 每个动作勾的饮品、以及特殊装备（暴饮之囊 +10% 饮品浓度）都会进成本与产出：
+ *   饮品消耗/动作 = 3600 / 300 × (1 + 浓度) ÷ 每小时动作数
+ * 浓度同时放大饮品增益强度（时长相应缩短 ⇒ 喝得更频繁），两个方向都影响结果。
+ *
+ * ⚠️ 早前这些茶被从原料清单里过滤掉了（它们是玩家配置而非配方原料），
+ * 于是界面上**完全看不到**它们 —— 用户合理地怀疑「我有暴饮之囊，到底算了没有」。
+ * 实际算了，但没显示。这个卡片就是把它摆出来。
+ */
+const playerStore = usePlayerStore()
+const playerConfig = computed<ChainPlayerConfigSummary>(() => {
+  // 读一下 config 让 computed 随玩家配置变化重算
+  // （getDrinkConcentration 读的是模块级 buffs，由 watcher 重算，本身不可响应）
+  void playerStore.config
+  return getChainPlayerConfigSummary(activeSteps.value)
+})
+/** 暴饮之囊（若有）—— 浓度那块要标出它来自哪件装备 */
+const pouch = computed(() => playerConfig.value.specialEquipment.find(e => e.hrid === "/items/guzzling_pouch"))
 
 /* ───────────────────────── 统一计算与结果 ───────────────────────── */
 
@@ -762,6 +785,73 @@ const TERM_TIPS: Record<string, string> = {
       </div>
     </el-card>
 
+    <!-- ══════════════ 玩家配置（计算的输入之一）══════════════ -->
+    <el-card class="mt-3">
+      <template #header>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span>{{ t("玩家配置（已计入成本与产出）") }}</span>
+          <el-tooltip placement="top" effect="light" :show-after="120">
+            <template #content>
+              <div class="max-w-400px leading-5">
+                {{ t("饮品与特殊装备是这个工具的输入：每个动作勾选的饮品直接进成本；暴饮之囊等装备同时放大饮品增益强度、缩短饮品时长（喝得更频繁）。") }}
+                <div class="mt-1">{{ t("要改配置，去主面板的「玩家配置」。") }}</div>
+              </div>
+            </template>
+            <el-icon class="cursor-help text-gray-400"><QuestionFilled /></el-icon>
+          </el-tooltip>
+        </div>
+      </template>
+
+      <el-descriptions :column="2" border size="small">
+        <el-descriptions-item :label="t('饮品浓度')">
+          <span>{{ Format.percent(playerConfig.drinkConcentration) }}</span>
+          <el-tag v-if="pouch" size="small" type="success" class="ml-2">
+            {{ t(pouch.name) }}<span v-if="pouch.enhanceLevel">+{{ pouch.enhanceLevel }}</span>
+          </el-tag>
+          <span v-else-if="playerConfig.drinkConcentration > 0" class="ml-2 text-xs text-gray-500">
+            {{ t("（来自特殊装备）") }}
+          </span>
+          <span v-else class="ml-2 text-xs text-gray-400">{{ t("（未装备暴饮之囊）") }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item :label="t('特殊装备')">
+          <span v-if="!playerConfig.specialEquipment.length" class="text-gray-400">{{ t("无") }}</span>
+          <template v-else>
+            <el-tag
+              v-for="eq in playerConfig.specialEquipment"
+              :key="eq.type"
+              size="small"
+              class="mr-1"
+            >
+              {{ t(eq.name) }}<span v-if="eq.enhanceLevel">+{{ eq.enhanceLevel }}</span>
+            </el-tag>
+          </template>
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <div class="mt-2 text-sm">
+        <template v-if="playerConfig.byAction.length">
+          <div
+            v-for="a in playerConfig.byAction"
+            :key="a.action"
+            class="flex items-center gap-2 flex-wrap mb-1"
+          >
+            <span class="text-gray-500 min-w-70px">{{ t(a.label) }}</span>
+            <span v-if="!a.teas.length" class="text-gray-400">{{ t("未配饮品") }}</span>
+            <el-tag v-for="tea in a.teas" :key="tea.hrid" size="small" type="info" class="mr-1">
+              {{ t(tea.name) }}
+            </el-tag>
+          </div>
+        </template>
+        <span v-else class="text-gray-400">
+          {{ t("还没有环节 —— 选好物品后，这里会列出对应动作的饮品配置") }}
+        </span>
+      </div>
+
+      <div class="text-xs text-gray-400 mt-2">
+        {{ t("饮品消耗 / 动作 = 3600 ÷ 300 秒 × (1 + 饮品浓度) ÷ 每小时动作数；浓度同时放大饮品增益强度（时长按 1+浓度 缩短，喝得更频繁）。这些都是逐项计入成本的。") }}
+      </div>
+    </el-card>
+
     <!-- 结果 -->
     <el-card v-if="result" class="mt-3">
       <template #header>
@@ -772,13 +862,27 @@ const TERM_TIPS: Record<string, string> = {
           </el-button>
         </div>
       </template>
-      <el-descriptions :column="4" border>
-        <el-descriptions-item :label="t('利润 / h')">
-          <span :class="result.result.profitPH > 0 ? 'success' : 'error'">{{ result.result.profitPHFormat }}</span>
+      <!-- ⚠️ 「利润」是**净利**：= 收入 − 成本（成本含原料 / 饮品 / 催化剂 / 金币）。
+           把 收入 与 成本 并排摆在它前面，用户可以自己一眼验算，不必猜口径。 -->
+      <el-descriptions :column="5" border>
+        <el-descriptions-item :label="t('收入 / h')">{{ result.result.incomePHFormat }}</el-descriptions-item>
+        <el-descriptions-item :label="t('成本 / h')">{{ result.result.costPHFormat }}</el-descriptions-item>
+        <el-descriptions-item :label="t('利润 / h（净）')">
+          <el-tooltip placement="top" effect="light" :show-after="120">
+            <template #content>
+              <div class="max-w-360px leading-5">
+                {{ t("净利 = 收入 − 成本。成本已包含全部投入：原料、饮品（按玩家配置）、催化剂、金币。") }}
+                <div class="mt-1">
+                  {{ t("口径：") }}{{ result.result.incomePHFormat }} − {{ result.result.costPHFormat }}
+                  = {{ result.result.profitPHFormat }}
+                </div>
+              </div>
+            </template>
+            <span :class="result.result.profitPH > 0 ? 'success' : 'error'">{{ result.result.profitPHFormat }}</span>
+          </el-tooltip>
         </el-descriptions-item>
         <el-descriptions-item :label="t('利润率')">{{ result.result.profitRateFormat }}</el-descriptions-item>
         <el-descriptions-item :label="t('自产比例')">{{ result.result.selfProduceRatioFormat || "--" }}</el-descriptions-item>
-        <el-descriptions-item :label="t('成本 / h')">{{ result.result.costPHFormat }}</el-descriptions-item>
       </el-descriptions>
 
       <el-table :data="result.resultList.flat()" class="mt-3" size="small">

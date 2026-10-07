@@ -201,6 +201,35 @@ export function getTeaListOf(action: Action) {
   return teaList.filter(item => item.consumableDetail?.usableInActionTypeMap[`/action_types/${action}`]).sort((a, b) => a.itemLevel - b.itemLevel).sort((a, b) => Number(a.hrid.includes(action)) - Number(b.hrid.includes(action)))
 }
 
+/**
+ * 本动作按玩家配置消耗的饮品清单。
+ *
+ * ## 为什么消耗量要乘 (1 + 饮品浓度) —— **这不是笔误，别改**
+ *
+ * 暴饮之囊（`/items/guzzling_pouch`）给 +10% `drinkConcentration`，
+ * 它的作用是**双向的**：
+ *   ① 饮品增益强度 × (1 + 浓度)（见 `initBuffMap` 里各处 `* (1 + buffs.drinkConcentration)`）
+ *   ② 饮品**时长** ÷ (1 + 浓度)
+ *
+ * ②的含义是「喝得更频繁」：基础时长 300 秒，
+ *   浓度 10% ⇒ 300 / 1.1 = **272.7 秒**，于是每小时要喝更多杯。
+ *
+ * 来源核对（2026-10-07）：
+ * - wiki.milkywayidle.com 的茶条目：「effect multiplied by (1 + concentration),
+ *   **duration and cooldown divided by (1 + concentration)**」，
+ *   并直接给出「Guzzling Pouch +0 (10%) → 272.7s duration」
+ * - grindnstrat 攻略：「Guzzling Pouch – 10% Drink Concentration
+ *   (**10% Reduced duration**, 10% Increased Effect)」
+ * ⇒ 两处一致支持「时长 ÷ (1+浓度)」，故本式 `3600 / 300 × (1 + 浓度)` 成立。
+ *
+ * ⚠️ 注意：`milkywayidle.wiki.gg/wiki/Duration` 那一页写的是「× (1+浓度) 延长」，
+ * 与上述两处**相反**，且与同 wiki 家族的物品页自相矛盾，判断为不可信。
+ * 若将来发现游戏实测与本文不符，先核对右上两个来源再改。
+ *
+ * ⚠️ 也**不要**把浓度用在「代价型」数值上：早前 `getActionLevelBonusOf`
+ * 对工匠茶的「要求等级 +5」也乘了 (1+浓度)，把门槛抬成 +5.5，已修
+ * （暴饮放大的是**有益**增益，代价不吃加成）。
+ */
 export function getTeaIngredientList(cal: Calculator) {
   return (getActionConfigOf(cal.action).tea || []).map(hrid => ({
     hrid,
