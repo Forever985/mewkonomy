@@ -1466,3 +1466,83 @@ onActivated(syncFromStore)
 
 `vue-tsc` **0 报错**；`vitest` **41 文件 / 365 用例全绿**（上轮 40/361，+1 文件 +12 用例）；
 `vite build --mode private` 成功（13.60s）；两个源文件行尾与 HEAD 一致（CRLF），无格式 churn。
+
+---
+
+## 三十三、chainbuilder 补「右收」与「产出命中率」（2026-10-07）
+
+用户提了一个真实业务链：
+> 我想做贤者之石碎片转化的生意，转化太阳石碎片获得贤者之石碎片，
+> 太阳石碎片则通过**右收**或从太阳石制作过来。
+
+### 33.1 用户纠正了我两次（都记下来）
+
+1. **「市场收购环节类型就算了」** ——
+   左买右卖/左买左卖/右买右卖/右买左卖在**利润排行里已经用烂了**，
+   不该给 `ChainStep` 新造一个 kind。实测确认：`PriceStatusSelect` 被 **11 个页面**使用
+   （dashboard / jungle / jungle×3 / enhanposer×2 / manualchemy / charmtransform / inherit / enhanceexp），
+   chainbuilder 是**唯一漏挂的**。⇒ 不是缺功能，是漏挂轮子。
+   挂上 `usePriceStatus("chainbuilder-price-status")` + `<PriceStatusSelect>` 即解决，
+   `buyStatus = BID` 就是右收，底层由 `getPriceOf(hrid, level, buyStatus, sellStatus)` 统一处理。
+
+2. **不要自己造轮子** —— 有现成的就该用（用户一贯原则）。
+
+### 33.2 实测：他的每一步在游戏里都成立
+
+| 步骤 | hrid | 实测 |
+| --- | --- | --- |
+| 转化太阳石碎片 → 贤者之石碎片 | `crushed_sunstone` → `crushed_philosophers_stone` | ✅ `dropRate = 0.005` |
+| 贤者之石碎片 → 转化成品 | `crushed_philosophers_stone` | ✅ 可得月亮石碎片 0.25 / 太阳石碎片 0.25 / 星星碎片 0.25 / 镜之碎片 0.25 |
+| 太阳石 → 制造 → 太阳石碎片 | `sunstone` → `crushed_sunstone` | ✅ 配方存在 |
+| 太阳石碎片右收 | 市场 `ask=8400 bid=8200` | ✅（现由 PriceStatusSelect 表达） |
+
+### 33.3 ★ 关键事实：他的转化命中率只有 **0.5%**
+
+`transmuteDropTable` 里 `crushed_philosophers_stone` 的 `dropRate = 0.005`
+⇒ **平均 200 次转化才出 1 个**，其余 99.5% 变成月亮石碎片 / 星星碎片 / 太阳石碎片。
+
+而改造前的界面只写「产出：贤者之石碎片 ×1」—— 新手必然误以为稳赚。
+这是本轮最该修的东西。
+
+### 33.4 新增字段（`ChainStepSummary`）
+
+```ts
+successRate: number      // 拿到「指定产物」的期望概率（炼金取 dropRate；制造/采集恒 1）
+targetShare: number      // 同值，语义更直白，供 UI 文案
+targetPerHour: number    // 每小时期望产出个数 = actionsPerHour × successRate
+actionsPerHour: number   // 每小时动作次数
+```
+
+⚠️ **不能用 `getTrans("...{0}...", [...])`**：本文件拿不到 vue-i18n 运行时实例，
+占位符会原样显示（§32.6 已记过一次，这里再次确认）。
+
+⚠️ **不能用 `resultList[].successRate` 当命中率**：那个字段是**动作成功率**
+（炼金恒 50%、制造恒 100%），而用户真正要的是「多少次出 1 个我要的东西」（0.5%），
+两者差 100 倍。UI 故把两列并排给出：`动作成功率` / `产出命中率`。
+
+### 33.5 一个容易写错的断言：掉落率之和 ≠ 1
+
+实测「全部产出 rate 之和 = **1.0948**」，而游戏 `transmuteDropTable` 四项之和恰为 **1.0**
+（0.3 + 0.445 + 0.25 + 0.005）。
+
+差值 **0.0948 = Alchemy Essence**：炼丹精华由 `getAlchemyEssenceDropTable`
+按「时间 × 物品等级」**额外附赠**，不在掉落表内。
+
+⇒ 断言必须写成「**掉落表项**之和为 1」，不能写「全部 rate 之和为 1」，否则假失败。
+已由 `tests/chainbuilder-newbie-api.test.ts` 显式记录该事实。
+
+### 33.6 UI 改动
+
+- 买卖价选择器（挂在 `GameInfo` 下方，与其余 11 页同位置）
+- 结果表新增两列：**动作成功率** / **产出命中率**（后者带 tooltip 说明「平均 N 次出 1 个」）
+- 命中率分级染色：`≥1` 灰（确定）/ `≥0.5` 绿 / `≥0.05` 橙 / `<0.05` 红
+- 炼金产出分布区块：「每 1000 次转化大约得到：月亮石碎片 ×300、太阳石碎片 ×445、
+  星星碎片 ×250、贤者之石碎片 **×5**、……」
+
+实测用户链路（转化太阳石碎片 → 转化贤者之石碎片 → 转化月亮石碎片）：
+两环命中率 **0.005 / 0.25**，产出分布 2 条，页面可见 `0.5%` 与分布区块。
+
+### 33.7 验证
+
+`vue-tsc` **0 报错**；`vitest` **41 文件 / 368 用例全绿**（上轮 365，+3）；
+`vite build --mode private` 成功（12.27s）；三个文件行尾与 HEAD 一致（CRLF），无 churn。

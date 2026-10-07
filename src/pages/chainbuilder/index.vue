@@ -16,8 +16,10 @@ import {
 } from "@/common/apis/chainbuilder"
 import { getGameDataApi, getItemDetailOf } from "@/common/apis/game"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
+import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 import * as Format from "@@/utils/format"
 import { getTrans } from "@/locales"
+import { usePriceStatus } from "@@/composables/usePriceStatus"
 import { ArrowDown, ArrowUp, Delete, MagicStick, Plus, QuestionFilled, Search } from "@element-plus/icons-vue"
 import { useI18n } from "vue-i18n"
 import { useGameStore } from "@/pinia/stores/game"
@@ -26,6 +28,21 @@ import GameInfo from "../dashboard/components/GameInfo.vue"
 
 const { t } = useI18n()
 const gameStore = useGameStore()
+
+/**
+ * 买卖价口径（左价 / 右价）—— **不是本页面独有的小控件，而是全局既有的轮子**。
+ *
+ * 用户的原话：「市场收购环节类型就算了……左买右卖、左买左卖、右买右卖、右买左卖，
+ * 这个在利润排行里已经用烂了」。实测确认：
+ * `PriceStatusSelect` 被 **11 个页面**使用（dashboard / jungle / enhanposer / manualchemy …），
+ * 本页是唯一漏挂的 —— 所以「右收（用右价买）」在本页一直无法表达。
+ *
+ * 挂上它即可，无需给 ChainStep 新增「市场收购」类型：
+ * `buyStatus = BID` 就是右收，`ASK` 就是左买；`sellStatus` 同理。
+ * 底层由 `Calculator` 的 `getPriceOf(hrid, level, buyStatus, sellStatus)` 统一处理，
+ * 链头外购、链内原料、成品出售三种口径自动一起切换。
+ */
+const onPriceStatusChange = usePriceStatus("chainbuilder-price-status")
 
 /* ══════════════════════════════════════════════════════════════════════════
  * 面向新手的改造（2026-10-07）
@@ -156,6 +173,42 @@ const currentStepSummary = computed<ChainStepSummary | null>(() => {
   return getChainStepSummary(newbieSteps.value[0])
 })
 
+/**
+ * 每个环节的摘要（两种模式通用）。
+ *
+ * 用途：把「这一步到底靠不靠谱」显式说出来。实测用户案例
+ * 「转化太阳石碎片 → 贤者之石碎片」命中率仅 **0.005**（平均 200 次出 1 个），
+ * 而旧界面只写「产出：贤者之石碎片 ×1」—— 新手会误以为稳赚。
+ */
+function summaryOf(step: ChainStep): ChainStepSummary | null {
+  return getChainStepSummary(step)
+}
+
+/** 命中率的口径文案：低命中率必须显眼地警告 */
+function rateLevelOf(rate: number): "certain" | "high" | "low" | "tiny" {
+  if (rate >= 1) return "certain"
+  if (rate >= 0.5) return "high"
+  if (rate >= 0.05) return "low"
+  return "tiny"
+}
+const RATE_TAG_TYPE: Record<ReturnType<typeof rateLevelOf>, string> = {
+  certain: "success",
+  high: "success",
+  low: "warning",
+  tiny: "danger"
+}
+
+/** 「平均多少次出 1 个」—— 比百分比更直观（用户看到 200 次立刻明白有多难） */
+function attemptsPerOf(rate: number): number {
+  if (!rate || rate <= 0) {
+    return 0
+  }
+  if (rate >= 1) {
+    return 1
+  }
+  return Math.round(1 / rate)
+}
+
 /** 换目标成品 ⇒ 清空整条链重新开始 */
 watch(targetHrid, () => {
   newbieSteps.value = []
@@ -285,6 +338,40 @@ const activeSteps = computed<ChainStep[]>(() => {
   return steps.value
 })
 
+/**
+ * 结果表里每一行对应的环节摘要，key = `项目 + 物品 hrid`。
+ *
+ * ⚠️ 必须自己按当前链条重算，不能直接用 `resultList[].successRate`：
+ * 那个字段是**动作成功率**（炼金恒 50%，制造恒 100%），
+ * 而用户真正要知道的是「多少次出 1 个我要的东西」（实测低至 0.5%）。两者差 100 倍。
+ */
+const resultChainSteps = computed<Record<string, ChainStepSummary>>(() => {
+  const map: Record<string, ChainStepSummary> = {}
+  for (const step of activeSteps.value) {
+    const sum = getChainStepSummary(step)
+    if (sum) {
+      map[step.project + step.hrid] = sum
+    }
+  }
+  return map
+})
+
+/** 炼金环节的产出分布（只有炼金才会一次出 6 样东西，需要单独展示） */
+const alchemyBreakdown = computed<Record<string, ChainStepSummary>>(() => {
+  const map: Record<string, ChainStepSummary> = {}
+  for (const step of activeSteps.value) {
+    if (!isAlchemyKind(step.kind)) {
+      continue
+    }
+    const sum = getChainStepSummary(step)
+    // 只展示「真有多产物」的：单产出的制造/采集环节不需要
+    if (sum && sum.outputs.filter(o => o.rate != null).length > 1) {
+      map[step.hrid] = sum
+    }
+  }
+  return map
+})
+
 function calculate() {
   const use = activeSteps.value
   if (!use.length || use.some(s => !s.hrid)) {
@@ -334,6 +421,9 @@ const TERM_TIPS: Record<string, string> = {
 <template>
   <div>
     <GameInfo />
+    <!-- 买卖价口径：左价/右价。与其余 11 个页面同一个轮子，
+         「右收」= 买价选右价。 -->
+    <PriceStatusSelect @change="onPriceStatusChange" />
     <el-card>
       <template #header>
         <div class="flex items-center justify-between gap-2 flex-wrap">
@@ -590,11 +680,73 @@ const TERM_TIPS: Record<string, string> = {
         <el-table-column :label="t('倍率')" align="center" min-width="80">
           <template #default="{ row }">{{ Format.number(row.workMultiplier, 2) }}</template>
         </el-table-column>
+        <!-- ⚠️ 「产出命中率」与「动作成功率」是两个数，新手极易混淆：
+             动作成功率 = 这一步会不会成功（炼金恒 50%）；
+             产出命中率 = 成功后能不能拿到**你要的那个**产物（实测低至 0.5%）。
+             只显示后者会被误判成「稳赚」，所以两列并排给出。 -->
+        <el-table-column :label="t('动作成功率')" align="center" min-width="100">
+          <template #default="{ row }">
+            <span :class="row.successRate >= 1 ? 'text-gray-400' : 'text-orange-500'">
+              {{ Format.percent(row.successRate) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('产出命中率')" align="center" min-width="150">
+          <template #default="{ row }">
+            <el-tooltip
+              v-if="resultChainSteps[row.project + row.hrid]"
+              placement="top"
+              effect="light"
+              :show-after="120"
+            >
+              <template #content>
+                <div class="max-w-360px leading-5">
+                  {{ t("这一步每小时做 {0} 次，平均每 {1} 次出 1 个你要的产物。", [
+                    String(resultChainSteps[row.project + row.hrid].actionsPerHour),
+                    String(attemptsPerOf(resultChainSteps[row.project + row.hrid].successRate))
+                  ]) }}
+                </div>
+              </template>
+              <el-tag
+                size="small"
+                :type="RATE_TAG_TYPE[rateLevelOf(resultChainSteps[row.project + row.hrid].successRate)] as any"
+              >
+                {{ Format.percent(resultChainSteps[row.project + row.hrid].successRate) }}
+              </el-tag>
+            </el-tooltip>
+            <span v-else class="text-gray-400">--</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="profitPHFormat" :label="t('利润 / h')" align="center" min-width="110" />
         <el-table-column prop="profitRateFormat" :label="t('利润率')" align="center" min-width="90" />
         <el-table-column prop="expPHFormat" :label="t('经验 / h')" align="center" min-width="110" />
         <el-table-column prop="timeCostFormat" :label="t('单次耗时')" align="center" min-width="100" />
       </el-table>
+
+      <!-- 炼金产出分布：让「0.5% 才有我要的东西」这件事看得见 -->
+      <div
+        v-for="(sum, key) in alchemyBreakdown"
+        :key="key"
+        class="mt-3 p-3 rounded border"
+      >
+        <div class="text-sm font-medium mb-1">
+          {{ t("『") }}{{ t(getItemDetailOf(key)?.name || String(key)) }}{{ t("』的完整产出分布") }}
+          <span class="text-xs text-gray-500 font-normal ml-1">
+            {{ t("每 1000 次转化大约得到：") }}
+          </span>
+        </div>
+        <div class="flex flex-wrap gap-2 text-sm">
+          <span
+            v-for="o in sum.outputs.filter(x => x.rate != null)"
+            :key="o.hrid"
+            class="inline-flex items-center gap-1"
+          >
+            <ItemIcon :hrid="o.hrid" :width="18" :height="18" />
+            <span>{{ t(o.name) }}</span>
+            <span class="text-gray-500">×{{ Math.round(o.rate! * 1000) }}</span>
+          </span>
+        </div>
+      </div>
     </el-card>
 
     <ActionDetail v-model="detailVisible" :data="detailData" />

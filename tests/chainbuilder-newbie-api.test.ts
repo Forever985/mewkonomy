@@ -29,10 +29,70 @@ describe("chainbuilder 新手模式 API", () => {
 
   it("环节摘要：消耗与产出都能读出来", async () => {
     const { getChainStepSummary } = await import("@/common/apis/chainbuilder")
-    const s = getChainStepSummary({ project: "锻造", action: "cheesesmithing", kind: "manufacture", hrid: "/items/azure_cheese" })
-    console.log("[p] 锻造azure奶酪 => 消耗:", s?.inputs.map(i => `${i.name}×${i.count}`).join(","), "=> 产出:", s?.outputs.map(o => `${o.name}×${o.count}`).join(","), "|", s?.timeCost)
-    expect(s).not.toBeNull()
-    expect(s!.outputs.length).toBeGreaterThan(0)
+    const s = getChainStepSummary({ project: "锻造", action: "cheesesmithing", kind: "manufacture", hrid: "/items/azure_cheese" })!
+    console.log("[p] 锻造azure奶酪 => 消耗:", s.inputs.map(i => `${i.name}×${i.count}`).join(","), "=> 产出:", s.outputs.map(o => `${o.name}×${o.count}`).join(","), "|", s.timeCost)
+    expect(s.outputs.length).toBeGreaterThan(0)
+    expect(s.timeCost, "占位符 0 不应原样显示").not.toContain("{0}")
+  }, 300000)
+
+  it("环节命中率：炼金取 dropRate，制造/采集为 1（用户真实需求）", async () => {
+    const { getChainStepSummary } = await import("@/common/apis/chainbuilder")
+
+    // ① 用户场景（2026-10-07）：转化太阳石碎片 → 贤者之石碎片，dropRate 仅 0.005。
+    //    不知道这个数，新手会以为 100% 成功，实际平均要做 200 次。
+    const s1 = getChainStepSummary({
+      project: "转化", action: "alchemy", kind: "transmute",
+      hrid: "/items/crushed_sunstone", outHrid: "/items/crushed_philosophers_stone"
+    } as any)!
+    console.log(`[p] 转化太阳石碎片→贤者之石碎片 命中率=${s1.successRate} 每小时${s1.actionsPerHour}次→得${s1.targetPerHour.toFixed(2)}`)
+    expect(s1.successRate, "必须等于游戏数据的 0.005").toBeCloseTo(0.005, 6)
+    expect(s1.targetPerHour).toBeCloseTo(s1.actionsPerHour * s1.successRate, 4)
+
+    // ② 制造是确定产出
+    expect(getChainStepSummary({
+      project: "制造", action: "crafting", kind: "manufacture", hrid: "/items/crushed_sunstone"
+    } as any)!.successRate, "制造应为 1").toBe(1)
+
+    // ③ 采集同理
+    expect(getChainStepSummary({
+      project: "挤奶", action: "milking", kind: "gather", hrid: "/items/azure_milk"
+    } as any)!.successRate, "采集应为 1").toBe(1)
+
+    // ④ 炼金未指定衔接产物 ⇒ 拿不到「指定产物」，记 0（UI 应提示先选）
+    expect(getChainStepSummary({
+      project: "转化", action: "alchemy", kind: "transmute", hrid: "/items/crushed_sunstone"
+    } as any)!.successRate, "未指定衔接产物时应为 0").toBe(0)
+  }, 300000)
+
+  it("掉落表项之和为 1；炼丹精华是时间附赠，不在表内", async () => {
+    const { getChainStepSummary } = await import("@/common/apis/chainbuilder")
+    const s = getChainStepSummary({
+      project: "转化", action: "alchemy", kind: "transmute",
+      hrid: "/items/crushed_sunstone", outHrid: "/items/crushed_philosophers_stone"
+    } as any)!
+
+    // 游戏 transmuteDropTable 四项之和恰为 1（0.3+0.445+0.25+0.005）
+    const tableSum = s.outputs
+      .filter(o => o.rate != null && o.hrid !== "/items/alchemy_essence" && o.hrid !== "/items/large_artisans_crate")
+      .reduce((a, o) => a + o.rate!, 0)
+    expect(tableSum, "掉落表项之和应为 1").toBeCloseTo(1, 3)
+
+    // ⚠️ 全部 productList 的 rate 之和是 1.0948 而非 1：差值来自 Alchemy Essence
+    // （由 getAlchemyEssenceDropTable 按时间×等级额外附赠，不受掉落表约束）。
+    // 写测试时若误判「rate 之和应为 1」会得到假失败 —— 这里显式记录该事实。
+    const allSum = s.outputs.filter(o => o.rate != null).reduce((a, o) => a + o.rate!, 0)
+    console.log(`[p] 掉落表项之和=${tableSum}；含时间附赠后=${allSum.toFixed(4)}`)
+    expect(allSum, "含附赠后 > 1（附赠叠加在表外）").toBeGreaterThan(1)
+  }, 300000)
+
+  it("用户的两级转化链（贤者之石生意）能算出结果", async () => {
+    const { calcChainProfitApi } = await import("@/common/apis/chainbuilder")
+    const wf = calcChainProfitApi([
+      { project: "转化", action: "alchemy", kind: "transmute", hrid: "/items/crushed_sunstone", outHrid: "/items/crushed_philosophers_stone", catalystRank: 2 },
+      { project: "转化", action: "alchemy", kind: "transmute", hrid: "/items/crushed_philosophers_stone", outHrid: "/items/crushed_moonstone", catalystRank: 2 }
+    ], "贤者之石生意")
+    console.log(`[p] 两级转化链 = ${wf ? `利润/h=${wf.result.profitPHFormat} 利润率=${wf.result.profitRateFormat}` : "null"}`)
+    expect(wf).not.toBeNull()
   }, 300000)
 
   it("原料清单：茶/金币/自产自用都必须排除（新手模式的生死线）", async () => {

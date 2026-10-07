@@ -276,6 +276,24 @@ export interface ChainStepSummary {
   inputs: { hrid: string, name: string, count: number }[]
   outputs: { hrid: string, name: string, count: number, rate?: number }[]
   timeCost: string
+  /**
+   * **本环节要拿到「指定产物」的成功率**（0~1）。
+   *
+   * ⚠️ 这是新手最需要、也最容易漏掉的信息。实测真实案例：
+   * 「转化太阳石碎片 → 贤者之石碎片」的 `transmuteDropTable[].dropRate` 是 **0.005**，
+   * 即平均要做 **200 次**转化才出 1 个碎片，其余全变成月亮石碎片 / 星星碎片 / 太阳石碎片。
+   * 只显示「产出：贤者之石碎片 ×1」会让人误以为 100% 成功。
+   *
+   * - 炼金环节：指定 `outHrid` 在掉落表里的 `dropRate`
+   * - 制造/采集环节：配方确定产出，恒为 1
+   */
+  successRate: number
+  /** 「指定产物」在全部产出里的期望占比（与 successRate 同值，语义更直白，供 UI 文案用） */
+  targetShare: number
+  /** 该环节每小时的期望产出个数（按指定产物算） */
+  targetPerHour: number
+  /** 该环节每小时的**动作次数**（不是产出个数） */
+  actionsPerHour: number
 }
 
 export function getChainStepSummary(step: ChainStep): ChainStepSummary | null {
@@ -285,6 +303,15 @@ export function getChainStepSummary(step: ChainStep): ChainStepSummary | null {
   const gameData = getGameDataApi()
   const nameOf = (h: string) => gameData.itemDetailMap[h]?.name || h
   const perHour = Math.round(cal.actionsPH)
+
+  // 「本环节要拿到哪个产物」：炼金看用户指定的衔接产物，其余看物品本身
+  const targetHrid = isAlchemyKind(step.kind) ? step.outHrid : step.hrid
+  const targetProduct = targetHrid ? cal.productList.find(p => p.hrid === targetHrid) : undefined
+  // ⚠️ 必须用 productList 里**实际**那条的 rate，不能自己乘 successRate：
+  // 炼金的 dropRate 已经包含了它与基础成功率的关系（实测两者都是 0.5，
+  // 而 dropRate 各项之和为 1）。制造/采集环节的 rate 是 undefined ⇒ 恒定产出，记 1。
+  const successRate = targetProduct ? (targetProduct.rate ?? 1) : 0
+
   return {
     inputs: cal.ingredientList
       // 与 getChainIngredientsOf 同款过滤：茶来自玩家冲泡配置、金币是货币、
@@ -294,7 +321,11 @@ export function getChainStepSummary(step: ChainStep): ChainStepSummary | null {
     outputs: cal.productList.map(p => ({ hrid: p.hrid, name: nameOf(p.hrid), count: p.count, rate: p.rate })),
     // ⚠️ 不能用 getTrans 的占位符语法：它在本文件里拿不到 vue-i18n 的运行时实例，
     // 早前版本导致 "{0}" 原样显示。这里直接输出已算好的数值。
-    timeCost: `${perHour} ${getTrans("次 / 小时")}`
+    timeCost: `${perHour} ${getTrans("次 / 小时")}`,
+    successRate,
+    targetShare: successRate,
+    targetPerHour: perHour * successRate,
+    actionsPerHour: perHour
   }
 }
 
