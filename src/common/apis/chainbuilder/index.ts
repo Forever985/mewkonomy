@@ -6,7 +6,7 @@ import { GatherCalculator } from "@/calculator/gather"
 import { ManufactureCalculator } from "@/calculator/manufacture"
 import { getStorageCalculatorItem } from "@/calculator/utils"
 import { WorkflowCalculator } from "@/calculator/workflow"
-import { getActionConfigOf, getDrinkConcentration } from "@/common/apis/player"
+import { getActionConfigOf, getDrinkConcentration, getDrinkSlotCount } from "@/common/apis/player"
 import { usePlayerStoreOutside } from "@/pinia/stores/player"
 import { getTrans } from "@/locales"
 import { COIN_HRID } from "@/pinia/stores/game"
@@ -497,6 +497,26 @@ export interface ChainPlayerConfigSummary {
   }[]
   /** 饮品浓度（来自特殊装备，如暴饮之囊）+10% 即 0.1 */
   drinkConcentration: number
+  /**
+   * **可同时生效的饮品种数**（官方公式：基础 1 + 囊的 `drinkSlots` 加成）。
+   *
+   * | 囊 | 总槽位 |
+   * | --- | --- |
+   * | 无囊 / Small | 1 |
+   * | Medium / Large | 2 |
+   * | Giant / Gluttonous / **暴饮之囊** | 3 |
+   *
+   * ⚠️ 实测项目默认配置给每个动作配了 **3 种茶** —— 那要求 Giant 及以上级别的囊。
+   * 没有囊的玩家只能喝 1 种，按 3 种算会高估产出与茶成本。
+   */
+  drinkSlotCount: number
+  /**
+   * **配置的饮品种数超过槽位数的动作** —— 这些配置实际跑不起来。
+   *
+   * 出现了不代表计算器会做特殊处理（它仍按配置算），而是提醒用户：
+   * 要么去减配置，要么去换囊，否则结果偏乐观。
+   */
+  overCapacity: { action: Action, label: string, configured: number, slots: number }[]
   /** 提供加成的特殊装备 */
   specialEquipment: { type: string, hrid: string, name: string, enhanceLevel: number }[]
 }
@@ -526,9 +546,16 @@ export function getChainPlayerConfigSummary(steps: ChainStep[]): ChainPlayerConf
     })
   }
 
+  const slots = getDrinkSlotCount()
+  const overCapacity = byAction
+    .filter(a => a.teas.length > slots)
+    .map(a => ({ action: a.action, label: a.label, configured: a.teas.length, slots }))
+
   return {
     byAction,
     drinkConcentration: getDrinkConcentration(),
+    drinkSlotCount: slots,
+    overCapacity,
     specialEquipment
   }
 }

@@ -190,4 +190,63 @@ describe("chainbuilder：利润口径 + 玩家配置", () => {
     await setPouch(null)
     w.unmount()
   }, 300000)
+
+  it("③ 饮品槽位：官方公式 1 + 囊加成，配多了要报警", async () => {
+    const api = await import("@/common/apis/chainbuilder")
+    const player = await import("@/common/apis/player")
+
+    // 无囊 ⇒ 官方公式 1 + 0 = 1 个槽位
+    await setPouch(null)
+    const noPouch = api.getChainPlayerConfigSummary(CHAIN)
+    console.log("[p] 无囊：槽位 =", noPouch.drinkSlotCount, " 浓度 =", noPouch.drinkConcentration)
+    console.log("[p]   超额动作 =", noPouch.overCapacity.map(o => `${o.label}(${o.configured}>${o.slots})`).join(", ") || "（无）")
+    expect(player.getDrinkSlotCount(), "无囊时槽位应为 1").toBe(1)
+    expect(noPouch.drinkSlotCount).toBe(1)
+
+    // 默认配置每动作 3 种茶 ⇒ 无囊时必然超额
+    const totalTeas = (player.getActionConfigOf("alchemy").tea ?? []).length
+    console.log("[p] alchemy 默认配了", totalTeas, "种饮品")
+    if (totalTeas > 1) {
+      expect(noPouch.overCapacity.length, "无囊但配了多种饮品 ⇒ 必须报超额").toBeGreaterThan(0)
+      expect(noPouch.overCapacity.every(o => o.configured > o.slots)).toBe(true)
+    }
+
+    // 暴饮之囊 +2 ⇒ 3 个槽位，默认 3 种正好放得下
+    await setPouch("/items/guzzling_pouch")
+    const withPouch = api.getChainPlayerConfigSummary(CHAIN)
+    console.log("[p] 暴饮之囊：槽位 =", withPouch.drinkSlotCount,
+      " 超额动作 =", withPouch.overCapacity.map(o => o.label).join(", ") || "（无）")
+    expect(player.getDrinkSlotCount(), "暴饮之囊 +2 ⇒ 槽位应为 3").toBe(3)
+    expect(withPouch.drinkSlotCount).toBe(3)
+    expect(withPouch.overCapacity.length, "3 个槽位放下默认 3 种饮品 ⇒ 不该报超额").toBe(0)
+
+    await setPouch(null)
+  }, 300000)
+
+  it("③ 官方数据核对：各囊的槽位加成与浓度（防回归）", async () => {
+    const { getGameDataApi } = await import("@/common/apis/game")
+    const gd = getGameDataApi()
+    const slotOf = (h: string) =>
+      Number((gd.itemDetailMap[h]?.equipmentDetail as any)?.combatStats?.drinkSlots ?? 0)
+
+    // 官方 data.json 实测：基础 1 + 囊加成
+    const expectTable: [string, number][] = [
+      ["/items/small_pouch", 1],
+      ["/items/medium_pouch", 2],
+      ["/items/large_pouch", 2],
+      ["/items/giant_pouch", 3],
+      ["/items/gluttonous_pouch", 3],
+      ["/items/guzzling_pouch", 3]
+    ]
+    for (const [hrid, want] of expectTable) {
+      const got = 1 + slotOf(hrid)
+      console.log(`[p] ${gd.itemDetailMap[hrid].name.padEnd(18)} 总槽位 = ${got}`)
+      expect(got, `${hrid} 的总槽位`).toBe(want)
+    }
+
+    // 暴饮之囊的浓度来源（官方 equipmentDetail）
+    const pouch = gd.itemDetailMap["/items/guzzling_pouch"].equipmentDetail as any
+    expect(pouch.noncombatStats.drinkConcentration, "暴饮之囊给 +10% 饮品浓度").toBeCloseTo(0.1, 6)
+    expect(pouch.noncombatEnhancementBonuses.drinkConcentration, "每强化级 +0.2%").toBeCloseTo(0.002, 6)
+  }, 300000)
 })

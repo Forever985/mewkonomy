@@ -202,33 +202,74 @@ export function getTeaListOf(action: Action) {
 }
 
 /**
+ * 饮品槽位数 —— **可同时生效的饮品种数**。
+ *
+ * ## 官方来源（客户端 bundle 实读，2026-10-07）
+ *
+ * `www.milkywayidle.com/static/js/main.<hash>.chunk.js` 里有两处权威实现：
+ * ```js
+ * // 1) 由囊的加成算总槽位
+ * computeConsumableSlotCounts = e => {
+ *   let t = 1, a = 1, i = e.wearableMap[ItemLocations.Pouch]
+ *   if (i) { ... t += combatStats.foodSlots || 0 ; a += combatStats.drinkSlots || 0 }
+ *   return { foodSlotCount: t, drinkSlotCount: a }
+ * }
+ * // 2) 角色属性下发后的同款算法
+ * drinkSlotCount: 1 + (combatUnit.combatDetails.combatStats.drinkSlots || 0)
+ * ```
+ * ⇒ **基础 1 个槽位**，囊只提供**加成**（`data.json` 实测）：
+ *
+ * | 囊 | drinkSlots 加成 | 总槽位 |
+ * | --- | --- | --- |
+ * | 无囊 / Small Pouch | 0 | **1** |
+ * | Medium / Large Pouch | +1 | **2** |
+ * | Giant / Gluttonous / **Guzzling（暴饮之囊）** | +2 | **3** |
+ *
+ * ## 为什么这个数在利润计算里很关键
+ *
+ * 饮品是**增益**，但能同时喝几种受槽位限制。实测默认配置给每个动作配了 **3 种茶**
+ * （如 alchemy: 智慧 + 效率 + 催化）—— 那要求 `Giant / Gluttonous / Guzzling` 级别的囊。
+ * **没有任何囊的玩家只能喝 1 种**，此时按 3 种算会高估产出、也高估茶成本。
+ */
+export function getDrinkSlotCount(): number {
+  const store = usePlayerStoreOutside()
+  const pouch = store.config.specialEquimentMap.get("pouch" as Equipment)
+  if (!pouch?.hrid) {
+    return 1
+  }
+  const detail = getItemDetailOf(pouch.hrid)
+  // combatStats 在类型里未细分，这里按官方字段名安全读取
+  const bonus = (detail?.equipmentDetail as any)?.combatStats?.drinkSlots ?? 0
+  return 1 + Number(bonus || 0)
+}
+
+/**
  * 本动作按玩家配置消耗的饮品清单。
  *
  * ## 为什么消耗量要乘 (1 + 饮品浓度) —— **这不是笔误，别改**
  *
- * 暴饮之囊（`/items/guzzling_pouch`）给 +10% `drinkConcentration`，
- * 它的作用是**双向的**：
- *   ① 饮品增益强度 × (1 + 浓度)（见 `initBuffMap` 里各处 `* (1 + buffs.drinkConcentration)`）
- *   ② 饮品**时长** ÷ (1 + 浓度)
+ * 暴饮之囊（`/items/guzzling_pouch`）给 +10% `drinkConcentration`
+ * （每强化级再 +0.2%），它的作用是**双向的**。
  *
- * ②的含义是「喝得更频繁」：基础时长 300 秒，
- *   浓度 10% ⇒ 300 / 1.1 = **272.7 秒**，于是每小时要喝更多杯。
+ * ## 官方来源（客户端 bundle 实读，2026-10-07）—— 优先于任何 wiki
  *
- * 来源核对（2026-10-07）：
- * - wiki.milkywayidle.com 的茶条目：「effect multiplied by (1 + concentration),
- *   **duration and cooldown divided by (1 + concentration)**」，
- *   并直接给出「Guzzling Pouch +0 (10%) → 272.7s duration」
- * - grindnstrat 攻略：「Guzzling Pouch – 10% Drink Concentration
- *   (**10% Reduced duration**, 10% Increased Effect)」
- * ⇒ 两处一致支持「时长 ÷ (1+浓度)」，故本式 `3600 / 300 × (1 + 浓度)` 成立。
+ * `main.<hash>.chunk.js` 的游戏内帮助原文：
+ * > **Drink Concentration: Increases drink effect. Reduces duration and cooldown.**
  *
- * ⚠️ 注意：`milkywayidle.wiki.gg/wiki/Duration` 那一页写的是「× (1+浓度) 延长」，
- * 与上述两处**相反**，且与同 wiki 家族的物品页自相矛盾，判断为不可信。
- * 若将来发现游戏实测与本文不符，先核对右上两个来源再改。
+ * 即「效果↑、**时长↓**、冷却↓」。时长变短 ⇒ 同样时间里要喝**更多**杯
+ * ⇒ 消耗量乘 `(1 + 浓度)` 成立。
+ * （基础时长 300s，10% 浓度 ⇒ 300 / 1.1 = **272.7s**。）
+ *
+ * ⚠️ 早期我是靠第三方 wiki 判断的，而两个 wiki 互相矛盾
+ * （`milkywayidle.wiki.gg/wiki/Duration` 说「延长」，与官方原文相反，**不可信**）。
+ * 结论以官方客户端为准。
  *
  * ⚠️ 也**不要**把浓度用在「代价型」数值上：早前 `getActionLevelBonusOf`
  * 对工匠茶的「要求等级 +5」也乘了 (1+浓度)，把门槛抬成 +5.5，已修
  * （暴饮放大的是**有益**增益，代价不吃加成）。
+ *
+ * ⚠️ 另注意**槽位**限制：能同时生效的饮品种数由 `getDrinkSlotCount()` 决定
+ * （无囊仅 1 个），配多了实际跑不起来 —— 见 `chainbuilder` 的玩家配置摘要。
  */
 export function getTeaIngredientList(cal: Calculator) {
   return (getActionConfigOf(cal.action).tea || []).map(hrid => ({

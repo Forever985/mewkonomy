@@ -415,6 +415,20 @@ const playerConfig = computed<ChainPlayerConfigSummary>(() => {
 /** 暴饮之囊（若有）—— 浓度那块要标出它来自哪件装备 */
 const pouch = computed(() => playerConfig.value.specialEquipment.find(e => e.hrid === "/items/guzzling_pouch"))
 
+/**
+ * 囊提供的饮品槽位加成（界面上标「+2」用）。
+ *
+ * 官方数据：`equipmentDetail.combatStats.drinkSlots`，
+ * 总槽位 = 1 + 该加成（见 `getDrinkSlotCount` 的官方出处说明）。
+ * 注意任何囊都可能提供（巨型 +2 / 中囊大囊 +1），不只是暴饮之囊。
+ */
+const drinkSlotBonus = computed(() => {
+  const first = playerConfig.value.specialEquipment.find(e => e.type === "pouch")
+  if (!first) return 0
+  const detail = getItemDetailOf(first.hrid)
+  return Number((detail?.equipmentDetail as any)?.combatStats?.drinkSlots ?? 0)
+})
+
 /* ───────────────────────── 统一计算与结果 ───────────────────────── */
 
 /** 当前生效的环节（两种模式共用一条计算链） */
@@ -802,7 +816,24 @@ const TERM_TIPS: Record<string, string> = {
         </div>
       </template>
 
-      <el-descriptions :column="2" border size="small">
+      <el-descriptions :column="3" border size="small">
+        <el-descriptions-item :label="t('饮品槽位')">
+          <el-tooltip placement="top" effect="light" :show-after="120">
+            <template #content>
+              <div class="max-w-400px leading-5">
+                {{ t("能同时生效的饮品种数。官方公式：基础 1 + 囊的加成。") }}
+                <div class="mt-1">
+                  {{ t("无囊 / 小囊 = 1；中囊 / 大囊 = 2；巨型 / 点金 / 暴饮之囊 = 3。") }}
+                </div>
+              </div>
+            </template>
+            <span class="cursor-help">{{ playerConfig.drinkSlotCount }} {{ t("种") }}</span>
+          </el-tooltip>
+          <el-tag v-if="pouch && drinkSlotBonus > 0" size="small" type="success" class="ml-2">
+            {{ t(pouch.name) }} +{{ drinkSlotBonus }}
+          </el-tag>
+          <span v-else class="ml-2 text-xs text-gray-400">{{ t("（无囊加成）") }}</span>
+        </el-descriptions-item>
         <el-descriptions-item :label="t('饮品浓度')">
           <span>{{ Format.percent(playerConfig.drinkConcentration) }}</span>
           <el-tag v-if="pouch" size="small" type="success" class="ml-2">
@@ -846,6 +877,28 @@ const TERM_TIPS: Record<string, string> = {
           {{ t("还没有环节 —— 选好物品后，这里会列出对应动作的饮品配置") }}
         </span>
       </div>
+
+      <!-- ⚠️ 配置的饮品数超过槽位：实际跑不起来，结果会偏乐观 -->
+      <el-alert
+        v-if="playerConfig.overCapacity.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="mt-2"
+      >
+        <template #title>
+          {{ t("饮品配多了：这些动作配的数量超过了槽位，实际跑不起来") }}
+        </template>
+        <div class="text-xs leading-5">
+          <div v-for="o in playerConfig.overCapacity" :key="o.action">
+            {{ t(o.label) }}：{{ t("配了") }} {{ o.configured }} {{ t("种，但只有") }}
+            {{ o.slots }} {{ t("个槽位") }}
+          </div>
+          <div class="mt-1">
+            {{ t("解决：去「玩家配置」减少饮品，或装上带饮品槽位的囊（巨型 / 点金 / 暴饮之囊 = 3 个）。") }}
+          </div>
+        </div>
+      </el-alert>
 
       <div class="text-xs text-gray-400 mt-2">
         {{ t("饮品消耗 / 动作 = 3600 ÷ 300 秒 × (1 + 饮品浓度) ÷ 每小时动作数；浓度同时放大饮品增益强度（时长按 1+浓度 缩短，喝得更频繁）。这些都是逐项计入成本的。") }}
