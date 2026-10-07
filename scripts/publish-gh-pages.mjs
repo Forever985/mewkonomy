@@ -36,6 +36,71 @@ const REPO = argOf("repo")
 const BRANCH = argOf("branch", "gh-pages")
 const DRY_RUN = process.env.DRY_RUN === "1"
 
+/**
+ * 浅克隆（只取最新一个提交）。
+ *
+ * 为什么必须浅克隆：gh-pages 分支积累了 300+ 个 `chore(data)` 提交（Actions 每
+ * 20 分钟追加市场采样点），全量 clone 在本机链路上传不完。
+ * 实测（2026-10-07）：全量 clone 反复以
+ *   `fetch-pack: invalid index-pack output`
+ *   `unexpected disconnect while reading sideband packet`
+ * 失败；`--depth 1` 后 39MB、约 30 秒完成。
+ *
+ * 代价：拿不到文件历史 ⇒ 无法判断旧产物是否过期 ⇒ 跳过清理（见 pruneStaleFiles）。
+ */
+const SHALLOW = true
+
+// ── 代理自动探测 ─────────────────────────────────────────────────────
+//
+// ## 为什么脚本要自己找代理
+//
+// 本机 Watt Toolkit(Steam++) 有两种模式，端口完全不同：
+//   · hosts 劫持 + 443 MITM → 需本地 CONNECT 中继 127.0.0.1:7899
+//   · 系统代理模式          → 直接开普通 HTTP 代理（实测 127.0.0.1:10808）
+//
+// 而环境变量里的 `HTTP_PROXY` 可能指向一个「**在监听但不响应**」的死端口
+// （实测本机是 127.0.0.1:9044）。git **在没有显式 proxy 配置时会读环境变量**，
+// 于是被它带进沟里：clone 不是超时就是 "invalid index-pack output"。
+//
+// ⇒ 这里一律**实测**候选端口，选出真的能连的那个，并显式写进 git 参数。
+// 这样无论用户双击哪个 bat（有没有经过 detect 过代理的 ps1），都能工作。
+const PROXY_CANDIDATES = [10808, 7890, 7897, 1080, 10809, 7899, 9044]
+
+/**
+ * 传给 git 的公共参数：代理 + 传输加固。
+ *
+ * 最后三条是把 clone 从「必失败」救回来的关键。实测同一仓库、同一网络：
+ *   · 默认（HTTP/2）        → `unexpected disconnect while reading sideband packet`
+ *   · HTTP/1.1 + 大缓冲 + 关压缩 → 成功
+ * 原因是本机链路上 HTTP/2 多路复用会被中断，退回 HTTP/1.1 即稳定。
+ */
+function gitFlags(port) {
+  return [
+    "-c", `http.proxy=http://127.0.0.1:${port}`,
+    "-c", `https.proxy=http://127.0.0.1:${port}`,
+    "-c", "http.sslVerify=false",
+    "-c", "http.version=HTTP/1.1",
+    "-c", "http.postBuffer=524288000",
+    "-c", "core.compression=0"
+  ]
+}
+
+/** 逐个实测候选端口，返回第一个 git 真能连通的；全不行返回 0 */
+function detectProxyPort() {
+  for (const port of PROXY_CANDIDATES) {
+    // timeout 防止死端口把探测挂死（9044 就是「连得上但不响应」）
+    const r = spawnSync(
+      "git",
+      [...gitFlags(port), "ls-remote", "--heads", REPO, BRANCH],
+      { stdio: "ignore", timeout: 25000 }
+    )
+    if (r.status === 0) {
+      return port
+    }
+  }
+  return 0
+}
+
 /** 线上由 Actions 维护、本地部署绝不能动的目录（相对仓库根） */
 const PROTECTED = ["data"]
 /**
@@ -86,6 +151,22 @@ function collectDistFiles(distDir) {
  * 不整目录 rm 还有第二个好处：删除是逐个文件显式进行的，不会误伤 data/。
  */
 function pruneStaleFiles(work, distFiles) {
+  /**
+   * 浅克隆时**不做清理**。
+   *
+   * 判断「旧产物是否过期」依赖 `git log -1 --format=%ct -- <file>` 读文件历史，
+   * 而浅克隆只有 1 个提交，所有文件都会拿到同一个（很新的）时间戳 ⇒ 判断失准。
+   *
+   * 宁可不清理也不能删错：线上 `index.html` 有约 10 分钟 CDN 缓存，
+   * 若删掉它仍在引用的旧 hash 资源，用户会看到白屏（本仓库实测踩过两次）。
+   * 代价只是旧产物缓慢堆积，远优于白屏。
+   */
+  if (SHALLOW) {
+    const tracked = runCapture("git", ["ls-files"], { cwd: work }).split("\n").filter(Boolean)
+    log(`浅克隆：跳过旧产物清理（保留线上现有 ${tracked.length} 个文件）`)
+    return { removed: [], kept: tracked }
+  }
+
   const tracked = runCapture("git", ["ls-files"], { cwd: work })
     .split("\n")
     .map((l) => l.trim())
@@ -124,8 +205,32 @@ function main() {
   log(`临时目录：${tmp}`)
 
   try {
-    log(`clone ${BRANCH} ...`)
-    run("git", ["clone", "--branch", BRANCH, "--single-branch", REPO, work])
+    const port = detectProxyPort()
+    if (!port) {
+      throw new Error(
+        "找不到可用的 GitHub 加速通道（候选端口全部连不通）：\n" +
+        "    请确认 Watt Toolkit 已开启，且「网络加速 - GitHub」已勾选。\n" +
+        "    候选端口：" + PROXY_CANDIDATES.join(", ")
+      )
+    }
+    log(`使用代理 127.0.0.1:${port}`)
+
+    log(`clone ${BRANCH}${SHALLOW ? "（浅克隆）" : ""} ...`)
+    run("git", [
+      ...gitFlags(port),
+      "clone", "--branch", BRANCH, "--single-branch",
+      ...(SHALLOW ? ["--depth", "1"] : []),
+      REPO, work
+    ])
+
+    // 把代理固化进**这个临时仓库**的配置，
+    // 这样后面的 add / commit / push 不必再逐条带 -c 参数。
+    // 只写 work/.git/config，不动用户的任何全局配置。
+    run("git", ["config", "http.proxy", `http://127.0.0.1:${port}`], { cwd: work })
+    run("git", ["config", "https.proxy", `http://127.0.0.1:${port}`], { cwd: work })
+    run("git", ["config", "http.sslVerify", "false"], { cwd: work })
+    run("git", ["config", "http.version", "HTTP/1.1"], { cwd: work })
+    run("git", ["config", "http.postBuffer", "524288000"], { cwd: work })
 
     // ── 关掉行尾转换（只在这一次发布的临时仓库里生效）────────────────────
     //
