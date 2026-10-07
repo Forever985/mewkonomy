@@ -3,8 +3,9 @@ import type { CharmTier, CharmTierResult } from "@/common/apis/charmtransform"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import PriceStatusSelect from "@@/components/PriceStatusSelect/index.vue"
 import * as Format from "@@/utils/format"
+import { QuestionFilled } from "@element-plus/icons-vue"
 import { useI18n } from "vue-i18n"
-import { calcCharmTransformApi } from "@/common/apis/charmtransform"
+import { calcCharmFeedChoices, calcCharmTransformApi, calcCharmTransformInsights } from "@/common/apis/charmtransform"
 import { usePriceStatus } from "@/common/composables/usePriceStatus"
 import { useGameStoreOutside } from "@/pinia/stores/game"
 import GameInfo from "../dashboard/components/GameInfo.vue"
@@ -23,6 +24,71 @@ const result = computed<CharmTierResult[]>(() => {
   return calcCharmTransformApi(catalystRank.value)
 })
 const activeResult = computed(() => result.value.find(r => r.tier === activeTier.value))
+
+/**
+ * 催化剂横向对比 + 盈亏平衡线。
+ *
+ * 用户原话：「用稍弱一些的催化剂，亏损一些成功率但是降低成本，**这些都是要考量的**。」
+ * ⇒ 必须能一眼看出哪种组合最优，而不是在三个 radio 之间来回切、自己心算。
+ *
+ * ⚠️ 性能：`calcCharmTransformInsights` 内部要跑 3 次全档计算（约 15 个计算器），
+ * 实测单次 ~2s。它只依赖催化剂档位与买卖价，故只在这些变化时重算。
+ */
+const insights = computed(() => {
+  void gameStore.buyStatus
+  void gameStore.sellStatus
+  return calcCharmTransformInsights(catalystRank.value)
+})
+const activeInsight = computed(() => insights.value.find(i => i.tier === activeTier.value))
+
+/**
+ * 「投入哪种精华」的横向对比。
+ *
+ * 转化表对 10 个技能完全对称（每档 10 项各 10%）⇒ **利润只取决于投入哪种精华**。
+ * 页面早前把「冲泡」写死在输入侧，没法验证「冲泡最便宜」这个前提在当前数据下
+ * 是否还成立。实测（官方实时数据 2026-10-07）：冲泡 285 第 1/10，
+ * 且是**唯一盈利**的投入（+8613 万/h），其余 9 种全亏。
+ */
+const feedChoices = computed(() => {
+  void gameStore.buyStatus
+  void gameStore.sellStatus
+  return calcCharmFeedChoices(activeTier.value, catalystRank.value)
+})
+/** 按自制成本升序，最便宜的排最前（页面直接展示，无需用户再排序） */
+const feedChoicesSorted = computed(() => [...feedChoices.value].sort((a, b) => a.costRank - b.costRank))
+
+/** 投入侧最优（成本最低）的技能 */
+const cheapestFeed = computed(() => feedChoicesSorted.value[0])
+
+/** 档位显示名（走 i18n，避免直接拼 key） */
+function tierLabel(tier: CharmTier) {
+  return t(`CharmTier.${tier}`)
+}
+
+/**
+ * 催化剂对比表的列定义。
+ *
+ * `rateText` 在表头就写清成功率 —— 用户原话：「强催化剂提升成功率，但更昂贵」，
+ * 这两个数必须**同时**出现，单独看一个会误导。
+ * 成功率从 `insights[0].catalysts` 取（三档位同催化剂的成功率恒等）。
+ */
+const catalystColumns = computed(() => {
+  const first = insights.value[0]
+  return [0, 1, 2].map(rank => {
+    const label = rank === 0 ? t("无催化剂") : rank === 1 ? t("转化催化剂") : t("至高催化剂")
+    const rate = first?.catalysts[rank]?.successRate ?? 0
+    return { rank, label, rateText: Format.percent(rate) }
+  })
+})
+
+/** 盈亏平衡 tooltip 文案 */
+function breakEvenTip(row: { multipleOfBreakEven: number }) {
+  if (row.multipleOfBreakEven >= 1) {
+    return t("已越过平衡点，产出护符均价再跌 ") +
+      Format.percent(1 - 1 / row.multipleOfBreakEven) + t(" 就开始亏")
+  }
+  return t("距离平衡点还差 ") + Format.percent(1 / row.multipleOfBreakEven - 1)
+}
 
 /**
  * 催化剂标签 —— 用**游戏内的真实物品名**。
@@ -235,13 +301,153 @@ const quotedCount = computed(() => result.value.filter(r => !r.noMarketQuote).le
             <span>{{ row.bidIdeal >= 0 ? Format.money(row.bidIdeal) : "--" }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('价格口径')" align="center" min-width="110">
+        <el-table-column :label="t('价格口径')" align="center" min-width="130">
           <template #default="{ row }">
-            <el-tag v-if="row.isIdeal" type="warning" size="small">{{ t("主宰挂价") }}</el-tag>
+            <el-tag v-if="row.isSelf" size="small">{{ t("转回自己") }}</el-tag>
+            <el-tag v-else-if="row.isIdeal" type="warning" size="small">{{ t("主宰挂价") }}</el-tag>
             <el-tag v-else type="success" size="small">{{ t("市场价") }}</el-tag>
           </template>
         </el-table-column>
       </el-table>
+      <div class="text-xs text-gray-400 mt-2">
+        {{ t("「转回自己」= 转化表里含投入的护符本身（各 10%）。它要再转一次才能变现，不算收益。") }}
+      </div>
+    </el-card>
+
+    <!-- ══════════════ 催化剂横向对比 ══════════════ -->
+    <el-card class="mt-3">
+      <template #header>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span>{{ t("催化剂怎么选") }}</span>
+          <el-tooltip placement="top" effect="light" :show-after="120">
+            <template #content>
+              <div class="max-w-420px leading-5">
+                {{ t("催化剂说明") }}
+                <div class="mt-1 text-gray-300">
+                  {{ t("强催化剂提升成功率，但本身有成本 —— 最优解不一定是最高成功率那档。") }}
+                </div>
+              </div>
+            </template>
+            <el-icon class="cursor-help text-gray-400"><QuestionFilled /></el-icon>
+          </el-tooltip>
+          <span class="text-sm text-gray-400">{{ t("横向列出三种配置，直接看哪档最赚") }}</span>
+        </div>
+      </template>
+      <el-table :data="insights" size="small">
+        <el-table-column :label="t('护符档位')" min-width="120">
+          <template #default="{ row }">
+            <span :class="row.tier === activeTier ? 'font-bold' : ''">{{ tierLabel(row.tier) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-for="c in catalystColumns" :key="c.rank" align="center" min-width="185">
+          <template #header>
+            <div class="leading-4">
+              <div>{{ c.label }}</div>
+              <div class="text-xs text-gray-400">{{ t("成功率") }} {{ c.rateText }}</div>
+            </div>
+          </template>
+          <template #default="{ row }">
+            <div class="leading-5">
+              <div :class="[profitClass(row.catalysts[c.rank].profitIdealPH), row.catalysts[c.rank].isBest ? 'font-bold' : '']">
+                {{ row.catalysts[c.rank].profitIdealPH > 0
+                  ? Format.money(row.catalysts[c.rank].profitIdealPH)
+                  : t("亏") }}
+              </div>
+              <div class="text-xs text-gray-400">
+                {{ t("成本") }} {{ Format.money(row.catalysts[c.rank].costPH) }}
+              </div>
+              <el-tag v-if="row.catalysts[c.rank].isBest" size="small" type="success" class="mt-1">{{ t("最优") }}</el-tag>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('盈亏平衡均价')" align="center" min-width="150">
+          <template #default="{ row }">
+            <el-tooltip placement="top" effect="light" :show-after="120">
+              <template #content>
+                <div class="max-w-360px leading-5">{{ t("产出护符的平均卖价至少要到这个值，这档才不亏。") }}</div>
+              </template>
+              <span>{{ row.breakEvenBid > 0 ? Format.money(row.breakEvenBid) : "--" }}</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('现均价 / 平衡线')" align="center" min-width="150">
+          <template #default="{ row }">
+            <el-tooltip v-if="row.currentAvgBid > 0" placement="top" effect="light" :show-after="120">
+              <template #content>
+                <div class="max-w-360px leading-5">
+                  {{ t("现均价") }}：{{ Format.money(row.currentAvgBid) }}
+                  <div class="mt-1">{{ breakEvenTip(row) }}</div>
+                </div>
+              </template>
+              <span :class="row.multipleOfBreakEven >= 1 ? 'success' : 'error'">
+                {{ Format.number(row.multipleOfBreakEven, 2) }}&times;
+              </span>
+            </el-tooltip>
+            <span v-else class="text-gray-400">{{ t("无报价") }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div class="text-xs text-gray-400 mt-2">
+        {{ t("「理想利润」按无流动性护符的挂价上限（其自身精华的自制成本）计 —— 它是价格天花板，需要有人接盘才成立。") }}
+      </div>
+    </el-card>
+
+    <!-- ══════════════ 投入哪种精华 ══════════════ -->
+    <el-card class="mt-3">
+      <template #header>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span>{{ t("投入哪种精华最划算") }}</span>
+          <el-tooltip placement="top" effect="light" :show-after="120">
+            <template #content>
+              <div class="max-w-420px leading-5">
+                {{ t("转化表对 10 个技能完全对称（各 10%），所以利润只取决于投入哪种精华。") }}
+              </div>
+            </template>
+            <el-icon class="cursor-help text-gray-400"><QuestionFilled /></el-icon>
+          </el-tooltip>
+          <span class="text-sm text-gray-400">
+            {{ t("档位") }}：{{ tierLabel(activeTier) }} · {{ t("催化剂") }}：{{ catalystLabel(catalystRank) }}
+          </span>
+        </div>
+      </template>
+      <div v-if="cheapestFeed" class="text-sm mb-2">
+        <el-tag type="success" size="small" class="mr-2">{{ t("最便宜") }}</el-tag>
+        <span>{{ cheapestFeed.essenceName }}</span>
+        <span class="text-gray-500 ml-2">
+          {{ Format.money(cheapestFeed.essencePrice) }} &times; {{ Format.number(cheapestFeed.essenceCount, 0) }}
+          = {{ Format.money(cheapestFeed.selfCraftCost) }}
+        </span>
+      </div>
+      <el-table :data="feedChoicesSorted" size="small">
+        <el-table-column :label="t('投入技能')" min-width="130">
+          <template #default="{ row }">
+            <span>{{ row.essenceName }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('精华单价')" align="center" min-width="100">
+          <template #default="{ row }">{{ row.essencePrice > 0 ? Format.money(row.essencePrice) : "--" }}</template>
+        </el-table-column>
+        <el-table-column :label="t('所需精华')" align="center" min-width="90">
+          <template #default="{ row }">{{ Format.number(row.essenceCount, 0) }}</template>
+        </el-table-column>
+        <el-table-column :label="t('自制成本')" align="center" min-width="120">
+          <template #default="{ row }">
+            <span :class="row.costRank === 1 ? 'font-bold' : ''">
+              {{ row.selfCraftCost > 0 ? Format.money(row.selfCraftCost) : "--" }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('自制投入的利润 / h')" align="center" min-width="170">
+          <template #default="{ row }">
+            <span :class="profitClass(row.profitIdealIfSelfCraft)">
+              {{ row.profitIdealIfSelfCraft > 0 ? Format.money(row.profitIdealIfSelfCraft) : t("亏") }}
+            </span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div class="text-xs text-gray-400 mt-2">
+        {{ t("按自制成本升序。通常只有最便宜的那种能盈利 —— 这就是「用最便宜的精华投入」这条经验法则的来源。") }}
+      </div>
     </el-card>
   </div>
 </template>
