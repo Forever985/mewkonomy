@@ -160,4 +160,27 @@ describe("炒货：价差候选的判定", () => {
     expect(list.every(i => Number.isFinite(i.netPerUnit))).toBe(true)
     expect(list.every(i => Number.isFinite(i.netRate))).toBe(true)
   })
+
+  it("⑧ 净率基数可切换：右价 = 资金回报率，左价 = 毛利率", async () => {
+    const arb = await import("@/common/apis/marketarb")
+
+    const byBid = arb.calcArbList("bid").find(i => i.hrid === "/items/swamp_essence")!
+    const byAsk = arb.calcArbList("ask").find(i => i.hrid === "/items/swamp_essence")!
+    console.log("[p] 沼泽 净利", byBid.netPerUnit,
+      " 右价口径", (byBid.netRate * 100).toFixed(3) + "%",
+      " 左价口径", (byAsk.netRate * 100).toFixed(3) + "%")
+
+    expect(byBid.netRate, "右价口径 = 净利 ÷ 买入价 = 5.12/64").toBeCloseTo(5.12 / 64, 9)
+    expect(byAsk.netRate, "左价口径 = 净利 ÷ 卖出价 = 5.12/72").toBeCloseTo(5.12 / 72, 9)
+    expect(byAsk.netRate, "左价口径一定更低（分母更大）").toBeLessThan(byBid.netRate)
+
+    // ⚠️ 换基数**不得**改变净利与候选集合 —— 只有净率的分母变
+    expect(byAsk.netPerUnit).toBe(byBid.netPerUnit)
+    expect(arb.calcArbList("ask").length, "候选数量与基数无关").toBe(arb.calcArbList("bid").length)
+
+    // 默认就是右价
+    const def = arb.calcArbList()
+    expect(arb.ARB_DEFAULT_SORT_KEY).toBe("netRate")
+    expect(def.map(i => i.netRate)).toEqual(arb.calcArbList("bid").map(i => i.netRate))
+  })
 })

@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import type { ArbSortKey } from "@/common/apis/marketarb"
+import type { ArbRateBase, ArbSortKey } from "@/common/apis/marketarb"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import * as Format from "@@/utils/format"
 import { QuestionFilled } from "@element-plus/icons-vue"
@@ -40,7 +40,20 @@ import GameInfo from "../dashboard/components/GameInfo.vue"
 const { t } = useI18n()
 const alertStore = useAlertStore()
 
-const all = computed(() => calcArbList())
+/**
+ * 净率的基数（用户 2026-10-09 确认默认右价，但要求可调）。
+ *
+ * 必须在**计算层**就按它算，而不是界面二次换算 ——
+ * 净率同时是排序键和提醒指标，只改显示会让排序与预警仍按旧基数跑。
+ */
+const rateBase = ref<ArbRateBase>("bid")
+const RATE_BASE_OPTIONS: { value: ArbRateBase, label: string }[] = [
+  { value: "bid", label: "右价（资金回报率）" },
+  { value: "ask", label: "左价（毛利率）" }
+]
+const rateBaseLabel = computed(() => RATE_BASE_OPTIONS.find(o => o.value === rateBase.value)?.label ?? "")
+
+const all = computed(() => calcArbList(rateBase.value))
 const summary = computed(() => getArbSummary())
 
 /* ───────────────────────── 筛选 ───────────────────────── */
@@ -49,15 +62,14 @@ const minNetRatePct = ref(0)
 const minNetPerUnit = ref(0)
 const minBid = ref(0)
 /**
- * 默认**开启**「只看当日有成交的」。
+ * 「当日成交 ≥」默认 **1**（用户定的）。
  *
- * 实测（官方实时数据 2026-10-09）：不开启时 967 个候选里，净率榜首全是
- * 0 成交的离谱挂单（星空锅铲 左 43.2 亿 / 右 500 万，净率 82844%）——
- * 那是有人挂了个没人接的卖单，不是真实价差。开启后降到 264 条，
- * 沼泽精华的排名从 #420 提到 #81。
+ * 为什么必须有这个门槛：实测（官方实时数据 2026-10-09）不设门槛时 967 个候选里，
+ * 净率榜首全是 0 成交的离谱挂单（星空锅铲 左 43.2 亿 / 右 500 万，净率 82844%）——
+ * 那是有人挂了个没人接的卖单，不是真实价差。设成 1 后降到 264 条，
+ * 沼泽精华的排名从 #420 提到 #81。调到 10 → 117 条、100 → 66 条。
  */
-const onlyTraded = ref(true)
-const minVolume = ref(0)
+const minVolume = ref(1)
 const hideSuspicious = ref(false)
 const categories = ref<string[]>([])
 const categoryOptions = computed(() => getArbCategoryOptions(all.value))
@@ -67,8 +79,8 @@ const filtered = computed(() => filterArbItems(all.value, {
   minNetRate: minNetRatePct.value > 0 ? minNetRatePct.value / 100 : undefined,
   minNetPerUnit: minNetPerUnit.value > 0 ? minNetPerUnit.value : undefined,
   minBid: minBid.value > 0 ? minBid.value : undefined,
-  onlyTraded: onlyTraded.value,
-  minVolume: minVolume.value > 0 ? minVolume.value : undefined,
+  // 直接传数值：0 表示不设门槛（volume ≥ 0 恒成立），省掉一个重复的复选框
+  minVolume: minVolume.value,
   hideSuspicious: hideSuspicious.value,
   categories: categories.value
 }, n => String(t(n))))
@@ -78,13 +90,13 @@ function resetFilter() {
   minNetRatePct.value = 0
   minNetPerUnit.value = 0
   minBid.value = 0
-  minVolume.value = 0
+  minVolume.value = 1
   hideSuspicious.value = false
-  onlyTraded.value = true
   categories.value = []
 }
+/** 「重置」回到的是**默认值**（成交 ≥1），不是全 0 —— 否则重置一次就放大噪音 */
 const filterActive = computed(() => !!(keyword.value || minNetRatePct.value || minNetPerUnit.value
-  || minBid.value || minVolume.value || !onlyTraded.value || hideSuspicious.value
+  || minBid.value || minVolume.value !== 1 || hideSuspicious.value
   || categories.value.length))
 
 /* ───────────────────────── 排序 ───────────────────────── */
@@ -244,7 +256,7 @@ function levelSuffix(level: string) {
           <el-tooltip placement="top" effect="light" :show-after="120">
             <template #content>
               <div class="max-w-360px leading-5">
-                {{ t("净利 = 左价 × (1 − 税率) − 右价；净率 = 净利 ÷ 右价（以买入价为基数）。") }}
+                {{ t("净利 = 左价 × (1 − 税率) − 右价；净率 = 净利 ÷ 基数（基数可在下方切换）。") }}
               </div>
             </template>
             <span class="font-bold">{{ t("左价 × ") }}{{ Format.number(1 - ARB_TAX_RATE, 2) }} − {{ t("右价") }}</span>
@@ -306,16 +318,40 @@ function levelSuffix(level: string) {
         <div class="flex items-center gap-1">
           <el-tooltip placement="top" effect="light" :show-after="120">
             <template #content>
-              <div class="max-w-360px leading-5">
-                {{ t("官方当日累计成交量。挂单两腿都要成交，从没人成交过的品种说明这不是真实价差 —— 实测不开这个门槛时，净率榜首全是 0 成交的离谱挂单。") }}
+              <div class="max-w-400px leading-5">
+                {{ t("官方当日累计成交量。挂单两腿都要成交，从没人成交过的品种说明这不是真实价差 —— 实测不设门槛时，净率榜首全是 0 成交的离谱挂单（星空锅铲 净率 82844%）。") }}
+                <div class="mt-1">
+                  {{ t("默认 1。实测：1 → 264 条、10 → 117 条、100 → 66 条；调到 10 以上清单就很干净了。") }}
+                </div>
+                <div class="mt-1 text-gray-300">{{ t("填 0 = 不设门槛（会重新出现那批离谱挂单）。") }}</div>
               </div>
             </template>
             <span class="text-sm text-gray-500">{{ t("当日成交 ≥") }}</span>
           </el-tooltip>
-          <el-input-number v-model="minVolume" :min="0" :step="10" size="small" style="width: 120px" />
+          <el-input-number v-model="minVolume" :min="0" :step="1" size="small" style="width: 120px" />
         </div>
-        <el-checkbox v-model="onlyTraded" size="small">{{ t("只看当日有成交的") }}</el-checkbox>
         <el-checkbox v-model="hideSuspicious" size="small">{{ t("隐藏疑似异常报价") }}</el-checkbox>
+        <div class="flex items-center gap-1">
+          <el-tooltip placement="top" effect="light" :show-after="120">
+            <template #content>
+              <div class="max-w-400px leading-5">
+                {{ t("净率的分母。右价 = 资金回报率（净利 ÷ 你买入的钱）；左价 = 毛利率（净利 ÷ 卖出价）。") }}
+                <div class="mt-1">
+                  {{ t("沼泽精华：5.12 ÷ 64 = 8%（右价）；5.12 ÷ 72 = 7.11%（左价）。") }}
+                </div>
+                <div class="mt-1 text-gray-300">
+                  {{ t("切换会同时改变：净率列的数值、排序、以及提醒规则的阈值含义。") }}
+                </div>
+              </div>
+            </template>
+            <span class="text-sm text-gray-500">{{ t("净率基数") }}</span>
+          </el-tooltip>
+          <el-radio-group v-model="rateBase" size="small">
+            <el-radio-button v-for="o in RATE_BASE_OPTIONS" :key="o.value" :value="o.value">
+              {{ t(o.label) }}
+            </el-radio-button>
+          </el-radio-group>
+        </div>
         <el-button v-if="filterActive" size="small" @click="resetFilter">{{ t("重置筛选") }}</el-button>
       </div>
     </el-card>
@@ -330,7 +366,7 @@ function levelSuffix(level: string) {
               <div class="max-w-420px leading-5">
                 {{ t("与「市场监控」共用同一套提醒规则（同一个存储）。这里新增两个指标：税后净利/件、净率。") }}
                 <div class="mt-1 text-gray-300">
-                  {{ t("净率阈值按百分比填（例如 20 表示 20%）。命中的行会在表格里打标签。") }}
+                  {{ t("净率阈值按百分比填（例如 20 表示 20%），并按**当前净率基数**解释 —— 切换基数后，同一条规则的含义会跟着变。命中的行会在表格里打标签。") }}
                 </div>
               </div>
             </template>
@@ -506,7 +542,15 @@ function levelSuffix(level: string) {
           <template #default="{ row }">
             <el-tooltip placement="top" effect="light" :show-after="120">
               <template #content>
-                <div class="max-w-320px leading-5">{{ t("净利 ÷ 右价，以买入价为基数。") }}</div>
+                <div class="max-w-360px leading-5">
+                  {{ t("当前基数：") }}{{ rateBaseLabel }}
+                  <div class="mt-1">
+                    {{ t("沼泽精华 5.12 ÷ 64 = 8%（右价口径）；÷ 72 = 7.11%（左价口径）。") }}
+                  </div>
+                  <div class="mt-1 text-gray-300">
+                    {{ t("净率同时是排序键与提醒指标，所以切换会同时影响三处，不是只改显示。") }}
+                  </div>
+                </div>
               </template>
               <span class="font-bold">{{ Format.percent(row.netRate) }}</span>
             </el-tooltip>

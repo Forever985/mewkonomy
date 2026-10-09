@@ -18,7 +18,8 @@ import { MARKET_TAX_FACTOR } from "@@/constants/market"
  *   税额   = 左价 × (1 − MARKET_TAX_FACTOR)   ← 税基是**卖出成交额**，与项目内
  *                                               「收入一律按标价 × 税后系数」一致
  *   净利/件 = 左价 × MARKET_TAX_FACTOR − 右价
- *   净率    = 净利/件 ÷ 右价                   ← 以买入价为基数
+ *   净率    = 净利/件 ÷ 基数（基数可切换：右价 = 资金回报率 / 左价 = 毛利率，
+ *            见 `ArbRateBase`；默认右价）
  *
  * ⚠️ **双边报价是硬前提**：只有左价时 `净利 = 左价 × 0.96 > 0` 会算成假的盈利，
  *   只有右价时必然为负。所以这里显式要求 `ask > 0 && bid > 0`，而不是只看净利符号。
@@ -32,6 +33,22 @@ import { MARKET_TAX_FACTOR } from "@@/constants/market"
 
 /** 市场成交税率（4%）。净利与净率的推导全靠它，别写死数字 */
 export const ARB_TAX_RATE = 1 - MARKET_TAX_FACTOR
+
+/**
+ * 净率的基数（用户 2026-10-09 确认默认「右价」，但要求可切换）。
+ *
+ * - `bid`（右价）：净利 ÷ 买入价 = **资金回报率**。沼泽精华 5.12 ÷ 64 = 8%
+ * - `ask`（左价）：净利 ÷ 卖出价 = **毛利率**。沼泽精华 5.12 ÷ 72 = 7.11%
+ *
+ * 做成**参数**而不是页面上二次计算：净率同时是排序键和提醒指标，
+ * 若只在界面换算，排序与预警就还是按旧基数在跑，两边会不一致。
+ */
+export type ArbRateBase = "bid" | "ask"
+
+/** 取净率的分母 */
+export function arbRateDenominator(item: { ask: number, bid: number }, base: ArbRateBase): number {
+  return base === "bid" ? item.bid : item.ask
+}
 
 export interface ArbItem {
   hrid: string
@@ -57,7 +74,7 @@ export interface ArbItem {
   taxAmount: number
   /** 净利/件 = 左价 × 税后系数 − 右价 */
   netPerUnit: number
-  /** 净率 = 净利/件 ÷ 右价 */
+  /** 净率 = 净利/件 ÷ 基数（基数由调用方按 `ArbRateBase` 决定，默认右价） */
   netRate: number
   /**
    * 单件净利不足 1 —— 成交额按 4% 税后多半要被取整，这种「有价差但吃不到」的
@@ -79,10 +96,10 @@ export interface ArbItem {
 }
 
 /** 从市场行算出炒货候选；只保留**双边有报价且扣税后仍有净利**的条目 */
-export function calcArbList(): ArbItem[] {
+export function calcArbList(base: ArbRateBase = "bid"): ArbItem[] {
   const out: ArbItem[] = []
   for (const row of getMarketVolumeList()) {
-    const item = toArbItem(row)
+    const item = toArbItem(row, base)
     // 双边报价是硬前提：单边时净利符号没有意义（见文件头注释）
     if (item.ask <= 0 || item.bid <= 0) continue
     if (item.netPerUnit <= 0) continue
@@ -92,10 +109,11 @@ export function calcArbList(): ArbItem[] {
 }
 
 /** 单行换算；不做过滤，交给调用方决定要不要（测试要能单独看一行的值） */
-export function toArbItem(row: MarketVolumeItem): ArbItem {
+export function toArbItem(row: MarketVolumeItem, base: ArbRateBase = "bid"): ArbItem {
   const ask = row.ask
   const bid = row.bid
   const netPerUnit = ask * MARKET_TAX_FACTOR - bid
+  const denominator = arbRateDenominator({ ask, bid }, base)
   return {
     hrid: row.hrid,
     name: row.name,
@@ -110,7 +128,7 @@ export function toArbItem(row: MarketVolumeItem): ArbItem {
     grossSpread: ask - bid,
     taxAmount: ask * ARB_TAX_RATE,
     netPerUnit,
-    netRate: bid > 0 ? netPerUnit / bid : Number.NaN,
+    netRate: denominator > 0 ? netPerUnit / denominator : Number.NaN,
     subUnit: netPerUnit > 0 && netPerUnit < 1,
     leftRightRatio: bid > 0 ? ask / bid : Number.NaN,
     // 3 倍是「真实市场几乎不可能」的量级：净利率 ≈ 3×0.96−1 = 188%

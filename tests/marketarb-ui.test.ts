@@ -127,14 +127,26 @@ describe("炒货页：渲染出的数字必须与口径一致", () => {
     const vm = w.vm as any
     const rowCount = () => w.findAll(".el-table__row").length
     const before = rowCount()
-    console.log("[p] 初始行数 =", before, " onlyTraded 默认 =", vm.onlyTraded)
-    expect(vm.onlyTraded, "默认开启「只看当日有成交的」——否则净率榜首全是 0 成交的离谱挂单").toBe(true)
+    console.log("[p] 初始行数 =", before, " 当日成交≥ 默认 =", vm.minVolume, " 净率基数 =", vm.rateBase)
+    expect(vm.minVolume, "「当日成交 ≥」默认为 1（用户定的）").toBe(1)
+    expect(vm.rateBase, "净率基数默认右价（资金回报率）").toBe("bid")
     expect(before, "有成交的 3 个候选（沼泽 8% / 丛林 0.8% / 糖 8%）").toBe(3)
 
-    // 关掉「只看有成交」⇒ 0 成交的离谱挂单进场，且必须带「疑似异常」标记
-    vm.onlyTraded = false
+    // 净率基数切到左价（毛利率）⇒ 沼泽 5.12/72 = 7.11%，糖 0.64/9 = 7.11%
+    vm.rateBase = "ask"
     await new Promise(r => setTimeout(r, 200))
-    console.log("[p] 关掉成交门槛 行数 =", rowCount(), " 含「疑似异常」=", w.text().includes("疑似异常"))
+    console.log("[p] 左价基数 行数 =", rowCount(), " 含 7.11% =", w.text().includes("7.11%"))
+    expect(rowCount(), "换基数不改变候选集合").toBe(3)
+    expect(w.text(), "沼泽在左价口径下应是 7.11%").toContain("7.11%")
+    expect(w.text(), "右价口径的 8% 不应再出现").not.toContain("8%")
+    vm.rateBase = "bid"
+    await new Promise(r => setTimeout(r, 200))
+    expect(w.text(), "切回右价 ⇒ 又是 8%").toContain("8%")
+
+    // 把成交门槛放到 0 ⇒ 0 成交的离谱挂单进场，且必须带「疑似异常」标记
+    vm.minVolume = 0
+    await new Promise(r => setTimeout(r, 200))
+    console.log("[p] 门槛=0 行数 =", rowCount(), " 含「疑似异常」=", w.text().includes("疑似异常"))
     expect(rowCount(), "放开后异常条目进场").toBe(4)
     expect(w.text(), "左/右 10 倍的条目必须打「疑似异常」标签").toContain("疑似异常")
 
@@ -143,7 +155,7 @@ describe("炒货页：渲染出的数字必须与口径一致", () => {
     await new Promise(r => setTimeout(r, 200))
     console.log("[p] 隐藏异常后 行数 =", rowCount())
     expect(rowCount(), "隐藏异常报价 ⇒ 回到 3 条").toBe(3)
-    vm.onlyTraded = true
+    vm.minVolume = 1
     vm.hideSuspicious = false
     await new Promise(r => setTimeout(r, 200))
 
