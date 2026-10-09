@@ -1,4 +1,5 @@
-import { getGameDataApi, getMarketDataApi } from "@/common/apis/game"
+import { getGameDataApi, getItemDetailOf, getMarketDataApi } from "@/common/apis/game"
+import { categoryOptionsOf, sortRowsByField } from "@@/utils/row-helpers"
 
 /**
  * 市场贸易量监控
@@ -90,11 +91,14 @@ export function getMarketVolumeList(): MarketVolumeItem[] {
   return list
 }
 
-/** 分类选项（去重排序），用于筛选下拉 */
+/**
+ * 分类选项（去重排序），用于筛选下拉。
+ *
+ * 实现委托给 `common/utils/row-helpers` —— 炒货页也要同一份，
+ * 两处各写一遍必然漂移（曾经就漂移过一次）。
+ */
 export function getMarketCategoryOptions(list: MarketVolumeItem[]): string[] {
-  const set = new Set<string>()
-  list.forEach((i) => i.category && set.add(i.category))
-  return Array.from(set).sort()
+  return categoryOptionsOf(list)
 }
 
 /**
@@ -147,26 +151,24 @@ function numericValueOf(i: MarketVolumeItem, key: Exclude<MarketVolumeSortKey, "
  * `nameOf` 让调用方决定用哪个名字比较（页面传 `t` 以按界面语言排序，测试可省略）。
  * 无数据的行不分升降序一律排在末尾，否则升序时一屏 `--` 会顶在最前面。
  */
+/**
+ * 排序：委托给 `common/utils/row-helpers`（炒货页共用同一份实现）。
+ *
+ * ⚠️ `numericValueOf` 仍在本文件保留：它承载了「哪些字段算数值、
+ * null 怎么当 NaN」的领域约定，泛型版本只做无差别的数值比较。
+ */
 export function sortMarketVolumeRows(
   list: MarketVolumeItem[],
   key: MarketVolumeSortKey,
   order: "descending" | "ascending",
   nameOf: (name: string) => string = (n) => n
 ): MarketVolumeItem[] {
-  const dir = order === "ascending" ? 1 : -1
-  return [...list].sort((a, b) => {
-    if (key === "name") {
-      return nameOf(a.name).localeCompare(nameOf(b.name)) * dir
-    }
-    const av = numericValueOf(a, key)
-    const bv = numericValueOf(b, key)
-    const aNaN = Number.isNaN(av)
-    const bNaN = Number.isNaN(bv)
-    if (aNaN || bNaN) {
-      return aNaN && bNaN ? 0 : aNaN ? 1 : -1
-    }
-    return (av - bv) * dir
-  })
+  return sortRowsByField(
+    list as unknown as Record<string, unknown>[],
+    key,
+    order,
+    nameOf
+  ) as unknown as MarketVolumeItem[]
 }
 
 export interface MarketVolumeSummary {

@@ -112,46 +112,40 @@ describe("炒货：价差候选的判定", () => {
     }
   })
 
-  it("⑥ 筛选：净率下限 / 只看有成交 / 分类 / 三路关键词", async () => {
+  it("⑥ 筛选：数值条件 + 三路关键词（关键词走共用轮子）", async () => {
     const arb = await import("@/common/apis/marketarb")
+    const { filterChainOptions } = await import("@/common/apis/chainbuilder")
     const list = arb.calcArbList()
-    const t = (n: string) => n
 
-    const high = arb.filterArbItems(list, { minNetRate: 0.075 }, t)
+    const high = arb.filterArbItems(list, { minNetRate: 0.075 })
     console.log("[p] 净率 ≥7.5% =", high.map(i => i.hrid).join(", "))
     expect(high.length, "沼泽 8% 与离谱挂单 860%（丛林 4% 不达标）").toBe(2)
     expect(high.some(i => i.hrid === "/items/swamp_essence")).toBe(true)
     expect(high.some(i => i.hrid === "/items/absurd_ask")).toBe(true)
 
     // 叠加「隐藏疑似异常」⇒ 离谱挂单被滤掉
-    const clean = arb.filterArbItems(list, { minNetRate: 0.075, hideSuspicious: true }, t)
+    const clean = arb.filterArbItems(list, { minNetRate: 0.075, hideSuspicious: true })
     console.log("[p] 再隐藏异常 =", clean.map(i => i.hrid).join(", "))
     expect(clean.some(i => i.hrid === "/items/absurd_ask"), "异常条目应被滤掉").toBe(false)
 
-    const traded = arb.filterArbItems(list, { onlyTraded: true }, t)
-    expect(traded.length, "沼泽 50161 / 丛林 100 有成交，0 成交的离谱挂单被滤掉").toBe(2)
-    expect(traded.some(i => i.hrid === "/items/absurd_ask"), "0 成交的不该在「有成交」结果里").toBe(false)
-
-    const noTrade = arb.filterArbItems(list, { onlyTraded: false, minBid: 1000 }, t)
-    expect(noTrade.length, "右价门槛过 1000 ⇒ 空").toBe(0)
-
-    // 成交门槛：沼泽 50161 / 丛林 100 / 离谱挂单 0
-    const heavy = arb.filterArbItems(list, { minVolume: 1000 }, t)
+    // 成交门槛（页面默认 1；原先的 onlyTraded 已被 minVolume 覆盖，已删除）
+    expect(arb.filterArbItems(list, { minVolume: 1 }).length, "成交 ≥1（= 有成交）").toBe(2)
+    const heavy = arb.filterArbItems(list, { minVolume: 1000 })
     expect(heavy.map(i => i.hrid), "成交 ≥1000 只剩沼泽").toEqual(["/items/swamp_essence"])
-    expect(arb.filterArbItems(list, { minVolume: 999999 }, t).length, "门槛过高 ⇒ 空").toBe(0)
+    expect(arb.filterArbItems(list, { minVolume: 999999 }).length, "门槛过高 ⇒ 空").toBe(0)
 
-    const notAbsurd = arb.filterArbItems(list, { hideSuspicious: true }, t)
+    expect(arb.filterArbItems(list, { minBid: 1000 }).length, "右价门槛过 1000 ⇒ 空").toBe(0)
+    const notAbsurd = arb.filterArbItems(list, { hideSuspicious: true })
     expect(notAbsurd.some(i => i.hrid === "/items/absurd_ask"), "hideSuspicious 生效").toBe(false)
 
-    // 三路匹配：hrid / 英文名 / 中文名（中文由 translate 回调提供）
-    // ⚠️ 回调必须按名字逐个翻译，不能对所有条目返回同一个中文名 ——
-    //    否则「沼泽」会同时命中两条，断言看着过了其实没在测匹配。
-    const cn = (n: string) => (n === "Swamp Essence" ? "沼泽精华" : n === "Jungle Essence" ? "丛林精华" : n)
-    expect(arb.filterArbItems(list, { keyword: "swamp" }, t).length, "英文名").toBe(1)
-    expect(arb.filterArbItems(list, { keyword: "/items/swamp" }, t).length, "hrid").toBe(1)
-    expect(arb.filterArbItems(list, { keyword: "沼泽" }, cn).length, "中文名").toBe(1)
-    expect(arb.filterArbItems(list, { keyword: "丛林" }, cn).length, "中文名").toBe(1)
-    expect(arb.filterArbItems(list, { keyword: "不存在" }, t).length).toBe(0)
+    // 三路匹配复用 chainbuilder 的轮子：cn 由 API 层用 getTrans 预计算
+    expect(filterChainOptions(list, "swamp").length, "英文名").toBe(1)
+    expect(filterChainOptions(list, "/items/swamp").length, "hrid").toBe(1)
+    expect(filterChainOptions(list, "沼泽").length, "中文名（依赖 API 层算出的 cn）").toBe(1)
+    expect(filterChainOptions(list, "丛林").length, "中文名").toBe(1)
+    expect(filterChainOptions(list, "不存在").length).toBe(0)
+    // 空查询返回全量（页面靠这个语义，不必自己写 if）
+    expect(filterChainOptions(list, "  ").length, "空查询 ⇒ 全量").toBe(list.length)
   })
 
   it("⑦ 提醒指标：税后净利与净率能取到值（供 alerts 复用）", async () => {

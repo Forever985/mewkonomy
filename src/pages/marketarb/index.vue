@@ -6,6 +6,7 @@ import { QuestionFilled } from "@element-plus/icons-vue"
 import { useI18n } from "vue-i18n"
 import {
   ARB_DEFAULT_SORT_KEY,
+  ARB_SORT_KEYS,
   ARB_TAX_RATE,
   calcArbList,
   filterArbItems,
@@ -13,16 +14,19 @@ import {
   getArbSummary,
   sortArbRows
 } from "@/common/apis/marketarb"
+import { filterChainOptions } from "@/common/apis/chainbuilder"
 import { enhanceLevelSuffix } from "@/common/apis/marketvolume"
 import {
   alertKeyOf,
   createEmptyRule,
   evaluateAlerts,
+  type AlertHit,
   type AlertMetric,
   type AlertOperator,
   type AlertScopeType
 } from "@/common/apis/marketvolume/alerts"
 import { useAlertStore } from "@/pinia/stores/alert"
+import { pushAlertNotifications } from "@@/utils/alert-notify"
 import GameInfo from "../dashboard/components/GameInfo.vue"
 
 /**
@@ -74,16 +78,23 @@ const hideSuspicious = ref(false)
 const categories = ref<string[]>([])
 const categoryOptions = computed(() => getArbCategoryOptions(all.value))
 
-const filtered = computed(() => filterArbItems(all.value, {
-  keyword: keyword.value,
-  minNetRate: minNetRatePct.value > 0 ? minNetRatePct.value / 100 : undefined,
-  minNetPerUnit: minNetPerUnit.value > 0 ? minNetPerUnit.value : undefined,
-  minBid: minBid.value > 0 ? minBid.value : undefined,
-  // 直接传数值：0 表示不设门槛（volume ≥ 0 恒成立），省掉一个重复的复选框
-  minVolume: minVolume.value,
-  hideSuspicious: hideSuspicious.value,
-  categories: categories.value
-}, n => String(t(n))))
+/**
+ * 关键词走共用轮子 `filterChainOptions`（chainbuilder 的三路匹配：
+ * 中文名 / 英文名 / hrid，空查询返回全量）；数值与分类条件走 `filterArbItems`。
+ * ⚠️ 别再在本页自己写一份关键词匹配 —— 那是全仓第三种写法，必然漂移。
+ */
+const filtered = computed(() => {
+  const byKeyword = filterChainOptions(all.value, keyword.value)
+  return filterArbItems(byKeyword, {
+    minNetRate: minNetRatePct.value > 0 ? minNetRatePct.value / 100 : undefined,
+    minNetPerUnit: minNetPerUnit.value > 0 ? minNetPerUnit.value : undefined,
+    minBid: minBid.value > 0 ? minBid.value : undefined,
+    // 直接传数值：0 表示不设门槛（volume ≥ 0 恒成立），省掉一个重复的复选框
+    minVolume: minVolume.value,
+    hideSuspicious: hideSuspicious.value,
+    categories: categories.value
+  })
+})
 
 function resetFilter() {
   keyword.value = ""
@@ -105,9 +116,18 @@ const sortKey = ref<ArbSortKey>(ARB_DEFAULT_SORT_KEY)
 const sortDesc = ref(true)
 const rows = computed(() => sortArbRows(filtered.value, sortKey.value, sortDesc.value))
 
+/**
+ * 表头排序。
+ *
+ * ⚠️ 必须过 `ARB_SORT_KEYS` 白名单：`el-table` 的 `sortable="custom"` 会把
+ * **列的 prop** 原样派发过来，一旦某列没在白名单里，白名单外的键会被当成
+ * 合法值写进 `sortKey`，表现是「表头箭头变了、数据却没变」。
+ * （市场监控页的 `MARKET_VOLUME_SORT_KEYS` 就是为这个存在的。）
+ */
 function onSortChange(payload: { prop: string | null, order: string | null }) {
-  if (!payload.prop || !payload.order) {
-    // 取消排序 ⇒ 回到默认列，否则表头箭头消失了数据顺序却不变
+  const allowed = (ARB_SORT_KEYS as readonly string[]).includes(payload.prop ?? "")
+  if (!payload.prop || !payload.order || !allowed) {
+    // 取消排序 / 未知列 ⇒ 回到默认列
     sortKey.value = ARB_DEFAULT_SORT_KEY
     sortDesc.value = true
     return
@@ -190,6 +210,29 @@ function ruleText(rule: { metric: AlertMetric, operator: AlertOperator, threshol
 }
 
 /* ───────────────────────── 展示辅助 ───────────────────────── */
+/**
+ * 浏览器通知：**实现已抽到 `common/utils/alert-notify`**（与市场监控共用）。
+ *
+ * 之前这里只打了页内标签，用户在市场监控页开的「通知」对炒货命中不生效 ——
+ * 这正是「提醒引擎共用、通知实现不共用」留下的缺口。
+ */
+const notifyEnabled = computed(() => alertStore.notifyEnabled)
+const ruleById = computed(() => new Map(alertRules.value.map(r => [r.id, r])))
+function pushBrowserNotifications(hits: AlertHit[]) {
+  pushAlertNotifications(hits, {
+    enabled: notifyEnabled.value,
+    title: t("价差提醒"),
+    bodyOf: hit => `${t(hit.name)} ${METRIC_LABEL[hit.metric]} ${formatMetric(hit.metric, hit.value)}`,
+    bodyOfMany: count => t("有 {0} 条新的价差提醒", [count]),
+    cooldownMinutesOf: ruleId => ruleById.value.get(ruleId)?.cooldownMinutes ?? alertStore.cooldownMinutes
+  })
+}
+// 只在「命中集合的形状」变化时通知（只改数值不重复弹）
+watch(
+  () => alertHits.value.map(h => `${h.ruleId}|${h.hrid}|${h.level}`).join(","),
+  () => pushBrowserNotifications(alertHits.value)
+)
+
 function netClass(v: number) {
   return v > 0 ? "success" : "error"
 }

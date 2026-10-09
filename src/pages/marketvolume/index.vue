@@ -10,6 +10,7 @@ import RangeFilter from "@@/components/RangeFilter/index.vue"
 import * as Format from "@@/utils/format"
 import { QuestionFilled, Search, Star, StarFilled } from "@element-plus/icons-vue"
 import { useAlertStore } from "@/pinia/stores/alert"
+import { pushAlertNotifications } from "@@/utils/alert-notify"
 import { useGameStoreOutside } from "@/pinia/stores/game"
 import { useMarketFavoriteStore } from "@/pinia/stores/marketfavorite"
 import { useMarketFilterStore } from "@/pinia/stores/marketfilter"
@@ -621,36 +622,21 @@ function describeAlertRule(rule: AlertRule) {
  * 只对「新出现的命中」发，并按每条规则的冷却时间对同一 (规则, 物品) 去重——
  * 行情每次刷新都会重算 changeApplied，若不做这两层过滤，页面开着时会一直弹。
  */
-const notifiedAtMap = new Map<string, number>()
+/** 规则 id → 规则（取每条规则自己的冷却时间用） */
 const ruleById = computed(() => new Map(alertRules.value.map(r => [r.id, r])))
+
+/**
+ * 发浏览器通知：**实现已抽到 `common/utils/alert-notify`**（炒货页共用）。
+ * 这里只提供本页的文案与冷却取值。
+ */
 function pushBrowserNotifications(hits: AlertHit[]) {
-  if (!notifyEnabled.value || typeof Notification === "undefined" || Notification.permission !== "granted") {
-    return
-  }
-  const now = Date.now()
-  const fresh: AlertHit[] = []
-  for (const hit of hits) {
-    const key = `${hit.ruleId}|${hit.hrid}|${hit.level}`
-    const cooldownMinutes = ruleById.value.get(hit.ruleId)?.cooldownMinutes ?? alertStore.cooldownMinutes
-    if (now - (notifiedAtMap.get(key) ?? 0) < Math.max(0, cooldownMinutes) * 60_000) {
-      continue
-    }
-    notifiedAtMap.set(key, now)
-    fresh.push(hit)
-  }
-  if (!fresh.length) {
-    return
-  }
-  if (fresh.length === 1) {
-    const hit = fresh[0]
-    // 用 `void` 承接结果：Notification 的返回值无用，但直接 `new Notification(...)` 作为
-    // 表达式语句会被 no-new 判为"为副作用而 new"。
-    void new Notification(t("市场提醒"), {
-      body: `${t(hit.name)} ${alertMetricLabel(hit.metric)} ${formatAlertValue(hit.metric, hit.value)}`
-    })
-    return
-  }
-  void new Notification(t("市场提醒"), { body: t("有 {0} 条新的市场提醒", [fresh.length]) })
+  pushAlertNotifications(hits, {
+    enabled: notifyEnabled.value,
+    title: t("市场提醒"),
+    bodyOf: hit => `${t(hit.name)} ${alertMetricLabel(hit.metric)} ${formatAlertValue(hit.metric, hit.value)}`,
+    bodyOfMany: count => t("有 {0} 条新的市场提醒", [count]),
+    cooldownMinutesOf: ruleId => ruleById.value.get(ruleId)?.cooldownMinutes ?? alertStore.cooldownMinutes
+  })
 }
 
 // 只在「命中集合的形状」变化时通知（只改数值不重复弹）

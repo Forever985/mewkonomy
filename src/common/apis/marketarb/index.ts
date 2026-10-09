@@ -1,6 +1,8 @@
 import type { MarketVolumeItem } from "@/common/apis/marketvolume"
 import { getMarketVolumeList } from "@/common/apis/marketvolume"
 import { MARKET_TAX_FACTOR } from "@@/constants/market"
+import { categoryOptionsOf, sortRowsByField } from "@@/utils/row-helpers"
+import { getTrans } from "@/locales"
 
 /**
  * 「炒货」（市场套利）—— 左价挂卖单 / 右价挂买单，两腿排队吃价差。
@@ -45,8 +47,8 @@ export const ARB_TAX_RATE = 1 - MARKET_TAX_FACTOR
  */
 export type ArbRateBase = "bid" | "ask"
 
-/** 取净率的分母 */
-export function arbRateDenominator(item: { ask: number, bid: number }, base: ArbRateBase): number {
+/** 取净率的分母。**内部**使用（外部只需要 ArbItem.netRate，不需要单独拿分母） */
+function arbRateDenominator(item: { ask: number, bid: number }, base: ArbRateBase): number {
   return base === "bid" ? item.bid : item.ask
 }
 
@@ -54,6 +56,14 @@ export interface ArbItem {
   hrid: string
   /** 物品名（i18n key 原文，页面用 t() 翻译） */
   name: string
+  /**
+   * 中文名（在 API 层用 `getTrans` 预计算）。
+   *
+   * ⚠️ 不要改成在页面里现翻：三路模糊匹配（`filterChainItems`）的约定就是
+   * 「行上带 cn」，chainbuilder 等页都这么写。保持一致才能复用那个轮子，
+   * 而不是本页再写出第三种匹配实现。
+   */
+  cn: string
   category: string
   itemLevel: number
   /** 市场档位 key（"0" / "1" …），是强化等级不是物品等级 */
@@ -117,6 +127,7 @@ export function toArbItem(row: MarketVolumeItem, base: ArbRateBase = "bid"): Arb
   return {
     hrid: row.hrid,
     name: row.name,
+    cn: getTrans(row.name) as string,
     category: row.category,
     itemLevel: row.itemLevel,
     level: row.level,
@@ -132,18 +143,22 @@ export function toArbItem(row: MarketVolumeItem, base: ArbRateBase = "bid"): Arb
     subUnit: netPerUnit > 0 && netPerUnit < 1,
     leftRightRatio: bid > 0 ? ask / bid : Number.NaN,
     // 3 倍是「真实市场几乎不可能」的量级：净利率 ≈ 3×0.96−1 = 188%
-    suspicious: bid > 0 && ask / bid >= 3
+    suspicious: bid > 0 && ask / bid >= ARB_SUSPICIOUS_RATIO
   }
 }
 
-/** 疑似异常报价的左/右 倍数门槛（实测 3 倍以上全是 0 成交的离谱挂单） */
+/**
+ * 疑似异常报价的左/右 倍数门槛。
+ *
+ * 实测（官方实时数据 2026-10-09）：左/右 ≥ 3 的条目**全部**是当日成交 0 的
+ * 离谱挂单（净利率从 3×0.96−1 ≈ 188% 起）。所以 3 是「真实市场几乎不可能」
+ * 的量级，不是随手拍的数 —— 改它会直接改变 `suspicious` 标记。
+ */
 export const ARB_SUSPICIOUS_RATIO = 3
 
-/** 分类选项（去重排序），用于筛选下拉 */
+/** 分类选项（去重排序），用于筛选下拉。委托给共用轮子，与市场监控同一份实现 */
 export function getArbCategoryOptions(list: ArbItem[]): string[] {
-  const set = new Set<string>()
-  list.forEach((i) => i.category && set.add(i.category))
-  return Array.from(set).sort()
+  return categoryOptionsOf(list)
 }
 
 /** 概览：双边有报价的条目里，有多少真的扣完税还有差价 */
@@ -182,37 +197,32 @@ export interface ArbFilter {
   minBid?: number
   /** 分类（空 = 不限） */
   categories?: string[]
-  /** 关键词：中文名 / 英文名 / hrid 三路模糊匹配 */
-  keyword?: string
-  /** 只要当日有成交的 */
-  onlyTraded?: boolean
-  /** 当日成交下限（官方 v 字段）。挂单两腿都要成交，从没人成交过的品种说明这不是真实价差 */
+  /**
+   * 当日成交下限（官方 v 字段）。挂单两腿都要成交，从没人成交过的品种说明这不是真实价差。
+   *
+   * 填 0 = 不设门槛。页面默认 1，所以「只看有成交的」不再需要额外开关。
+   */
   minVolume?: number
-  /** 隐藏疑似异常报价（左价 ≥ 右价 3 倍） */
+  /** 隐藏疑似异常报价（左价 ≥ 右价 `ARB_SUSPICIOUS_RATIO` 倍） */
   hideSuspicious?: boolean
 }
 
-/** 多路模糊匹配：中文玩家打「沼泽」，英文玩家打 Swamp，抄链接的打 hrid */
-export function filterArbItems(list: ArbItem[], filter: ArbFilter, translate: (name: string) => string): ArbItem[] {
-  const q = (filter.keyword ?? "").trim()
+/**
+ * 数值 / 分类条件过滤。
+ *
+ * ⚠️ **不含关键词匹配**：三路模糊匹配（中文名 / 英文名 / hrid）走
+ * `filterChainOptions`（chainbuilder 的轮子；空查询返回全量，正合本处语义）。
+ * 本函数早期自己实现了一份，是全仓第三种写法 —— 已删除，关键词一律走共用轮子。
+ */
+export function filterArbItems(list: ArbItem[], filter: ArbFilter): ArbItem[] {
   const cats = filter.categories?.length ? new Set(filter.categories) : null
   return list.filter((i) => {
     if (filter.minNetRate != null && !(i.netRate >= filter.minNetRate)) return false
     if (filter.minNetPerUnit != null && !(i.netPerUnit >= filter.minNetPerUnit)) return false
     if (filter.minBid != null && !(i.bid >= filter.minBid)) return false
-    if (filter.onlyTraded && !(i.volume > 0)) return false
     if (filter.minVolume != null && !(i.volume >= filter.minVolume)) return false
     if (filter.hideSuspicious && i.suspicious) return false
     if (cats && !cats.has(i.category)) return false
-    if (q) {
-      const lower = q.toLowerCase()
-      const cn = translate(i.name)
-      if (!i.name.toLowerCase().includes(lower)
-        && !String(cn).toLowerCase().includes(q)
-        && !i.hrid.toLowerCase().includes(lower)) {
-        return false
-      }
-    }
     return true
   })
 }
@@ -237,21 +247,16 @@ export type ArbSortKey = (typeof ARB_SORT_KEYS)[number]
 /** 默认按净率降序 —— 单位百分比最能一眼看出「哪个品种的差价盖得住税」 */
 export const ARB_DEFAULT_SORT_KEY: ArbSortKey = "netRate"
 
+/**
+ * 排序：委托给 `common/utils/row-helpers`（与市场监控同一份实现）。
+ *
+ * 这里只做两件事：把 `ArbSortKey` 的类型约束摆出来，以及把布尔方向
+ * 翻成 element-plus 的 order 字符串。比较/沉底规则全在共用轮子里。
+ */
 export function sortArbRows(list: ArbItem[], key: ArbSortKey, desc: boolean): ArbItem[] {
-  const dir = desc ? -1 : 1
-  const sorted = [...list].sort((a, b) => {
-    if (key === "name") {
-      return a.name.localeCompare(b.name) * dir
-    }
-    const va = (a as unknown as Record<string, unknown>)[key]
-    const vb = (b as unknown as Record<string, unknown>)[key]
-    const na = typeof va === "number" && Number.isFinite(va) ? va : Number.NaN
-    const nb = typeof vb === "number" && Number.isFinite(vb) ? vb : Number.NaN
-    // NaN 沉底，避免「无数据」被排到最前面
-    if (Number.isNaN(na) && Number.isNaN(nb)) return 0
-    if (Number.isNaN(na)) return 1
-    if (Number.isNaN(nb)) return -1
-    return (na - nb) * dir
-  })
-  return sorted
+  return sortRowsByField(
+    list as unknown as Record<string, unknown>[],
+    key,
+    desc ? "descending" : "ascending"
+  ) as unknown as ArbItem[]
 }
