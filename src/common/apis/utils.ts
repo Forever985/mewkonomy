@@ -128,6 +128,79 @@ export function stepsOfProject(project: string): number {
   return m ? +m[1] : 1
 }
 
+/**
+ * 把「平铺的 min/max + 可选 `__mode` 元数据」组装成 `RangeQuery`。
+ *
+ * `SearchPanel` 的 range 字段把模式、容差写在 `${minKey}__mode` /
+ * `${minKey}__tolerance` 里，而阈值仍平铺在 `minKey` / `maxKey`
+ * —— 这段组装原先是 `handleSearch` 里的一个闭包。任何要用标准 range 字段的
+ * 检索页（炒货页也是）都需要它，所以提成导出函数，别再抄一遍。
+ *
+ * @param divisor 面板显示值 → 实际值的除数（百分比字段传 100）
+ * @param legacySingleKey 旧版单值键（仅 `handleSearch` 的利润率先后兼容用）
+ */
+export function rangeQueryFromFlat(
+  params: unknown,
+  minKey: string,
+  maxKey: string,
+  opts: { divisor?: number, legacySingleKey?: string } = {}
+): RangeQuery | undefined {
+  const d = opts.divisor ?? 1
+  const raw = params as Record<string, unknown>
+  const metaKey = `${minKey}__mode`
+  const mode = raw[metaKey] as RangeQuery["mode"] | undefined
+  // ⚠️ 排名模式（topN / bottomN）的阈值是「前 **N** 名」里的那个 N —— 它是**个数**，
+  //    不能跟百分比阈值一起除以 divisor：除完 1/100 = 0.01，`Math.floor` 后是 0，
+  //    `slice(0, 0)` ⇒ 列表恒空。百分比字段（利润率 / 净率）选「前 N 名」时
+  //    会静默失效，所以这里对排名模式改用除数 1。
+  const isRanking = mode === "topN" || mode === "bottomN"
+  const div = isRanking ? 1 : d
+  const min = params == null ? undefined : (raw[minKey] != null ? Number(raw[minKey]) / div : undefined)
+  const max = params == null ? undefined : (raw[maxKey] != null ? Number(raw[maxKey]) / div : undefined)
+  // ⚠️ 键名必须与 `SearchPanel.onRangeChange` 写的一致：它写的是
+  // `${minKey}__tolerance`（**不含** `__mode`）。早期版本这里拼成了
+  // `${metaKey}__tolerance`（= `minProfitRate__mode__tolerance`），
+  // 于是容差永远读不到、`near` 静默退化成 `=` —— 界面能设、结果不对。
+  const toleranceKey = `${minKey}__tolerance`
+  const tolerance = raw[toleranceKey] != null ? Number(raw[toleranceKey]) / d : undefined
+
+  if (!mode) {
+    // ── 旧路径：一个字都不改 ──
+    // 单值 profitRate：`&&` 短路（传 0 不生效）
+    const legacy = opts.legacySingleKey && params != null && (raw as any)[opts.legacySingleKey]
+      ? Number((raw as any)[opts.legacySingleKey]) / d
+      : undefined
+    if (legacy !== undefined) {
+      // ⚠️ 旧实现是两个**连续**的下限过滤（`profitRate` 先、`minProfitRate` 后），
+      // 同时给时等价于**取更严的那个**（Math.max），而不是任选其一。
+      // 这里必须保持 Math.max，否则 `profitRate: 5` + `minProfitRate: 20`
+      // 会从"下限 20%"退化成"下限 5%"。
+      return min !== undefined
+        ? { mode: "gte", min: Math.max(legacy, min) }
+        : { mode: "gte", min: legacy }
+    }
+    // 双头 min/max：只填一边也能生效（等价于 ≥ 或 ≤）
+    if (min !== undefined || max !== undefined) {
+      return { mode: "between", min, max }
+    }
+    return undefined
+  }
+
+  // ── 新路径：有 __mode 就按模式走 ──
+  if (mode === "any") {
+    return undefined
+  }
+  const single = min ?? max
+  const need: RangeQuery = {
+    mode,
+    // 单阈值模式的阈值可能由组件写在 minKey，也可能被写进 maxKey（见 SearchPanel.onRangeChange）
+    min: ["gte", "lte", "near", "eq", "topN", "bottomN"].includes(mode) ? single : min,
+    max: ["between", "outside"].includes(mode) ? max : undefined,
+    tolerance
+  }
+  return isRangeActive(need) ? need : undefined
+}
+
 export function handleSearch(profitList: Calculator[], params: any) {
   // ── 改造说明 ──────────────────────────────────────────────────────────────
   // 改造前这里是 15 个平铺的 `params.x && (list = list.filter(...))`：
@@ -184,65 +257,9 @@ export function handleSearch(profitList: Calculator[], params: any) {
   // ⚠️ 单值 `params.profitRate` 用 `&&` 判定、**传 0 不生效**（falsy 短路），
   // 而 `minProfitRate` 用 `!= null`、传 0 生效 —— 不对称是既有行为，故保留。
 
-  /** 把平铺的 min/max + 可选 `__mode` 元数据组装成 `RangeQuery` */
-  function rangeFromFlat(
-    minKey: string,
-    maxKey: string,
-    opts: { divisor?: number, legacySingleKey?: string } = {}
-  ): RangeQuery | undefined {
-    const d = opts.divisor ?? 1
-    const raw = params as Record<string, unknown>
-    const metaKey = `${minKey}__mode`
-    const mode = raw[metaKey] as RangeQuery["mode"] | undefined
-    const min = params[minKey] != null ? Number(params[minKey]) / d : undefined
-    const max = params[maxKey] != null ? Number(params[maxKey]) / d : undefined
-    // ⚠️ 键名必须与 `SearchPanel.onRangeChange` 写的一致：它写的是
-    // `${minKey}__tolerance`（**不含** `__mode`）。早期版本这里拼成了
-    // `${metaKey}__tolerance`（= `minProfitRate__mode__tolerance`），
-    // 于是容差永远读不到、`near` 静默退化成 `=` —— 界面能设、结果不对。
-    const toleranceKey = `${minKey}__tolerance`
-    const tolerance = raw[toleranceKey] != null ? Number(raw[toleranceKey]) / d : undefined
-
-    if (!mode) {
-      // ── 旧路径：一个字都不改 ──
-      // 单值 profitRate：`&&` 短路（传 0 不生效）
-      const legacy = opts.legacySingleKey && params[opts.legacySingleKey]
-        ? Number(params[opts.legacySingleKey]) / d
-        : undefined
-      if (legacy !== undefined) {
-        // ⚠️ 旧实现是两个**连续**的下限过滤（`profitRate` 先、`minProfitRate` 后），
-        // 同时给时等价于**取更严的那个**（Math.max），而不是任选其一。
-        // 这里必须保持 Math.max，否则 `profitRate: 5` + `minProfitRate: 20`
-        // 会从"下限 20%"退化成"下限 5%"。
-        return min !== undefined
-          ? { mode: "gte", min: Math.max(legacy, min) }
-          : { mode: "gte", min: legacy }
-      }
-      // 双头 min/max：只填一边也能生效（等价于 ≥ 或 ≤）
-      if (min !== undefined || max !== undefined) {
-        return { mode: "between", min, max }
-      }
-      return undefined
-    }
-
-    // ── 新路径：有 __mode 就按模式走 ──
-    if (mode === "any") {
-      return undefined
-    }
-    const single = min ?? max
-    const need: RangeQuery = {
-      mode,
-      // 单阈值模式的阈值可能由组件写在 minKey，也可能被写进 maxKey（见 SearchPanel.onRangeChange）
-      min: ["gte", "lte", "near", "eq", "topN", "bottomN"].includes(mode) ? single : min,
-      max: ["between", "outside"].includes(mode) ? max : undefined,
-      tolerance
-    }
-    return isRangeActive(need) ? need : undefined
-  }
-
-  const profitRange = rangeFromFlat("minProfitRate", "maxProfitRate", { divisor: 100, legacySingleKey: "profitRate" })
-  const riskRange = rangeFromFlat("minRisk", "maxRisk")
-  const levelRange = rangeFromFlat("minLevel", "maxLevel")
+  const profitRange = rangeQueryFromFlat(params, "minProfitRate", "maxProfitRate", { divisor: 100, legacySingleKey: "profitRate" })
+  const riskRange = rangeQueryFromFlat(params, "minRisk", "maxRisk")
+  const levelRange = rangeQueryFromFlat(params, "minLevel", "maxLevel")
 
   /** 区间判定（三个字段语义一致，只是取值位置不同） */
   function numOk(range: RangeQuery | undefined, value: unknown): boolean {

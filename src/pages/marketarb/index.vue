@@ -1,6 +1,8 @@
 <script lang="ts" setup>
-import type { ArbRateBase, ArbSortKey } from "@/common/apis/marketarb"
+import type { ArbQueryParams, ArbRateBase, ArbSortKey } from "@/common/apis/marketarb"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
+import SearchPanel from "@@/components/SearchPanel/index.vue"
+import type { PanelField, PanelSearchData } from "@@/components/SearchPanel/types"
 import * as Format from "@@/utils/format"
 import { QuestionFilled } from "@element-plus/icons-vue"
 import { useI18n } from "vue-i18n"
@@ -9,12 +11,10 @@ import {
   ARB_SORT_KEYS,
   ARB_TAX_RATE,
   calcArbList,
-  filterArbItems,
   getArbCategoryOptions,
   getArbSummary,
-  sortArbRows
+  runArbQuery
 } from "@/common/apis/marketarb"
-import { filterChainOptions } from "@/common/apis/chainbuilder"
 import { enhanceLevelSuffix } from "@/common/apis/marketvolume"
 import {
   alertKeyOf,
@@ -25,6 +25,8 @@ import {
   type AlertOperator,
   type AlertScopeType
 } from "@/common/apis/marketvolume/alerts"
+import { useMemory } from "@@/composables/useMemory"
+import { normalizeSearchData } from "@@/composables/useSearchPanel"
 import { useAlertStore } from "@/pinia/stores/alert"
 import { pushAlertNotifications } from "@@/utils/alert-notify"
 import GameInfo from "../dashboard/components/GameInfo.vue"
@@ -45,12 +47,42 @@ const { t } = useI18n()
 const alertStore = useAlertStore()
 
 /**
- * 净率的基数（用户 2026-10-09 确认默认右价，但要求可调）。
+ * 检索条件：走**标准多变搜索面板**（`SearchPanel` + `PanelField` 配置），
+ * 与利润排行 / 市场监控同一套 UI 与引擎。
+ *
+ * 面板把 range 的模式/容差写在 `__mode` / `__tolerance` 里，
+ * 执行侧由 `runArbQuery` → `rangeQueryFromFlat` 还原成区间条件。
+ *
+ * 默认值里唯一非空的是 `minVolume: 1`（当日成交 ≥1）：
+ * 实测不设门槛时 967 个候选的净率榜首全是 0 成交的离谱挂单
+ * （星空锅铲 左 43.2 亿 / 右 500 万，净率 82844%）；设成 1 后降到 264 条，
+ * 沼泽精华排名 #420 → #81。实测 10 → 117 条、100 → 66 条。
+ */
+const searchData = useMemory("marketarb-search-data", {
+  name: [],
+  category: "",
+  minNetRate: undefined,
+  maxNetRate: undefined,
+  minNetPerUnit: undefined,
+  maxNetPerUnit: undefined,
+  minAsk: undefined,
+  maxAsk: undefined,
+  minBid: undefined,
+  maxBid: undefined,
+  minVolume: 1,
+  maxVolume: undefined,
+  hideSuspicious: false,
+  rateBase: "bid"
+}) as Ref<ArbQueryParams & { rateBase?: ArbRateBase }>
+normalizeSearchData(searchData.value as PanelSearchData)
+
+/**
+ * 净率基数（用户 2026-10-09 确认默认右价，但要求可调）。
  *
  * 必须在**计算层**就按它算，而不是界面二次换算 ——
- * 净率同时是排序键和提醒指标，只改显示会让排序与预警仍按旧基数跑。
+ * 净率同时是排序键、提醒指标、面板的净率区间，三处都读它。
  */
-const rateBase = ref<ArbRateBase>("bid")
+const rateBase = computed<ArbRateBase>(() => (searchData.value.rateBase === "ask" ? "ask" : "bid"))
 const RATE_BASE_OPTIONS: { value: ArbRateBase, label: string }[] = [
   { value: "bid", label: "右价（资金回报率）" },
   { value: "ask", label: "左价（毛利率）" }
@@ -59,69 +91,127 @@ const rateBaseLabel = computed(() => RATE_BASE_OPTIONS.find(o => o.value === rat
 
 const all = computed(() => calcArbList(rateBase.value))
 const summary = computed(() => getArbSummary())
-
-/* ───────────────────────── 筛选 ───────────────────────── */
-const keyword = ref("")
-const minNetRatePct = ref(0)
-const minNetPerUnit = ref(0)
-const minBid = ref(0)
-/**
- * 「当日成交 ≥」默认 **1**（用户定的）。
- *
- * 为什么必须有这个门槛：实测（官方实时数据 2026-10-09）不设门槛时 967 个候选里，
- * 净率榜首全是 0 成交的离谱挂单（星空锅铲 左 43.2 亿 / 右 500 万，净率 82844%）——
- * 那是有人挂了个没人接的卖单，不是真实价差。设成 1 后降到 264 条，
- * 沼泽精华的排名从 #420 提到 #81。调到 10 → 117 条、100 → 66 条。
- */
-const minVolume = ref(1)
-const hideSuspicious = ref(false)
-const categories = ref<string[]>([])
 const categoryOptions = computed(() => getArbCategoryOptions(all.value))
 
-/**
- * 关键词走共用轮子 `filterChainOptions`（chainbuilder 的三路匹配：
- * 中文名 / 英文名 / hrid，空查询返回全量）；数值与分类条件走 `filterArbItems`。
- * ⚠️ 别再在本页自己写一份关键词匹配 —— 那是全仓第三种写法，必然漂移。
- */
-const filtered = computed(() => {
-  const byKeyword = filterChainOptions(all.value, keyword.value)
-  return filterArbItems(byKeyword, {
-    minNetRate: minNetRatePct.value > 0 ? minNetRatePct.value / 100 : undefined,
-    minNetPerUnit: minNetPerUnit.value > 0 ? minNetPerUnit.value : undefined,
-    minBid: minBid.value > 0 ? minBid.value : undefined,
-    // 直接传数值：0 表示不设门槛（volume ≥ 0 恒成立），省掉一个重复的复选框
-    minVolume: minVolume.value,
-    hideSuspicious: hideSuspicious.value,
-    categories: categories.value
-  })
-})
-
-function resetFilter() {
-  keyword.value = ""
-  minNetRatePct.value = 0
-  minNetPerUnit.value = 0
-  minBid.value = 0
-  minVolume.value = 1
-  hideSuspicious.value = false
-  categories.value = []
-}
-/** 「重置」回到的是**默认值**（成交 ≥1），不是全 0 —— 否则重置一次就放大噪音 */
-const filterActive = computed(() => !!(keyword.value || minNetRatePct.value || minNetPerUnit.value
-  || minBid.value || minVolume.value !== 1 || hideSuspicious.value
-  || categories.value.length))
+/** 搜索面板配置：字段顺序 / 文案 / 边界（与其它检索页同一套渲染） */
+const panelFields: PanelField[] = [
+  { type: "name", key: "name", label: "物品", tip: "炒货物品说明", width: 240 },
+  {
+    type: "range",
+    label: "净率",
+    tip: "净率区间说明",
+    minKey: "minNetRate",
+    maxKey: "maxNetRate",
+    unit: "%",
+    min: 0,
+    step: 0.5,
+    precision: 2,
+    placeholderMin: "0",
+    placeholderMax: "不限"
+  },
+  {
+    type: "range",
+    label: "税后净利 / 件",
+    tip: "单件净利说明",
+    minKey: "minNetPerUnit",
+    maxKey: "maxNetPerUnit",
+    min: 0,
+    precision: 2,
+    placeholderMin: "0",
+    placeholderMax: "不限"
+  },
+  {
+    type: "range",
+    label: "左价",
+    tip: "左价说明",
+    minKey: "minAsk",
+    maxKey: "maxAsk",
+    min: 0,
+    placeholderMin: "0",
+    placeholderMax: "不限"
+  },
+  {
+    type: "range",
+    label: "右价",
+    tip: "右价说明",
+    minKey: "minBid",
+    maxKey: "maxBid",
+    min: 0,
+    placeholderMin: "0",
+    placeholderMax: "不限"
+  },
+  {
+    type: "range",
+    label: "当日成交",
+    tip: "当日成交说明",
+    minKey: "minVolume",
+    maxKey: "maxVolume",
+    min: 0,
+    step: 1,
+    placeholderMin: "1",
+    placeholderMax: "不限"
+  },
+  {
+    type: "select",
+    key: "category",
+    label: "分类",
+    tip: "分类筛选说明",
+    options: () => [{ label: "全部分类", value: "" }, ...categoryOptions.value.map(c => ({
+      label: `item_category.${c}`,
+      value: c
+    }))],
+    width: 140
+  },
+  { type: "select", key: "rateBase", label: "净率基数", tip: "净率基数说明", options: RATE_BASE_OPTIONS, width: 180 },
+  { type: "checkbox", key: "hideSuspicious", label: "隐藏疑似异常报价" }
+]
 
 /* ───────────────────────── 排序 ───────────────────────── */
 /** 默认按净率降序（用户指定）——单位百分比最能一眼看出「哪个品种的差价盖得住税」 */
 const sortKey = ref<ArbSortKey>(ARB_DEFAULT_SORT_KEY)
-const sortDesc = ref(true)
-const rows = computed(() => sortArbRows(filtered.value, sortKey.value, sortDesc.value))
+const sortOrder = ref<"ascending" | "descending">("descending")
+const rows = computed(() => runArbQuery(all.value, searchData.value, { key: sortKey.value, order: sortOrder.value }))
+
+/** 已生效的筛选条件数（面板上提示用；口径与市场监控一致） */
+const activeFilterCount = computed(() => {
+  const p = searchData.value as Record<string, unknown>
+  let n = 0
+  if (Array.isArray(p.name) && p.name.length) n++
+  for (const k of ["minNetRate", "maxNetRate", "minNetPerUnit", "maxNetPerUnit", "minAsk", "maxAsk", "minBid", "maxBid", "maxVolume"]) {
+    if (p[k] != null) n++
+  }
+  // minVolume 默认 1，不算「用户设的条件」
+  if (p.minVolume != null && p.minVolume !== 1) n++
+  if (p.category) n++
+  if (p.hideSuspicious) n++
+  return n
+})
+
+function resetFilter() {
+  searchData.value = {
+    name: [],
+    category: "",
+    minNetRate: undefined,
+    maxNetRate: undefined,
+    minNetPerUnit: undefined,
+    maxNetPerUnit: undefined,
+    minAsk: undefined,
+    maxAsk: undefined,
+    minBid: undefined,
+    maxBid: undefined,
+    minVolume: 1,
+    maxVolume: undefined,
+    hideSuspicious: false,
+    rateBase: "bid"
+  }
+}
 
 /**
  * 表头排序。
  *
  * ⚠️ 必须过 `ARB_SORT_KEYS` 白名单：`el-table` 的 `sortable="custom"` 会把
- * **列的 prop** 原样派发过来，一旦某列没在白名单里，白名单外的键会被当成
- * 合法值写进 `sortKey`，表现是「表头箭头变了、数据却没变」。
+ * **列的 prop** 原样派发过来，白名单外的键会被当成合法值写进 `sortKey`，
+ * 表现是「表头箭头变了、数据却没变」。
  * （市场监控页的 `MARKET_VOLUME_SORT_KEYS` 就是为这个存在的。）
  */
 function onSortChange(payload: { prop: string | null, order: string | null }) {
@@ -129,11 +219,11 @@ function onSortChange(payload: { prop: string | null, order: string | null }) {
   if (!payload.prop || !payload.order || !allowed) {
     // 取消排序 / 未知列 ⇒ 回到默认列
     sortKey.value = ARB_DEFAULT_SORT_KEY
-    sortDesc.value = true
+    sortOrder.value = "descending"
     return
   }
   sortKey.value = payload.prop as ArbSortKey
-  sortDesc.value = payload.order === "descending"
+  sortOrder.value = payload.order === "descending" ? "descending" : "ascending"
 }
 
 /* ───────────────────────── 价差提醒（复用市场监控的规则引擎） ───────────────────────── */
@@ -316,86 +406,17 @@ function levelSuffix(level: string) {
       </div>
     </el-card>
 
-    <!-- ══════════════ 筛选 ══════════════ -->
+    <!-- ══════════════ 多变搜索面板（与利润排行 / 市场监控同一套）══════════════ -->
     <el-card class="mt-3">
-      <div class="flex items-center gap-3 flex-wrap">
-        <div class="flex items-center gap-1">
-          <span class="text-sm text-gray-500">{{ t("净率 ≥") }}</span>
-          <el-input-number v-model="minNetRatePct" :min="0" :max="1000" :step="1" size="small" style="width: 110px" />
-          <span class="text-sm text-gray-500">%</span>
-        </div>
-        <div class="flex items-center gap-1">
-          <span class="text-sm text-gray-500">{{ t("单件净利 ≥") }}</span>
-          <el-input-number v-model="minNetPerUnit" :min="0" :step="1" size="small" style="width: 130px" />
-        </div>
-        <div class="flex items-center gap-1">
-          <el-tooltip placement="top" effect="light" :show-after="120">
-            <template #content>
-              <div class="max-w-320px leading-5">
-                {{ t("过滤掉「1 个金币赚 0.6」这种看着热闹、实则没意义的条目。") }}
-              </div>
-            </template>
-            <span class="text-sm text-gray-500">{{ t("右价 ≥") }}</span>
-          </el-tooltip>
-          <el-input-number v-model="minBid" :min="0" :step="1" size="small" style="width: 130px" />
-        </div>
-        <el-select
-          v-model="categories"
-          multiple
-          collapse-tags
-          collapse-tags-tooltip
-          clearable
-          size="small"
-          :placeholder="t('分类（可多选）')"
-          style="width: 220px"
-        >
-          <el-option v-for="c in categoryOptions" :key="c" :label="t('item_category.' + c)" :value="c" />
-        </el-select>
-        <el-input
-          v-model="keyword"
-          size="small"
-          clearable
-          :placeholder="t('物品（可搜中文名 / 英文名 / hrid）')"
-          style="width: 240px"
-        />
-        <div class="flex items-center gap-1">
-          <el-tooltip placement="top" effect="light" :show-after="120">
-            <template #content>
-              <div class="max-w-400px leading-5">
-                {{ t("官方当日累计成交量。挂单两腿都要成交，从没人成交过的品种说明这不是真实价差 —— 实测不设门槛时，净率榜首全是 0 成交的离谱挂单（星空锅铲 净率 82844%）。") }}
-                <div class="mt-1">
-                  {{ t("默认 1。实测：1 → 264 条、10 → 117 条、100 → 66 条；调到 10 以上清单就很干净了。") }}
-                </div>
-                <div class="mt-1 text-gray-300">{{ t("填 0 = 不设门槛（会重新出现那批离谱挂单）。") }}</div>
-              </div>
-            </template>
-            <span class="text-sm text-gray-500">{{ t("当日成交 ≥") }}</span>
-          </el-tooltip>
-          <el-input-number v-model="minVolume" :min="0" :step="1" size="small" style="width: 120px" />
-        </div>
-        <el-checkbox v-model="hideSuspicious" size="small">{{ t("隐藏疑似异常报价") }}</el-checkbox>
-        <div class="flex items-center gap-1">
-          <el-tooltip placement="top" effect="light" :show-after="120">
-            <template #content>
-              <div class="max-w-400px leading-5">
-                {{ t("净率的分母。右价 = 资金回报率（净利 ÷ 你买入的钱）；左价 = 毛利率（净利 ÷ 卖出价）。") }}
-                <div class="mt-1">
-                  {{ t("沼泽精华：5.12 ÷ 64 = 8%（右价）；5.12 ÷ 72 = 7.11%（左价）。") }}
-                </div>
-                <div class="mt-1 text-gray-300">
-                  {{ t("切换会同时改变：净率列的数值、排序、以及提醒规则的阈值含义。") }}
-                </div>
-              </div>
-            </template>
-            <span class="text-sm text-gray-500">{{ t("净率基数") }}</span>
-          </el-tooltip>
-          <el-radio-group v-model="rateBase" size="small">
-            <el-radio-button v-for="o in RATE_BASE_OPTIONS" :key="o.value" :value="o.value">
-              {{ t(o.label) }}
-            </el-radio-button>
-          </el-radio-group>
-        </div>
-        <el-button v-if="filterActive" size="small" @click="resetFilter">{{ t("重置筛选") }}</el-button>
+      <SearchPanel v-model="searchData" :fields="panelFields" title="炒货筛选" @change="() => {}" />
+      <div class="flex items-center gap-2 flex-wrap mt-2">
+        <el-tag v-if="activeFilterCount" size="small" type="info">
+          {{ t("已启用 ") }}{{ activeFilterCount }}{{ t(" 个条件") }}
+        </el-tag>
+        <el-button v-if="activeFilterCount" size="small" @click="resetFilter">{{ t("重置全部条件") }}</el-button>
+        <span class="text-xs text-gray-400">
+          {{ t("区间条件支持 9 种模式（≥ / ≤ / 区间 / 区间之外 / 接近 / = / 前 N / 后 N），与其它检索页一致。") }}
+        </span>
       </div>
     </el-card>
 
@@ -632,7 +653,7 @@ function levelSuffix(level: string) {
 
       <div v-if="!rows.length" class="text-sm text-gray-400 mt-2">
         {{ t("没有符合条件的品种。") }}
-        <span v-if="all.length && filterActive">{{ t("试试放宽筛选。") }}</span>
+        <span v-if="all.length && activeFilterCount">{{ t("试试放宽条件。") }}</span>
         <span v-else>{{ t("当前市场上双边有报价的 ") }}{{ summary.quoted }}{{ t(" 个品种里，一个都没有扣完税还有差价。") }}</span>
       </div>
 

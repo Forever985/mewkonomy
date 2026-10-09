@@ -1,7 +1,10 @@
 import type { MarketVolumeItem } from "@/common/apis/marketvolume"
 import { getMarketVolumeList } from "@/common/apis/marketvolume"
+import { rangeQueryFromFlat } from "@/common/apis/utils"
 import { MARKET_TAX_FACTOR } from "@@/constants/market"
-import { categoryOptionsOf, sortRowsByField } from "@@/utils/row-helpers"
+import { categoryOptionsOf } from "@@/utils/row-helpers"
+import { applyRankingFilter, applySort, buildTextQuery, compileQuery } from "@@/utils/query-engine"
+import { allNamesOf, aliasSearchTextOf } from "@@/utils/multilang-search"
 import { getTrans } from "@/locales"
 
 /**
@@ -188,43 +191,44 @@ export function getArbSummary(): ArbSummary {
   return { quoted, profitable, singleSide }
 }
 
-export interface ArbFilter {
-  /** 净率下限（比例，如 0.08 = 8%） */
+/**
+ * 检索条件 —— 形状与 `SearchPanel` 的面板数据一致。
+ *
+ * range 字段的模式与容差由组件写在 `${minKey}__mode` / `${minKey}__tolerance`
+ * （见 `rangeQueryFromFlat`），所以索引签名必须留着。
+ *
+ * 单位约定：**净率用「百分点」**（8 表示 8%），与面板输入一致；
+ * 组装 `RangeQuery` 时除以 100 变成比例，才与行上的 `netRate` 同量纲。
+ */
+export interface ArbQueryParams {
+  /** 物品名多选（面板的 `name` 字段）。命中任一即保留 —— 与 11 个检索页一致 */
+  name?: string[]
+  /** 分类（面板 select，单选；空 = 不限） */
+  category?: string
+  /** 净率区间（百分点） */
   minNetRate?: number
-  /** 单件净利下限 */
+  maxNetRate?: number
+  /** 税后净利/件区间 */
   minNetPerUnit?: number
-  /** 右价下限：过滤掉「1 个金币赚 0.6」这种看着热闹的条目 */
+  maxNetPerUnit?: number
+  /** 左价区间（挂卖单能卖出的价） */
+  minAsk?: number
+  maxAsk?: number
+  /** 右价区间（挂买单能买到的价） */
   minBid?: number
-  /** 分类（空 = 不限） */
-  categories?: string[]
+  maxBid?: number
   /**
-   * 当日成交下限（官方 v 字段）。挂单两腿都要成交，从没人成交过的品种说明这不是真实价差。
+   * 当日成交区间。挂单两腿都要成交，从没人成交过的品种说明这不是真实价差
+   * （实测不设门槛时净率榜首全是 0 成交的离谱挂单）。
    *
-   * 填 0 = 不设门槛。页面默认 1，所以「只看有成交的」不再需要额外开关。
+   * 页面默认 `minVolume: 1`；填 0 = 不设门槛。
    */
   minVolume?: number
+  maxVolume?: number
   /** 隐藏疑似异常报价（左价 ≥ 右价 `ARB_SUSPICIOUS_RATIO` 倍） */
   hideSuspicious?: boolean
-}
-
-/**
- * 数值 / 分类条件过滤。
- *
- * ⚠️ **不含关键词匹配**：三路模糊匹配（中文名 / 英文名 / hrid）走
- * `filterChainOptions`（chainbuilder 的轮子；空查询返回全量，正合本处语义）。
- * 本函数早期自己实现了一份，是全仓第三种写法 —— 已删除，关键词一律走共用轮子。
- */
-export function filterArbItems(list: ArbItem[], filter: ArbFilter): ArbItem[] {
-  const cats = filter.categories?.length ? new Set(filter.categories) : null
-  return list.filter((i) => {
-    if (filter.minNetRate != null && !(i.netRate >= filter.minNetRate)) return false
-    if (filter.minNetPerUnit != null && !(i.netPerUnit >= filter.minNetPerUnit)) return false
-    if (filter.minBid != null && !(i.bid >= filter.minBid)) return false
-    if (filter.minVolume != null && !(i.volume >= filter.minVolume)) return false
-    if (filter.hideSuspicious && i.suspicious) return false
-    if (cats && !cats.has(i.category)) return false
-    return true
-  })
+  /** range 字段的模式 / 容差元数据 */
+  [key: string]: unknown
 }
 
 /**
@@ -253,10 +257,97 @@ export const ARB_DEFAULT_SORT_KEY: ArbSortKey = "netRate"
  * 这里只做两件事：把 `ArbSortKey` 的类型约束摆出来，以及把布尔方向
  * 翻成 element-plus 的 order 字符串。比较/沉底规则全在共用轮子里。
  */
-export function sortArbRows(list: ArbItem[], key: ArbSortKey, desc: boolean): ArbItem[] {
-  return sortRowsByField(
-    list as unknown as Record<string, unknown>[],
-    key,
-    desc ? "descending" : "ascending"
-  ) as unknown as ArbItem[]
+/** 排序参数（与 element-plus 的 `sort-change` 事件同形） */
+export interface ArbSort {
+  key: ArbSortKey
+  order: "ascending" | "descending"
+}
+
+/** 行的检索文本：物品原文 + 三语别名（`multilang-search` 的轮子） */
+function arbSearchTextOf(i: ArbItem): string {
+  return aliasSearchTextOf([i.name, ...allNamesOf(i.name)])
+}
+
+/** 行 key：物品 + 市场档位（与提醒的行粒度一致） */
+function arbRowKeyOf(i: ArbItem): string {
+  return `${i.hrid}|${i.level}`
+}
+
+function arbSortValueOf(i: ArbItem, key: ArbSortKey): unknown {
+  // 名称列按**中文显示名**排（表头看到的就是它）
+  return key === "name" ? (i.cn || i.name) : (i as unknown as Record<string, unknown>)[key]
+}
+
+/**
+ * 执行一次检索 + 排序。
+ *
+ * 走的是与利润排行 / 市场监控同一套引擎，不再自造谓词：
+ * - `buildTextQuery` + `compileQuery`：多物品名、分类枚举、区间、自定义谓词
+ *   编成**一个**谓词，按「文本 → 枚举 → 区间 → 自定义」的代价顺序短路求值，
+ *   **只遍历一次**；
+ * - `rangeQueryFromFlat`：把面板的平铺 min/max + `__mode` 组装成 9 模式的区间
+ *   （≥ / ≤ / 区间 / 区间之外 / 接近 / = / 前 N / 后 N）；
+ * - `applySort`：唯一键做 tiebreaker ⇒ **同样输入必得同样输出**。
+ *   否则同价行的次序取决于 marketData 的插入顺序，换批数据用户会以为
+ *   「表头一样但数据跳了」。
+ */
+/** 排名模式（topN / bottomN）：单条记录判不了，只能整表处理 */
+function isRankingRange(r: { mode?: string } | undefined): boolean {
+  return r?.mode === "topN" || r?.mode === "bottomN"
+}
+
+export function runArbQuery(list: ArbItem[], params: ArbQueryParams, sort: ArbSort): ArbItem[] {
+  const p = params ?? {}
+  const names = (Array.isArray(p.name) ? p.name : p.name ? [p.name] : [])
+    .map(String)
+    .filter(Boolean)
+  const ranges = arbRanges(p)
+
+  const query = compileQuery<ArbItem>(
+    {
+      // 多个物品名是「命中任一」（OR），与 11 个检索页的 `name` 语义一致
+      text: names.length ? buildTextQuery(names.join(" | "), "any", ["name", "hrid"]) : undefined,
+      oneOf: { category: p.category ? [p.category] : [] },
+      // ⚠️ 排名模式必须**剔���**：它们单条判不了，若留在区间判定里，
+      // `matchRange` 会把「前 10 名」的 10 当成阈值 → 变成「值 ≥ 10」，
+      // 于是净率 8%（0.08）的条目会被误杀。整表那一半交给 applyRankingFilter。
+      range: Object.fromEntries(Object.entries(ranges).filter(([, r]) => !isRankingRange(r))),
+      custom: p.hideSuspicious ? [(i: ArbItem) => !i.suspicious] : []
+    } as never,
+    field => (i: ArbItem) => (field === "hrid" ? i.hrid : arbSearchTextOf(i))
+  )
+
+  // 「前 N 名 / 后 N 名」按整表处理（与市场监控同一套语义）
+  const matched = list.filter(query.predicate)
+  const keepTop = applyRankingFilter(matched, ranges, arbRangeValueOf)
+
+  const key = (ARB_SORT_KEYS as readonly string[]).includes(sort.key) ? sort.key : ARB_DEFAULT_SORT_KEY
+  return applySort(
+    matched.filter(i => keepTop.has(i)),
+    [{ prop: key, order: sort.order, value: (i: ArbItem) => arbSortValueOf(i, key as ArbSortKey) }],
+    arbRowKeyOf
+  )
+}
+
+/** 把面板的平铺 min/max + `__mode` 组装成区间条件（净率是百分点 ⇒ ÷100） */
+function arbRanges(p: ArbQueryParams): Record<string, ReturnType<typeof rangeQueryFromFlat>> {
+  return {
+    netRate: rangeQueryFromFlat(p, "minNetRate", "maxNetRate", { divisor: 100 }),
+    netPerUnit: rangeQueryFromFlat(p, "minNetPerUnit", "maxNetPerUnit"),
+    ask: rangeQueryFromFlat(p, "minAsk", "maxAsk"),
+    bid: rangeQueryFromFlat(p, "minBid", "maxBid"),
+    volume: rangeQueryFromFlat(p, "minVolume", "maxVolume")
+  }
+}
+
+/** 区间字段的取值（排名过滤与区间判定必须用同一份，否则两条路结果会打架） */
+function arbRangeValueOf(i: ArbItem, field: string): number | null {
+  switch (field) {
+    case "netRate": return i.netRate
+    case "netPerUnit": return i.netPerUnit
+    case "ask": return i.ask
+    case "bid": return i.bid
+    case "volume": return i.volume
+    default: return null
+  }
 }

@@ -96,11 +96,12 @@ describe("炒货：价差候选的判定", () => {
     expect(s.singleSide, "单边有报价的").toBe(2)
   })
 
-  it("⑤ 默认按净率降序", async () => {
+it("⑤ 默认按净率降序，且同价行次序稳定（applySort 的 tiebreaker）", async () => {
     const arb = await import("@/common/apis/marketarb")
     expect(arb.ARB_DEFAULT_SORT_KEY, "用户指定默认按净率").toBe("netRate")
     const list = arb.calcArbList()
-    const sorted = arb.sortArbRows(list, arb.ARB_DEFAULT_SORT_KEY, true)
+    const sort = { key: arb.ARB_DEFAULT_SORT_KEY, order: "descending" } as const
+    const sorted = arb.runArbQuery(list, {}, sort)
     console.log("[p] 排序 =", sorted.map(i => `${i.hrid.replace("/items/", "")} ${(i.netRate * 100).toFixed(1)}%${i.suspicious ? "(异常)" : ""}`).join(" | "))
     // 净率降序：那条 860% 的离谱挂单必然在首位（这正是要打「疑似异常」标签的原因），
     // 沼泽精华 8% 紧随其后，丛林精华 4% 垫底。
@@ -110,42 +111,70 @@ describe("炒货：价差候选的判定", () => {
     for (let i = 1; i < sorted.length; i++) {
       expect(sorted[i - 1].netRate, "降序不得回退").toBeGreaterThanOrEqual(sorted[i].netRate)
     }
+    // 同样输入必得同样输出：重复执行、以及打乱输入顺序，次序都一致
+    const again = arb.runArbQuery(list, {}, sort)
+    expect(again.map(i => i.hrid), "重复执行结果一致").toEqual(sorted.map(i => i.hrid))
+    const viaShuffled = arb.runArbQuery([...list].reverse(), {}, sort)
+    expect(viaShuffled.map(i => i.hrid), "输入顺序不同也必须同一输出（唯一键 tiebreaker）")
+      .toEqual(sorted.map(i => i.hrid))
   })
 
-  it("⑥ 筛选：数值条件 + 三路关键词（关键词走共用轮子）", async () => {
+  it("⑥ 检索：多物品名(OR) / 分类 / 区间九模式 / 隐藏异常", async () => {
     const arb = await import("@/common/apis/marketarb")
-    const { filterChainOptions } = await import("@/common/apis/chainbuilder")
     const list = arb.calcArbList()
+    const sort = { key: arb.ARB_DEFAULT_SORT_KEY, order: "descending" } as const
+    const run = (params: any) => arb.runArbQuery(list, params, sort)
 
-    const high = arb.filterArbItems(list, { minNetRate: 0.075 })
+    // ── 物品名多选：命中任一即保留（与 11 个检索页一致），支持中英名与 hrid ──
+    expect(run({ name: ["沼泽"] }).map(i => i.hrid), "中文名").toEqual(["/items/swamp_essence"])
+    expect(run({ name: ["swamp"] }).map(i => i.hrid), "英文名").toEqual(["/items/swamp_essence"])
+    expect(run({ name: ["/items/swamp"] }).map(i => i.hrid), "hrid").toEqual(["/items/swamp_essence"])
+    expect(run({ name: ["沼泽", "丛林"] }).length, "多个名字是 OR").toBe(2)
+    expect(run({ name: ["不存在"] }).length, "无命中").toBe(0)
+    expect(run({}).length, "无条件 ⇒ 全量").toBe(list.length)
+
+    // ── 分类（面板 select，空 = 不限）──
+    const cats = [...new Set(list.map(i => i.category))]
+    console.log("[p] 候选的分类 =", cats.join(", "))
+    if (cats.length) {
+      expect(run({ category: cats[0] }).every(i => i.category === cats[0]), "分类过滤生效").toBe(true)
+    }
+    expect(run({ category: "__none__" }).length, "不存在的分类 ⇒ 空").toBe(0)
+
+    // ── 净率区间（面板填百分点，执行侧 ÷100）──
+    const high = run({ minNetRate: 7.5 })
     console.log("[p] 净率 ≥7.5% =", high.map(i => i.hrid).join(", "))
     expect(high.length, "沼泽 8% 与离谱挂单 860%（丛林 4% 不达标）").toBe(2)
-    expect(high.some(i => i.hrid === "/items/swamp_essence")).toBe(true)
-    expect(high.some(i => i.hrid === "/items/absurd_ask")).toBe(true)
+    expect(run({ minNetRate: 5, maxNetRate: 8.5 }).map(i => i.hrid), "净率 5~8.5%").toEqual(["/items/swamp_essence"])
 
-    // 叠加「隐藏疑似异常」⇒ 离谱挂单被滤掉
-    const clean = arb.filterArbItems(list, { minNetRate: 0.075, hideSuspicious: true })
-    console.log("[p] 再隐藏异常 =", clean.map(i => i.hrid).join(", "))
-    expect(clean.some(i => i.hrid === "/items/absurd_ask"), "异常条目应被滤掉").toBe(false)
+    // 区间模式：面板把模式写进 __mode，这里走 query-engine 的模式机
+    expect(run({ minNetRate: 7.5, minNetRate__mode: "gte" }).length, "显式 gte 模式").toBe(2)
+    expect(run({ maxNetRate: 5, maxNetRate__mode: "lte" }).map(i => i.hrid), "≤5%").toEqual(["/items/jungle_essence"])
+    expect(run({ minNetRate__mode: "any", minNetRate: 99 }).length, "模式 any ⇒ 该条件失效").toBe(list.length)
+    const top1 = run({ minNetRate: 1, minNetRate__mode: "topN" })
+    expect(top1.length, "净率前 1 名").toBe(1)
+    expect(top1[0].hrid).toBe("/items/absurd_ask")
+    // ⚠️ 这一条是「排名模式不能进区间判定」的守卫：
+    //    净率 8% = 0.08 < 1，若把 topN 的阈值 1 当成普通比较，沼泽会被误杀。
+    const top2 = run({ minNetRate: 2, minNetRate__mode: "topN" })
+    expect(top2.map(i => i.hrid), "净率前 2 名（8% 的沼泽必须在内）")
+      .toEqual(["/items/absurd_ask", "/items/swamp_essence"])
+    const bottom1 = run({ minNetRate: 1, minNetRate__mode: "bottomN" })
+    expect(bottom1.map(i => i.hrid), "净率后 1 名 = 最低那条").toEqual(["/items/jungle_essence"])
 
-    // 成交门槛（页面默认 1；原先的 onlyTraded 已被 minVolume 覆盖，已删除）
-    expect(arb.filterArbItems(list, { minVolume: 1 }).length, "成交 ≥1（= 有成交）").toBe(2)
-    const heavy = arb.filterArbItems(list, { minVolume: 1000 })
-    expect(heavy.map(i => i.hrid), "成交 ≥1000 只剩沼泽").toEqual(["/items/swamp_essence"])
-    expect(arb.filterArbItems(list, { minVolume: 999999 }).length, "门槛过高 ⇒ 空").toBe(0)
+    // ── 其它区间字段 ──
+    expect(run({ minVolume: 1 }).length, "成交 ≥1（页面默认）").toBe(2)
+    expect(run({ minVolume: 1000 }).map(i => i.hrid), "成交 ≥1000").toEqual(["/items/swamp_essence"])
+    expect(run({ minVolume: 999999 }).length, "门槛过高 ⇒ 空").toBe(0)
+    expect(run({ minBid: 1000 }).length, "右价 ≥1000 ⇒ 空").toBe(0)
 
-    expect(arb.filterArbItems(list, { minBid: 1000 }).length, "右价门槛过 1000 ⇒ 空").toBe(0)
-    const notAbsurd = arb.filterArbItems(list, { hideSuspicious: true })
-    expect(notAbsurd.some(i => i.hrid === "/items/absurd_ask"), "hideSuspicious 生效").toBe(false)
+    // ── 自定义谓词：隐藏疑似异常 ──
+    expect(run({ hideSuspicious: true }).some(i => i.suspicious), "异常条目应被隐藏").toBe(false)
+    expect(run({}).some(i => i.suspicious), "不隐藏时它在池里").toBe(true)
 
-    // 三路匹配复用 chainbuilder 的轮子：cn 由 API 层用 getTrans 预计算
-    expect(filterChainOptions(list, "swamp").length, "英文名").toBe(1)
-    expect(filterChainOptions(list, "/items/swamp").length, "hrid").toBe(1)
-    expect(filterChainOptions(list, "沼泽").length, "中文名（依赖 API 层算出的 cn）").toBe(1)
-    expect(filterChainOptions(list, "丛林").length, "中文名").toBe(1)
-    expect(filterChainOptions(list, "不存在").length).toBe(0)
-    // 空查询返回全量（页面靠这个语义，不必自己写 if）
-    expect(filterChainOptions(list, "  ").length, "空查询 ⇒ 全量").toBe(list.length)
+    // ── 条件叠加 ──
+    expect(run({ minNetRate: 7.5, hideSuspicious: true }).map(i => i.hrid),
+      "净率≥7.5% 且隐藏异常 ⇒ 只剩沼泽").toEqual(["/items/swamp_essence"])
   })
 
   it("⑦ 提醒指标：税后净利与净率能取到值（供 alerts 复用）", async () => {
