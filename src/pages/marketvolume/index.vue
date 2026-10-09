@@ -3,7 +3,7 @@ import { getMarketVolumeList, getMarketCategoryOptions, getMarketVolumeSummary, 
 import { MARKET_RANGE_FIELDS, countActiveRanges, createEmptyRanges, type MarketRanges } from "@/common/apis/marketvolume/filters"
 import { applySort, buildTextQuery, compileQuery, type RangeQuery, type SortSpec } from "@/common/utils/query-engine"
 import { aliasSearchTextOf, buildAliasIndex } from "@/common/utils/multilang-search"
-import { ALERT_METRICS, alertKeyOf, createEmptyRule, evaluateAlerts, evaluateAlertsByRule, type AlertHit, type AlertMetric, type AlertRule } from "@/common/apis/marketvolume/alerts"
+import { ALERT_METRICS, ARB_ONLY_METRICS, alertKeyOf, createEmptyRule, evaluateAlerts, evaluateAlertsByRule, type AlertHit, type AlertMetric, type AlertRule } from "@/common/apis/marketvolume/alerts"
 import { recordLocalSample, loadMarketHistory, getMarketChangeMap, getLocalSampleCount, getLastSampleTime, hasRemoteHistory, getHistorySpanHours, getRemoteSampleCount, getVolumeRateDetail, getRollingVolumeDetail, type MarketChangeMetric } from "@/common/apis/marketvolume/history"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import RangeFilter from "@@/components/RangeFilter/index.vue"
@@ -524,8 +524,18 @@ const ALERT_METRIC_LABEL_KEYS: Record<AlertMetric, string> = {
   volumeRate: "成交量速率",
   volumeRolling: "时间窗内成交量",
   volume: "当日累计成交量",
-  turnoverRolling: "时间窗内成交额"
+  turnoverRolling: "时间窗内成交额",
+  netPerUnit: "税后净利/件",
+  netRate: "净率"
 }
+
+/**
+ * 本页能用的指标 = 全部指标 − 炒货专用指标。
+ *
+ * 提醒规则是**跨页共享**的（同一个 store），所以指标下拉必须按页过滤：
+ * 这里的行没有 `netPerUnit` / `netRate`，放出来就会建出永不命中的规则。
+ */
+const MV_ALERT_METRICS = ALERT_METRICS.filter(m => !ARB_ONLY_METRICS.includes(m))
 function alertMetricLabel(metric: AlertMetric) {
   return t(ALERT_METRIC_LABEL_KEYS[metric])
 }
@@ -1135,7 +1145,7 @@ function fmtCount(value: number) {
             <el-option v-for="i in alertItemOptions" :key="i.hrid" :label="t(i.name)" :value="i.hrid" />
           </el-select>
           <el-select v-model="rule.metric" size="small" style="width: 170px">
-            <el-option v-for="m in ALERT_METRICS" :key="m" :label="alertMetricLabel(m)" :value="m" />
+            <el-option v-for="m in MV_ALERT_METRICS" :key="m" :label="alertMetricLabel(m)" :value="m" />
           </el-select>
           <el-select v-model="rule.operator" size="small" style="width: 110px">
             <el-option :label="t('达到或高于')" value="gte" />

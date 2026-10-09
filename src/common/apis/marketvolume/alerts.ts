@@ -1,4 +1,3 @@
-import type { MarketVolumeItem } from "."
 import { marketRowKeyOf } from "./keys"
 
 /**
@@ -18,8 +17,41 @@ import { marketRowKeyOf } from "./keys"
 export type AlertScopeType = "all" | "category" | "item"
 
 /**
- * 可被监控的指标。字段都取自 `MarketVolumeItem` 上已由页面回填的那部分，
- * 因此评估时拿到的是「已经算好涨跌/速率/滚动量」的列表。
+ * 提醒评估所需的**最小行结构**。
+ *
+ * 引擎原先把签名写死成市场监控的行类型，于是「炒货」页那套行（没有
+ * changePct / volumeRolling 等字段）无法复用这套规则。实际用到的只有：
+ * `hrid` / `level` / `name` / `category`、数值 `item[metric]`，
+ * 以及 `onlyActive` 判定要看的 `volume` / `volumeRolling`。
+ * 所以退成结构化类型，两种页面的行都能喂进同一套规则。
+ *
+ * ⚠️ 刻意**不加**索引签名：interface 不会自动获得隐式索引签名，
+ * 加了反而会让市场监控的行类型变得不可赋值给本类型。
+ */
+export interface AlertTarget {
+  hrid: string
+  /** 市场档位 key（"0" / "1" …） */
+  level: string
+  /** 物品名（i18n key 原文） */
+  name: string
+  category: string
+  price?: number
+  ask?: number
+  bid?: number
+  changePct?: number | null
+  volumeRate?: number | null
+  volumeRolling?: number | null
+  volume?: number
+  turnoverRolling?: number | null
+  /** 炒货：税后净利 / 件 */
+  netPerUnit?: number
+  /** 炒货：净率 */
+  netRate?: number
+}
+
+/**
+ * 可被监控的指标。取值就是行上同名的数值字段，
+ * 因此评估时拿到的必须是「页面已经算好」的列表。
  */
 export type AlertMetric =
   | "price"
@@ -30,6 +62,9 @@ export type AlertMetric =
   | "volumeRolling"
   | "volume"
   | "turnoverRolling"
+  // 炒货专用
+  | "netPerUnit"
+  | "netRate"
 
 export const ALERT_METRICS: readonly AlertMetric[] = [
   "price",
@@ -39,8 +74,19 @@ export const ALERT_METRICS: readonly AlertMetric[] = [
   "volumeRate",
   "volumeRolling",
   "volume",
-  "turnoverRolling"
+  "turnoverRolling",
+  "netPerUnit",
+  "netRate"
 ]
+
+/**
+ * 只有「炒货」页的行才有这两个指标。
+ *
+ * 市场监控页必须把它们从指标下拉里滤掉 —— 否则用户能建一条永远不命中的规则
+ * （那边的行没有这两个字段，`metricValueOf` 返回 null 就被跳过），
+ * 排查起来极其困惑。
+ */
+export const ARB_ONLY_METRICS: readonly AlertMetric[] = ["netPerUnit", "netRate"]
 
 /** 比较方向：`gte` = 达到或高于，`lte` = 达到或低于 */
 export type AlertOperator = "gte" | "lte"
@@ -106,8 +152,8 @@ export function alertKeyOf(hrid: string, level: string): string {
 }
 
 /** 取某条目某指标的值；取不到（null/undefined/非有限数）返回 null，调用方需跳过 */
-export function metricValueOf(item: MarketVolumeItem, metric: AlertMetric): number | null {
-  const raw = item[metric as keyof MarketVolumeItem]
+export function metricValueOf(item: AlertTarget, metric: AlertMetric): number | null {
+  const raw = item[metric]
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return null
   }
@@ -115,7 +161,7 @@ export function metricValueOf(item: MarketVolumeItem, metric: AlertMetric): numb
 }
 
 /** 条目是否落在规则的作用范围内 */
-export function matchesScope(item: MarketVolumeItem, rule: AlertRule): boolean {
+export function matchesScope(item: AlertTarget, rule: AlertRule): boolean {
   switch (rule.scopeType) {
     case "category":
       return item.category === rule.scopeValue
@@ -148,10 +194,10 @@ function median(values: number[]): number {
 }
 
 /** 单条规则的候选集合（范围 + onlyActive + 指标可取到值） */
-function candidatesOf(list: MarketVolumeItem[], rule: AlertRule): { item: MarketVolumeItem, value: number }[] {
-  const out: { item: MarketVolumeItem, value: number }[] = []
+function candidatesOf(list: AlertTarget[], rule: AlertRule): { item: AlertTarget, value: number }[] {
+  const out: { item: AlertTarget, value: number }[] = []
   for (const item of list) {
-    if (rule.onlyActive && !(item.volume > 0 || (item.volumeRolling ?? 0) > 0)) {
+    if (rule.onlyActive && !((item.volume ?? 0) > 0 || (item.volumeRolling ?? 0) > 0)) {
       continue
     }
     if (!matchesScope(item, rule)) {
@@ -175,7 +221,7 @@ function candidatesOf(list: MarketVolumeItem[], rule: AlertRule): { item: Market
  *   注意基准**从候选集合自身算出**，所以「超过均值 3 倍」永远只在相对意义上成立，
  *   候选集合为空或基准为 0 时不产生命中（避免除零/无意义阈值）。
  */
-export function evaluateRule(list: MarketVolumeItem[], rule: AlertRule): AlertHit[] {
+export function evaluateRule(list: AlertTarget[], rule: AlertRule): AlertHit[] {
   if (!rule.enabled) {
     return []
   }
@@ -184,7 +230,7 @@ export function evaluateRule(list: MarketVolumeItem[], rule: AlertRule): AlertHi
     return []
   }
 
-  const base = (hit: { item: MarketVolumeItem, value: number }, threshold: number): AlertHit => ({
+  const base = (hit: { item: AlertTarget, value: number }, threshold: number): AlertHit => ({
     ruleId: rule.id,
     ruleLabel: rule.label,
     priority: rule.priority,
@@ -260,7 +306,7 @@ function notabilityOf(hit: AlertHit): number {
  * 否则一个物品命中多条规则时表格行会拿到互相矛盾的标记；
  * 页面上的「命中明细」仍通过 `evaluateAlertsByRule` 逐条拿全量，不丢信息。
  */
-export function evaluateAlerts(list: MarketVolumeItem[], rules: AlertRule[]): AlertHit[] {
+export function evaluateAlerts(list: AlertTarget[], rules: AlertRule[]): AlertHit[] {
   const all: AlertHit[] = []
   for (const rule of rules) {
     all.push(...evaluateRule(list, rule))
@@ -278,7 +324,7 @@ export function evaluateAlerts(list: MarketVolumeItem[], rules: AlertRule[]): Al
 }
 
 /** 逐条规则的全量命中（页面「按规则分组」的明细用，不做每行去重） */
-export function evaluateAlertsByRule(list: MarketVolumeItem[], rules: AlertRule[]): { rule: AlertRule, hits: AlertHit[] }[] {
+export function evaluateAlertsByRule(list: AlertTarget[], rules: AlertRule[]): { rule: AlertRule, hits: AlertHit[] }[] {
   return rules
     .filter(r => r.enabled)
     .map(rule => ({ rule, hits: evaluateRule(list, rule) }))

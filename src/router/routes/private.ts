@@ -50,6 +50,17 @@ export const privateRoutes: RouteRecordRaw[] = [
         }
       },
       {
+        // 炒货：左价与右价之间的差价扣完税还剩多少 ⇒ 可挂单套利的品种
+        path: "marketarb",
+        component: () => import("@/pages/marketarb/index.vue"),
+        name: "Marketarb",
+        meta: {
+          title: t("炒货"),
+          affix: false,
+          elIcon: "Money"
+        }
+      },
+      {
         path: "profitform",
         component: () => import("@/pages/profitform/index.vue"),
         name: "Profitform",
