@@ -27,26 +27,30 @@ abstract class AlchemyCalculator extends Calculator {
   }
 
   /**
-   * 催化剂的**期望消耗个数**。
+   * 催化剂的**单次动作期望消耗个数**。
    *
-   * 游戏 description 明确写 "One catalyst is consumed on success"（成功时消耗 1 个），
-   * 失败不消耗。而 `successRate` 是**单次**成功率，
-   * 所以「凑成一次成功」所需的期望个数 = 1 / successRate。
+   * 游戏 description 明确写 "One catalyst is consumed on success"
+   * （成功时消耗 1 个，失败不消耗）。而 `count` 的口径是**每次动作**
+   * （见 `Calculator.cost` 是单次成本、`countPH = count × consumePH`，
+   * 且 `consumePH = actionsPH` = 每小时动作数，不是每小时成功数），
+   * 所以：
    *
-   * ⚠️ 这里曾长期写成 `successRate`，把 0.6 当成「需要 0.6 个」——
-   * **方向完全反了**：那算出来的是「成功率越高要用的催化剂越少」，
-   * 而真实情况是「成功率越高要的催化剂越少，但绝对值远大于 1」。
-   * 实测偏差：转化催化剂低估 2.78×、至高催化剂低估 2.37×（见 PROJECT_CONTEXT）。
+   *     每次动作期望消耗 = sr × 1 + (1 − sr) × 0 = **successRate**
    *
-   * 另外，成功率被 `min(1, ...)` 封顶 ⇒ 若 successRate 为 0，
-   * 期望个数无穷大（永远做不成）。此时用 0 避免 `Infinity` 污染利润。
+   * 乘上 `consumePH` 之后正好等于 `gainPH`（每小时成功次数）——
+   * 「每小时成功几次就消耗几个」，这才是正确的口径。
+   *
+   * ⚠️ 这里曾写成 `1 / successRate`（提交 e4cb449），那是把两种口径混了：
+   * `1/sr` 是「凑成一次成功平均要**尝试**多少次」，而催化剂只在成功那次
+   * 消耗 1 个 —— 尝试次数 ≠ 催化剂个数。写成 1/sr 后每小时消耗变成
+   * `actionsPH / sr`，比正确值 `actionsPH × sr` **高估 1/sr² 倍**
+   * （成功率 60% 时高估 2.78×，72% 时 1.93×）。
+   * 方向也反了：那样算出来「成功率越高，每小时用得越少」只对了一半，
+   * 绝对值却完全不对。
    */
   get catalystCount(): number {
-    const sr = this.successRate
-    if (!(sr > 0)) {
-      return 0
-    }
-    return 1 / sr
+    // successRate 已被 min(1, …) 封顶且非负，无需额外防护
+    return this.successRate
   }
 
   abstract get baseSuccessRate(): number
@@ -113,7 +117,7 @@ export class TransmuteCalculator extends AlchemyCalculator {
       ]
       this.catalyst && list.push({
         hrid: `/items/${this.catalyst}`,
-        // 成功才消耗 ⇒ 期望个数 = 1 / 成功率（见 catalystCount）
+        // 成功才消耗 ⇒ 单次期望个数 = 成功率 × 1（见 catalystCount）
         count: this.catalystCount,
         marketPrice: getPriceOf(`/items/${this.catalyst}`).ask
       })
@@ -214,7 +218,7 @@ export class DecomposeCalculator extends AlchemyCalculator {
       if (this.catalyst) {
         list.push({
           hrid: `/items/${this.catalyst}`,
-          // 成功才消耗 ⇒ 期望个数 = 1 / 成功率（见 catalystCount）
+          // 成功才消耗 ⇒ 单次期望个数 = 成功率 × 1（见 catalystCount）
           count: this.catalystCount,
           marketPrice: getPriceOf(`/items/${this.catalyst}`).ask
         })
@@ -305,7 +309,7 @@ export class CoinifyCalculator extends AlchemyCalculator {
       ]
       this.catalyst && list.push({
         hrid: `/items/${this.catalyst}`,
-        // 成功才消耗 ⇒ 期望个数 = 1 / 成功率（见 catalystCount）
+        // 成功才消耗 ⇒ 单次期望个数 = 成功率 × 1（见 catalystCount）
         count: this.catalystCount,
         marketPrice: getPriceOf(`/items/${this.catalyst}`).ask
       })

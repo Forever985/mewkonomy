@@ -2,10 +2,12 @@ import { describe, expect, it, beforeAll } from "vitest"
 import { loadTestGameData } from "./utils/load-game-data"
 
 /**
- * 锁住 2026-10-03 的四项修复（防止将来退化）。
+ * 锁住 2026-10-03 的修复，以及 2026-10-21 对其中**第 1 项的再次纠正**（防止将来退化）。
  *
  * 修的问题：
- * 1. 催化剂期望消耗写成 `successRate`（应为 `1/successRate`），低估 2.37~2.78×
+ * 1. 催化剂消耗量：2026-10-03 把 `successRate` 改成 `1/successRate`，
+ *    **那是改错了**（见下方 ① 的长注释）—— 2026-10-21 改回 `successRate`，
+ *    并补上「每小时催化剂消耗 = 每小时成功次数」这条恒等式。
  * 2. 催化剂标签是虚构物品名（「普通/主要催化剂」游戏里不存在）
  * 3. 档位倍率硬编码（值正确，但游戏改配方不会跟随）
  * 4. 制作副产品（工匠箱）混进「转化产出」列表
@@ -13,20 +15,35 @@ import { loadTestGameData } from "./utils/load-game-data"
 describe("charmtransform 数据正确性回归锁", () => {
   beforeAll(async () => { await loadTestGameData() }, 300000)
 
-  it("① 催化剂期望个数 = 1 / 成功率（不是成功率本身）", async () => {
-    const { TransmuteCalculator } = await import("@/calculator/alchemy")
+  it("① 催化剂单次期望消耗 = 成功率（不是 1/成功率）", async () => {
+    const { TransmuteCalculator, DecomposeCalculator, CoinifyCalculator } = await import("@/calculator/alchemy")
 
-    for (const [rank, catalyst] of [[1, "catalyst_of_transmutation"], [2, "prime_catalyst"]] as const) {
-      const c = new TransmuteCalculator({ hrid: "/items/basic_brewing_charm", catalystRank: rank })
+    for (const [Cls, rank, catalyst] of [
+      [TransmuteCalculator, 1, "catalyst_of_transmutation"],
+      [TransmuteCalculator, 2, "prime_catalyst"],
+      [DecomposeCalculator, 1, "catalyst_of_decomposition"],
+      [CoinifyCalculator, 1, "catalyst_of_coinification"]
+    ] as [any, number, string][]) {
+      const hrid = Cls === DecomposeCalculator ? "/items/acrobatic_hood" : "/items/basic_brewing_charm"
+      const c = new Cls({ hrid, catalystRank: rank })
+      if (!c.available) continue
       c.run()
-      const line = c.ingredientList.find(i => i.hrid === `/items/${catalyst}`)
+      const line = c.ingredientList.find((i: { hrid: string }) => i.hrid === `/items/${catalyst}`)
       expect(line, `${catalyst} 应在原料列表里`).toBeDefined()
-      // 期望个数 = 1 / 成功率
-      expect(line!.count).toBeCloseTo(1 / c.successRate, 10)
-      // 反向断言：绝不能等于 successRate（旧的那个错）
-      expect(line!.count).not.toBeCloseTo(c.successRate, 6)
-      // 且必须 > 1（成功才消耗 ⇒ 期望至少 1 个）
-      expect(line!.count).toBeGreaterThan(1)
+
+      // 游戏 description：**"One catalyst is consumed on success"**（成功才消耗，失败不消耗）
+      // ⇒ 单次动作期望 = sr × 1 + (1−sr) × 0 = successRate
+      expect(line!.count, `${catalyst} 单次期望消耗应 = 成功率`).toBeCloseTo(c.successRate, 10)
+      // 反向守卫：写成 1/sr 必须失败（2026-10-03 的那个错）
+      expect(line!.count).not.toBeCloseTo(1 / c.successRate, 6)
+      // 一次动作最多消耗 1 个 ⇒ 期望必然 ≤ 1
+      expect(line!.count).toBeLessThanOrEqual(1)
+
+      // ★ 核心恒等式：催化剂按「每次动作」计（count × consumePH），
+      //   而 consumePH = actionsPH ⇒ 每小时消耗必须正好等于 gainPH
+      //   （= actionsPH × sr = 每小时成功次数）。写成 1/sr 时这条会差 1/sr² 倍。
+      const catIng = c.ingredientListWithPrice.find((i: { hrid: string }) => i.hrid === `/items/${catalyst}`)!
+      expect(catIng.countPH, `${catalyst} 每小时消耗应 = 每小时成功次数`).toBeCloseTo(c.gainPH, 6)
     }
   });
 

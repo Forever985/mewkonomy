@@ -678,7 +678,7 @@ export default {
   "分解催化剂": "Decomposition Catalyst",
   "点金催化剂": "Coinification Catalyst",
   "至高催化剂": "Prime Catalyst",
-  "催化剂说明": "One catalyst is consumed **on success**; failures consume none. So the expected count is 1 ÷ success rate — 1.67 at 60%, 1.54 at 65%. Only the Prime Catalyst is universal (+25% to any alchemy action); the other three each cover one step (transmutation / decomposition / coinification, +15%).",
+  "催化剂说明": "One catalyst is consumed **on success**; failures consume none. So the expected count per action = the success rate (0.6 per action at 60%), and the hourly total = the number of successes per hour. Only the Prime Catalyst is universal (+25% to any alchemy action); the other three each cover one step (transmutation / decomposition / coinification, +15%).",
   "当前市场没有任何护符报价": "No charm has a market quote",
   "五档产出护符在市场上一件都卖不掉（买价与卖价均为空），所以「实际利润」按 0 计价。": "No charm from any tier can be sold (both ask and bid are empty), so \"actual profit\" counts them at 0.",
   "「理想利润」只是理论上限——它假设你能按「用对应精华从零制作的成本」卖出去。": "\"Ideal profit\" is only a theoretical ceiling — it assumes you can sell at the cost of crafting from scratch with the matching essence.",
