@@ -24,10 +24,16 @@ export type PanelProjectOptions = string[] | (() => string[])
 /** 分页检索页共用的搜索数据结构 */
 export interface PanelSearchData {
   name?: string[]
-  /** 组合条件行：每行「步数/等级 + 动作」，行间为 OR */
-  conditions?: Array<{ steps?: number | string, project?: string, minLevel?: number, maxLevel?: number }>
-  /** 反向排除行：{ 产品名, 生产动作 } */
-  excludes?: Array<{ name?: string, project?: string }>
+  /**
+   * 组合条件行：每行「步数/等级 + 动作」，行间为 OR。
+   *
+   * `enabled === false` 表示该行被**临时停用**：内容保留、但不参与检索。
+   * 缺省（含旧数据没这个键）视为启用 —— 判断一律用 `!== false`，
+   * 不能写成 `=== true`，否则历史本地条件会全部失效。
+   */
+  conditions?: Array<{ steps?: number | string, project?: string, minLevel?: number, maxLevel?: number, enabled?: boolean }>
+  /** 反向排除行：{ 产品名, 生产动作 }；`enabled === false` 同样表示临时停用 */
+  excludes?: Array<{ name?: string, project?: string, enabled?: boolean }>
   minProfitRate?: number
   maxProfitRate?: number
   minRisk?: number
@@ -156,6 +162,16 @@ export interface ConditionsField extends FieldBase {
   levelRange?: { min: number, max: number, placeholderMin?: string, placeholderMax?: string }
   /** 行下方的小字提示 */
   hint?: string
+  /**
+   * 是否在每行前面渲染「启用」勾选框。
+   *
+   * 勾掉 = `enabled: false`：该行**内容保留但不参与检索**，
+   * 下次勾回来即恢复。避免用户为了换一套检索而把旧条件删掉重建。
+   *
+   * 默认 `false`（不渲染）—— 这是共用组件，11 个检索页都在用，
+   * 只有明确需要「多套条件并存」的页面才打开。
+   */
+  rowToggle?: boolean
 }
 
 /** 排除行：可增删的多行「产品名 + 生产动作」 */
@@ -165,6 +181,8 @@ export interface ExcludesField extends FieldBase {
   namePlaceholder?: string
   projectPlaceholder?: string
   projectOptions: PanelProjectOptions
+  /** 同 `ConditionsField.rowToggle`：是否在每行前面渲染「启用」勾选框 */
+  rowToggle?: boolean
 }
 
 /** 复选开关 */

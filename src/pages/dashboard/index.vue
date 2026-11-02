@@ -102,7 +102,9 @@ const mainPanelFields: PanelField[] = [
     // （例如锻造 50~80、裁缝 20~60 同时要），留空即该行不限等级。
     // 下面还有一个全局「要求等级」，两者是并列条件。
     levelRange: { min: 0, max: 120, placeholderMin: "0", placeholderMax: "120" },
-    hint: "每行可分别限定该生产的要求等级区间"
+    hint: "每行可分别限定该生产的要求等级区间",
+    // 每行前面加「启用」勾选框：想换一套检索时勾掉旧行即可，内容留着、随时勾回来
+    rowToggle: true
   },
   {
     type: "range",
@@ -142,7 +144,9 @@ const mainPanelFields: PanelField[] = [
     tip: "排除说明",
     projectOptions,
     namePlaceholder: "排除的产品名",
-    projectPlaceholder: "排除的生产动作，留空=该产品全部"
+    projectPlaceholder: "排除的生产动作，留空=该产品全部",
+    // 同「条件」行：勾掉即临时停用该排除项，不必删掉重建
+    rowToggle: true
   },
   { type: "checkbox", key: "banEquipment", label: "排除装备" },
   { type: "checkbox", key: "banJewelry", label: "排除首饰" },

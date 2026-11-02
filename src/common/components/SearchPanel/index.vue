@@ -150,6 +150,22 @@ function removeExclude(index: number) {
 }
 
 /**
+ * 行级「启用」开关：勾掉 = 内容保留、不参与检索（`handleSearch` 会跳过该行）。
+ *
+ * 勾回来时**删除 `enabled` 键**而不是写 `true`：
+ * - 持久化数据保持「从没关过」的形状（与历史条件完全一致）
+ * - 判断处只需 `!== false` 一处口径，不会出现 `undefined` / `true` / `false` 三态漂移
+ */
+function setRowEnabled(row: { enabled?: boolean }, enabled: boolean) {
+  if (enabled) {
+    delete row.enabled
+  } else {
+    row.enabled = false
+  }
+  emit("change")
+}
+
+/**
  * 暴露内部 SortPriority 的实例。
  * 有的页面（enhanceexp）在表头排序时需要调用它的 applyHeaderSort()，
  * 面板把它透传出去，页面可按需访问 panelRef.value?.sortPriorityRef。
@@ -194,7 +210,20 @@ defineExpose({ sortPriorityRef })
               v-for="(cond, i) in (modelValue.conditions || [])"
               :key="i"
               style="display:flex; align-items:center; gap:8px;"
+              :class="{ 'row-off': cond.enabled === false }"
             >
+              <!--
+                行级「启用」开关（仅 rowToggle 字段渲染）。
+                勾掉 = 内容保留、不参与检索 —— 用户想换一套检索时不必删掉旧条件。
+                `:model-value` 用 `!== false`：历史数据没有 enabled 键，必须显示为已勾选。
+              -->
+              <el-checkbox
+                v-if="field.rowToggle"
+                :model-value="cond.enabled !== false"
+                @update:model-value="v => setRowEnabled(cond, !!v)"
+              >
+                <span v-if="cond.enabled === false" style="font-size:12px; color:#909399;">{{ t('已停用') }}</span>
+              </el-checkbox>
               <el-select
                 v-model="cond.steps"
                 :placeholder="t(field.stepsPlaceholder || '不限（默认全部）')"
@@ -287,7 +316,16 @@ defineExpose({ sortPriorityRef })
               v-for="(ex, i) in (modelValue.excludes || [])"
               :key="i"
               style="display:flex; align-items:center; gap:8px;"
+              :class="{ 'row-off': ex.enabled === false }"
             >
+              <!-- 行级「启用」开关，语义同 conditions 行 -->
+              <el-checkbox
+                v-if="field.rowToggle"
+                :model-value="ex.enabled !== false"
+                @update:model-value="v => setRowEnabled(ex, !!v)"
+              >
+                <span v-if="ex.enabled === false" style="font-size:12px; color:#909399;">{{ t('已停用') }}</span>
+              </el-checkbox>
               <el-select
                 v-model="ex.name"
                 filterable
@@ -410,6 +448,19 @@ defineExpose({ sortPriorityRef })
   .title {
     width: 160px;
     margin-bottom: 12px;
+  }
+}
+
+/*
+  被「行级开关」停用的条件行：内容保留但明显变灰。
+  悬停恢复不透明 —— 否则用户看不清自己停用的是哪一条、想勾回来时也难确认。
+  opacity 作用于整行（含勾选框），但透明度不影响点击，勾选框仍可正常点回。
+*/
+.row-off {
+  opacity: 0.45;
+
+  &:hover {
+    opacity: 1;
   }
 }
 </style>

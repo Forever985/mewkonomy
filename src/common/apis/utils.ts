@@ -235,13 +235,16 @@ export function handleSearch(profitList: Calculator[], params: any) {
     : undefined
 
   // 组合条件：多行 (步数, 动作, 等级区间)，**行内 AND、行间 OR**
+  // 组合条件行：`enabled === false` 表示该行被**临时停用**（内容保留、不参与检索）。
+  // ⚠️ 判断必须写 `!== false` 而不是 `=== true`：历史本地条件里没有 enabled 键，
+  //    用 `=== true` 会让它们全部被当成停用，检索直接变成「全量」。
   const conditions = Array.isArray(params.conditions)
-    ? params.conditions.filter((c: any) => c && ((c.steps != null && c.steps !== "") || c.project || c.minLevel != null || c.maxLevel != null))
+    ? params.conditions.filter((c: any) => c && c.enabled !== false && ((c.steps != null && c.steps !== "") || c.project || c.minLevel != null || c.maxLevel != null))
     : []
 
-  // 反向排除：{ name?, project? }[]，命中任一排除组合即剔除
+  // 反向排除：{ name?, project? }[]，命中任一排除组合即剔除；同样支持行级停用
   const excludes = Array.isArray(params.excludes)
-    ? params.excludes.filter((e: any) => e && (e.name || e.project))
+    ? params.excludes.filter((e: any) => e && e.enabled !== false && (e.name || e.project))
     : []
 
   // ── 利润率 / 风险：通用区间条件（支持 9 种模式）─────────────────────────
